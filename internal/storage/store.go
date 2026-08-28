@@ -83,6 +83,23 @@ type ReviewRun struct {
 	Findings    []ReviewFinding
 }
 
+// PullRequest is one created (or idempotently recovered) pull request's
+// persisted record, mirroring tracker.PullRequest but living in this
+// package so storage has no dependency on internal/tracker — callers (the
+// engine) translate between the two, the same convention GateRun/ReviewRun
+// document for internal/gate and internal/review.
+type PullRequest struct {
+	ExecutionID string
+	IssueID     string
+	Number      int
+	URL         string
+	// CommitSHA is the HEAD commit the Publisher committed and pushed
+	// immediately before this pull request was created (CONTEXT.md
+	// "COMMITTING", "PR_CREATING").
+	CommitSHA string
+	CreatedAt time.Time
+}
+
 // ExecutionState is an Execution reloaded together with every Issue
 // currently recorded against it — the "full state" round-trip the
 // acceptance criteria require.
@@ -151,6 +168,16 @@ type Store interface {
 	// GateRunsByIssue returns every GateRun recorded for one Issue within an
 	// Execution, ordered by insertion (i.e. execution order).
 	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]GateRun, error)
+
+	// RecordPullRequest persists one created (or recovered) pull request —
+	// its id, url, and the commit SHA it was created from — and appends a
+	// "pull_request.created" Event, transactionally (CONTEXT.md
+	// "COMMITTING", "PR_CREATING"; ticket 22).
+	RecordPullRequest(ctx context.Context, pr PullRequest) error
+
+	// PullRequestsByIssue returns every PullRequest recorded for one Issue
+	// within an Execution, ordered by insertion.
+	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]PullRequest, error)
 
 	// RecordReviewRun persists one Review invocation's outcome (CONTEXT.md
 	// "Review"), including its Findings, and appends a "review.run" Event,

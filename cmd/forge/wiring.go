@@ -100,6 +100,16 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// be injectable, not a production-ready reviewer backend; wiring a real
 	// one is deferred to a later ticket.
 	eng.Diff = gitDiffProducer{}
+	// eng.Publisher/eng.PRTracker (ticket 22) are wired unconditionally,
+	// unlike Reviewer: Engine treats them as a single all-or-nothing seam
+	// (see runCommitAndPR) and a production Publisher/PRCreator exists
+	// today, so there is no "not built yet" reason to leave COMMITTING a
+	// resting state the way REVIEWING was left before a production
+	// Reviewer existed.
+	eng.Publisher = gitPublisher{}
+	// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
+	eng.PRTracker = trk
+	eng.BaseBranch = baseBranchName(cfg.Git.Base)
 	return eng, nil
 }
 

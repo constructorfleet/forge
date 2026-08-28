@@ -89,6 +89,10 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if strings.TrimSpace(cfg.PullRequests.CommitMessageTemplate) == "" {
+		errs = append(errs, fieldErr("pull_requests.commit_message_template", cfg.PullRequests.CommitMessageTemplate, "must not be empty"))
+	}
+
 	switch cfg.CI.MergeRequirements.Mode {
 	case MergeRequirementsGitHub:
 		// authoritative, no further constraints

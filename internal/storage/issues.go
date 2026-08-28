@@ -40,12 +40,12 @@ func insertIssue(ctx context.Context, tx *sql.Tx, issue domain.Issue) error {
 	limits := issue.RetryBudget.Limits()
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO execution_issues (
-			execution_id, issue_id, state, scope,
+			execution_id, issue_id, title, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		issue.ExecutionID, issue.ID, string(issue.State), string(issue.Scope),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		issue.ExecutionID, issue.ID, issue.Title, string(issue.State), string(issue.Scope),
 		limits.Gate, issue.RetryBudget.GateFailures(),
 		limits.Review, issue.RetryBudget.ReviewFailures(),
 		limits.CI, issue.RetryBudget.CIFailures(),
@@ -60,7 +60,7 @@ func (s *SQLiteStore) GetIssue(ctx context.Context, executionID, issueID string)
 
 func (s *SQLiteStore) getIssue(ctx context.Context, q querier, executionID, issueID string) (domain.Issue, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT issue_id, state, scope,
+		SELECT issue_id, title, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used
@@ -96,7 +96,7 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 	)
 	issue := domain.Issue{ExecutionID: executionID}
 	if err := row.Scan(
-		&issue.ID, &state, &scope,
+		&issue.ID, &issue.Title, &state, &scope,
 		&gateLimit, &gateUsed,
 		&reviewLimit, &reviewUsed,
 		&ciLimit, &ciUsed,
@@ -164,7 +164,7 @@ func (s *SQLiteStore) ListIssues(ctx context.Context, executionID string) ([]dom
 
 func listIssueRows(ctx context.Context, q querier, executionID string) (map[string]domain.Issue, []string, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT issue_id, state, scope,
+		SELECT issue_id, title, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used

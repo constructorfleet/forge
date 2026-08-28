@@ -98,6 +98,29 @@ type Engine struct {
 	// runReview.
 	Diff DiffProducer
 
+	// Publisher commits and pushes validated work once Review approves it
+	// (ticket 22, CONTEXT.md "COMMITTING"). It is optional like Reviewer:
+	// nil leaves COMMITTING a resting state (this ticket's predecessor
+	// behavior), so existing callers of New keep compiling and behaving
+	// unchanged. cmd/forge wires it to a production git-backed Publisher.
+	// See runCommitAndPR.
+	Publisher Publisher
+
+	// PRTracker is the subset of tracker.Tracker the PR_CREATING stage uses
+	// to idempotently create (or recover) a pull request (ticket 22). It is
+	// optional like NeedsInfoTracker/Publisher: nil leaves COMMITTING a
+	// resting state — see runCommitAndPR, which treats Publisher and
+	// PRTracker as a single all-or-nothing seam.
+	PRTracker PRCreator
+
+	// BaseBranch is the plain branch name (e.g. "main") pull requests
+	// target, distinct from the base revision Workers resolve to a commit
+	// SHA. Engine has no notion of git remotes, so this is resolved by
+	// cmd/forge (e.g. stripping a "origin/" prefix from cfg.Git.Base)
+	// rather than derived here. Required only when Publisher/PRTracker are
+	// set; see runCommitAndPR.
+	BaseBranch string
+
 	// RepoRoot is the primary checkout's working directory, used to compile
 	// the Repository Context (internal/repocontext) and as the root
 	// Workspaces are created under.
@@ -151,8 +174,12 @@ type ExecuteResult struct {
 //
 //	IMPLEMENTED  -> VALIDATING -> (Quality Gates run: see runQualityGates)
 //	                -> REVIEWING -> (Review runs: see runReview)
-//	                   -> COMMITTING (APPROVED; a resting state — ticket 22
-//	                      owns the actual commit/PR)
+//	                   -> COMMITTING (APPROVED)
+//	                      -> PR_CREATING -> CI_PENDING (commit, push, and
+//	                         PR creation/recovery: see runCommitAndPR —
+//	                         COMMITTING stays a resting state when
+//	                         Publisher/PRTracker are unset, ticket 22's
+//	                         predecessor behavior)
 //	                or -> FAILED (Quality Gate failure or CHANGES_REQUIRED
 //	                   review verdict once its retry budget is exhausted)
 //
@@ -284,6 +311,12 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		issue, err = e.runRepairLoop(ctx, execution.ID, issueID, workerBase, ws.Path, repoCtx, issue)
 		if err != nil {
 			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+		}
+		if issue.State == domain.StateCommitting {
+			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, ws, issue)
+			if err != nil {
+				return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+			}
 		}
 	}
 	// A non-implemented, non-error outcome (NEEDS_INFO or FAILED) is already

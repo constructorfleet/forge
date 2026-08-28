@@ -30,6 +30,7 @@ type Dependency struct {
 type Issue struct {
 	ID           string
 	ExecutionID  string
+	Title        string
 	State        IssueState
 	Scope        IssueScope
 	Dependencies []Dependency

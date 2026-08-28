@@ -25,6 +25,28 @@ type MergeRequirements struct {
 	RequiredChecks []string
 }
 
+// PullRequest is Forge's normalized representation of a created — or
+// idempotently recovered — pull request (CONTEXT.md "COMMITTING",
+// "PR_CREATING"; ticket 22).
+type PullRequest struct {
+	Number int
+	URL    string
+}
+
+// PullRequestRequest carries everything CreatePullRequest needs to create,
+// or idempotently recover, a pull request.
+type PullRequestRequest struct {
+	// Base is the target branch name (e.g. "main"), not a commit SHA or a
+	// remote-qualified ref such as "origin/main".
+	Base string
+	// Head is the source branch name Forge pushed the Workspace to.
+	Head string
+	// Title is the pull request title.
+	Title string
+	// Body is the pull request description.
+	Body string
+}
+
 // Tracker is the normalized interface to an external issue tracker
 // (GitHub, GitLab, etc). Scheduler-facing code depends only on this
 // interface and the domain-typed values it returns — it contains no
@@ -62,6 +84,12 @@ type Tracker interface {
 	// sourced from the tracker's native branch protection/rulesets (see
 	// CONTEXT.md "Merge Requirements").
 	GetMergeRequirements(ctx context.Context, branch string) (MergeRequirements, error)
+
+	// CreatePullRequest idempotently creates a pull request from
+	// req.Head into req.Base. If an open pull request already exists for
+	// req.Head, it is recovered (returned) rather than duplicated —
+	// CONTEXT.md "COMMITTING"/"PR_CREATING" (ticket 22).
+	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
 }
 
 // RateLimitError is returned by a Tracker implementation when a request is

@@ -65,6 +65,11 @@ type QualityConfig struct {
 type PullRequestsConfig struct {
 	Enabled bool `yaml:"enabled"`
 	WatchCI bool `yaml:"watch_ci"`
+	// CommitMessageTemplate templates the commit message the COMMITTING
+	// stage's Publisher commits validated work with (ticket 22), using the
+	// {title} and {issue} placeholders (the Issue's Title and ID). Default:
+	// "{title}\n\nRefs #{issue}".
+	CommitMessageTemplate string `yaml:"commit_message_template"`
 }
 
 // MergeRequirementsMode selects where the CI Supervisor sources Merge
@@ -139,6 +144,11 @@ type Config struct {
 	Dependencies DependenciesConfig `yaml:"dependencies"`
 }
 
+// defaultCommitMessageTemplate is PullRequestsConfig.CommitMessageTemplate's
+// default value. See internal/engine's runCommitAndPR (ticket 22) for the
+// {title}/{issue} placeholder rendering.
+const defaultCommitMessageTemplate = "{title}\n\nRefs #{issue}"
+
 // Default returns the fully-defaulted Config used when no .forge.yaml is
 // present — the zero-config case. It is also the single source of truth for
 // every deterministic default: Load starts from this literal and lets YAML
@@ -158,8 +168,12 @@ func Default() Config {
 			Implementation: "tdd",
 			Review:         true,
 		},
-		Quality:      QualityConfig{MaxOutputBytes: 20000},
-		PullRequests: PullRequestsConfig{Enabled: true, WatchCI: true},
+		Quality: QualityConfig{MaxOutputBytes: 20000},
+		PullRequests: PullRequestsConfig{
+			Enabled:               true,
+			WatchCI:               true,
+			CommitMessageTemplate: defaultCommitMessageTemplate,
+		},
 		CI: CIConfig{
 			MergeRequirements: MergeRequirementsConfig{Mode: MergeRequirementsGitHub},
 		},

@@ -78,6 +78,7 @@ func (c *Client) normalizeIssue(gh ghIssue) (domain.Issue, error) {
 	// there is exactly one writer of the field.
 	return domain.Issue{
 		ID:           issueID,
+		Title:        gh.Title,
 		Dependencies: deps,
 	}, nil
 }

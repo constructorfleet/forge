@@ -120,6 +120,10 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 		return nil, &NotFoundError{Path: fullURL}
 	}
 
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		return nil, &ValidationError{Path: fullURL, Body: string(respBody)}
+	}
+
 	if resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("github: %s %s: unexpected status %d: %s", method, fullURL, resp.StatusCode, string(respBody))
 	}
@@ -205,4 +209,18 @@ type NotFoundError struct {
 
 func (e *NotFoundError) Error() string {
 	return fmt.Sprintf("github: not found: %s", e.Path)
+}
+
+// ValidationError is returned when the GitHub API responds 422
+// (Unprocessable Entity) — most relevantly for CreatePullRequest, which
+// GitHub rejects this way when a pull request already exists for the given
+// head/base pair. Exported so CreatePullRequest's idempotent-recovery path
+// can distinguish it from other failures via errors.As.
+type ValidationError struct {
+	Path string
+	Body string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("github: validation failed: %s: %s", e.Path, e.Body)
 }
