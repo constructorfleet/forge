@@ -76,6 +76,24 @@ func TestCompile_MissingInstructionFilesHandledSilently(t *testing.T) {
 	}
 }
 
+// TestCompile_UnreadableInstructionFile_PropagatesError ensures a
+// present-but-unreadable instruction file is treated as a real error rather
+// than silently dropped: only a genuinely absent file is skipped. A
+// directory named AGENTS.md can't be read as a file, so os.ReadFile fails
+// with something other than "not exist".
+func TestCompile_UnreadableInstructionFile_PropagatesError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "AGENTS.md"), 0o755); err != nil {
+		t.Fatalf("mkdir AGENTS.md: %v", err)
+	}
+	cfg := config.Default()
+
+	_, err := repocontext.Compile(cfg, dir, "rev")
+	if err == nil {
+		t.Fatal("Compile: want error for unreadable AGENTS.md, got nil")
+	}
+}
+
 func TestCompile_GateCommandsAreExactlyConfigured_NoRediscovery(t *testing.T) {
 	dir := t.TempDir()
 	// The repository has its own npm scripts that look like plausible gate
@@ -141,6 +159,91 @@ func TestCompile_DetectsLanguagesAndPackageManagers(t *testing.T) {
 	}
 	if !slices.Contains(rc.PackageManagers, "npm") {
 		t.Errorf("PackageManagers = %v, want to contain npm", rc.PackageManagers)
+	}
+}
+
+func TestCompile_ProjectStructureExcludesVCSAndDotfiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	writeFile(t, dir, ".env", "SECRET=1\n")
+	writeFile(t, dir, "README.md", "# hi\n")
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	cfg := config.Default()
+
+	rc, err := repocontext.Compile(cfg, dir, "rev")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if strings.Contains(rc.ProjectStructure, ".git") {
+		t.Errorf("ProjectStructure = %q, must not contain .git", rc.ProjectStructure)
+	}
+	if strings.Contains(rc.ProjectStructure, ".env") {
+		t.Errorf("ProjectStructure = %q, must not contain dotfiles", rc.ProjectStructure)
+	}
+	want := "README.md\nsrc/"
+	if rc.ProjectStructure != want {
+		t.Errorf("ProjectStructure = %q, want %q (deterministic sorted order)", rc.ProjectStructure, want)
+	}
+}
+
+func TestCompile_JSPackageManagerPrecedence(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{name: "pnpm beats yarn and npm", files: []string{"pnpm-lock.yaml", "yarn.lock", "package-lock.json"}, want: "pnpm"},
+		{name: "yarn beats npm", files: []string{"yarn.lock", "package-lock.json"}, want: "Yarn"},
+		{name: "npm alone", files: []string{"package-lock.json"}, want: "npm"},
+		{name: "package.json alone falls back to npm", files: nil, want: "npm"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "package.json", `{"name": "example"}`)
+			for _, f := range tc.files {
+				writeFile(t, dir, f, "")
+			}
+			cfg := config.Default()
+
+			rc, err := repocontext.Compile(cfg, dir, "rev")
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if !slices.Contains(rc.PackageManagers, tc.want) {
+				t.Errorf("PackageManagers = %v, want to contain %v", rc.PackageManagers, tc.want)
+			}
+			if n := len(rc.PackageManagers); n != 1 {
+				t.Errorf("PackageManagers = %v, want exactly one entry", rc.PackageManagers)
+			}
+		})
+	}
+}
+
+func TestCompile_DedupesLanguageAcrossMultipleManifests(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "pom.xml", "<project></project>\n")
+	writeFile(t, dir, "build.gradle", "")
+	cfg := config.Default()
+
+	rc, err := repocontext.Compile(cfg, dir, "rev")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	wantLangs := []string{"Java"}
+	if !slices.Equal(rc.Languages, wantLangs) {
+		t.Errorf("Languages = %v, want %v (deduplicated)", rc.Languages, wantLangs)
+	}
+	wantPMs := []string{"Gradle", "Maven"}
+	if !slices.Equal(rc.PackageManagers, wantPMs) {
+		t.Errorf("PackageManagers = %v, want %v", rc.PackageManagers, wantPMs)
 	}
 }
 

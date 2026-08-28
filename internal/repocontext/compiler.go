@@ -6,11 +6,12 @@
 package repocontext
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -72,10 +73,15 @@ func Compile(cfg config.Config, repoRoot, baseRevision string) (agent.Repository
 		return agent.RepositoryContext{}, fmt.Errorf("repocontext: describe structure: %w", err)
 	}
 
+	instructions, err := normalizeInstructions(repoRoot)
+	if err != nil {
+		return agent.RepositoryContext{}, fmt.Errorf("repocontext: read agent instructions: %w", err)
+	}
+
 	return agent.RepositoryContext{
 		BaseRevision:      baseRevision,
 		ProjectStructure:  structure,
-		AgentInstructions: normalizeInstructions(repoRoot),
+		AgentInstructions: instructions,
 		QualityGates:      gateCommands(cfg),
 		Languages:         languages,
 		PackageManagers:   packageManagers,
@@ -94,15 +100,20 @@ func gateCommands(cfg config.Config) []string {
 }
 
 // normalizeInstructions reads and merges instructionFiles found at
-// repoRoot, trimming each and joining present ones with a blank line.
-// Missing files are skipped silently; if none are present the result is the
-// empty string.
-func normalizeInstructions(repoRoot string) string {
+// repoRoot, trimming each and joining present ones with a blank line. A
+// genuinely absent file is skipped silently (fs.ErrNotExist); any other
+// read error (permission denied, is-a-directory, I/O error) is propagated
+// rather than silently dropping authoritative instructions. If none are
+// present the result is the empty string.
+func normalizeInstructions(repoRoot string) (string, error) {
 	var parts []string
 	for _, name := range instructionFiles {
 		data, err := os.ReadFile(filepath.Join(repoRoot, name))
 		if err != nil {
-			continue
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return "", fmt.Errorf("read %s: %w", name, err)
 		}
 		text := strings.TrimSpace(string(data))
 		if text == "" {
@@ -110,7 +121,7 @@ func normalizeInstructions(repoRoot string) string {
 		}
 		parts = append(parts, text)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // detectManifests inspects repoRoot for known project manifests and returns
@@ -157,21 +168,25 @@ func detectManifests(repoRoot string) (languages, packageManagers []string, err 
 
 // describeStructure returns a deterministic, one-line-per-entry listing of
 // repoRoot's top-level contents (directories suffixed with "/"), sorted by
-// name.
+// name. Dotfiles/dot-directories (e.g. .git, .env) are VCS or local
+// configuration noise, not project structure, and are excluded.
 func describeStructure(repoRoot string) (string, error) {
 	entries, err := os.ReadDir(repoRoot)
 	if err != nil {
 		return "", err
 	}
-	names := make([]string, len(entries))
-	for i, e := range entries {
+	var names []string
+	for _, e := range entries {
 		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
 		if e.IsDir() {
 			name += "/"
 		}
-		names[i] = name
+		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return strings.Join(names, "\n"), nil
 }
 
@@ -194,7 +209,7 @@ func dedupeSorted(vs []string) []string {
 		return nil
 	}
 	out := slices.Clone(vs)
-	sort.Strings(out)
+	slices.Sort(out)
 	out = slices.Compact(out)
 	return out
 }
