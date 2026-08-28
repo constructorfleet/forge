@@ -1,0 +1,3 @@
+# Concurrent Executions are allowed with resource-scoped locks
+
+A repo-wide "one Execution at a time" lock would destroy concurrent work, the system's main benefit. Multiple Executions run against the same repo with narrow resource-scoped locks instead of a global mutex. Git metadata operations (fetch, worktree add/remove) take a short-lived repo lock. Each Issue takes an issue-level lock preventing two Executions from implementing it simultaneously. Branch publication takes a branch-level lock. Worker implementation inside isolated Workspaces needs no lock. The same Issue in two active Executions is disallowed by default.

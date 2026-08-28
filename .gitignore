@@ -1,0 +1,8 @@
+# Go
+/forge
+*.exe
+*.test
+*.out
+/dist/
+# Local
+.DS_Store

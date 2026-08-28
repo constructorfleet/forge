@@ -1,0 +1,3 @@
+# External dependencies are observed nodes, not errors
+
+When an Issue in the Execution set depends on an Issue outside the set, Forge loads the external Issue into the DAG as an observed node — tracked for satisfaction but never executed. Rejecting the Execution would mean dependency metadata only works when the user types every transitive dependency into the command, reducing the dependency graph to an expensive way of saying "run these in order." External satisfaction is checked by verifying merged code is reachable from the applicable base. Closed does not equal satisfied — issues get closed for reasons other than successful implementation.
