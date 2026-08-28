@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,14 +14,12 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/storage"
-	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
-// stubTracker is a minimal tracker.Tracker double: only GetIssue is
-// exercised by Engine, so every other method is unimplemented (and would
-// fail a test that unexpectedly reached it).
+// stubTracker is a minimal engine.IssueFetcher double.
 type stubTracker struct {
 	issues map[string]domain.Issue
 	err    error
@@ -39,55 +36,36 @@ func (s *stubTracker) GetIssue(_ context.Context, id string) (domain.Issue, erro
 	return issue, nil
 }
 
-func (s *stubTracker) GetIssues(context.Context, []string) ([]domain.Issue, error) {
-	panic("not implemented")
-}
-func (s *stubTracker) GetComments(context.Context, string) ([]tracker.Comment, error) {
-	panic("not implemented")
-}
-func (s *stubTracker) AddComment(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTracker) AddLabel(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTracker) RemoveLabel(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTracker) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
-	panic("not implemented")
+var _ engine.IssueFetcher = (*stubTracker)(nil)
+
+// spyWorkspaces wraps a *workspace.Manager and records whether Cleanup was
+// called, so tests can assert failOut actually removes an orphaned
+// Workspace rather than leaking it.
+type spyWorkspaces struct {
+	mgr *workspace.Manager
+
+	mu            sync.Mutex
+	cleanupCalled bool
 }
 
-var _ tracker.Tracker = (*stubTracker)(nil)
-
-// runGit runs a git command against dir and fails the test on error.
-func runGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
+func (s *spyWorkspaces) Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error) {
+	return s.mgr.Create(ctx, executionID, issueID, base)
 }
 
-// newTempRepo creates a temporary Git repository with one commit on its
-// default branch and returns its root path and the commit SHA.
-func newTempRepo(t *testing.T) (root, base string) {
-	t.Helper()
-	root = t.TempDir()
-	runGit(t, root, "init", "-q", "-b", "main")
-	runGit(t, root, "config", "user.email", "test@example.com")
-	runGit(t, root, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	runGit(t, root, "add", "README.md")
-	runGit(t, root, "commit", "-q", "-m", "initial")
-	sha := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
-	return root, sha
+func (s *spyWorkspaces) Cleanup(ctx context.Context, executionID, issueID string) error {
+	s.mu.Lock()
+	s.cleanupCalled = true
+	s.mu.Unlock()
+	return s.mgr.Cleanup(ctx, executionID, issueID)
 }
+
+func (s *spyWorkspaces) CleanupCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cleanupCalled
+}
+
+var _ engine.WorkspaceCreator = (*spyWorkspaces)(nil)
 
 func openTestStore(t *testing.T) *storage.SQLiteStore {
 	t.Helper()
@@ -112,20 +90,22 @@ type testEngine struct {
 	base  string
 	trk   *stubTracker
 	fake  *agent.FakeAgent
+	ws    *spyWorkspaces
 }
 
 func newTestEngine(t *testing.T, issues map[string]domain.Issue) testEngine {
 	t.Helper()
-	repoRoot, base := newTempRepo(t)
+	repoRoot, base := gittest.NewTempRepo(t)
 	store := openTestStore(t)
 	trk := &stubTracker{issues: issues}
-	wsMgr, err := workspace.NewManager(repoRoot)
+	mgr, err := workspace.NewManager(repoRoot)
 	if err != nil {
 		t.Fatalf("workspace.NewManager: %v", err)
 	}
+	ws := &spyWorkspaces{mgr: mgr}
 	fake := agent.NewFakeAgent()
-	eng := engine.New(store, trk, wsMgr, fake, config.Default(), repoRoot)
-	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake}
+	eng := engine.New(store, trk, ws, fake, config.Default(), repoRoot)
+	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake, ws: ws}
 }
 
 func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.T) {
@@ -209,6 +189,11 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 	if info, err := os.Stat(inv.WorkspacePath); err != nil || !info.IsDir() {
 		t.Errorf("WorkspacePath %s not created before agent invocation: %v", inv.WorkspacePath, err)
 	}
+
+	// The happy path never orphans the Workspace, so Cleanup is not called.
+	if te.ws.CleanupCalled() {
+		t.Error("Cleanup was called on the happy path, want it left in place")
+	}
 }
 
 func TestExecute_NeedsInfo_RoutesToNeedsInfoState(t *testing.T) {
@@ -231,7 +216,7 @@ func TestExecute_NeedsInfo_RoutesToNeedsInfoState(t *testing.T) {
 	}
 }
 
-func TestExecute_Failed_RoutesToFailedViaValidating(t *testing.T) {
+func TestExecute_Failed_RoutesDirectlyToFailed(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"9": {ID: "9"},
 	})
@@ -248,6 +233,68 @@ func TestExecute_Failed_RoutesToFailedViaValidating(t *testing.T) {
 	if !result.Issue.State.IsTerminal() {
 		t.Error("FAILED should be terminal")
 	}
+
+	// FAILED is a direct, legal edge from IMPLEMENTING (domain.state.go): no
+	// VALIDATING layover, so the audit log must not claim one happened.
+	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	var lastTransition struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.Unmarshal([]byte(events[len(events)-1].Data), &lastTransition); err != nil {
+		t.Fatalf("unmarshal last transition event: %v", err)
+	}
+	if lastTransition.From != string(domain.StateImplementing) || lastTransition.To != string(domain.StateFailed) {
+		t.Errorf("last transition = %+v, want IMPLEMENTING -> FAILED", lastTransition)
+	}
+	for _, e := range events {
+		if e.Type == "issue.transitioned" && json.Valid([]byte(e.Data)) {
+			var tr struct {
+				To string `json:"to"`
+			}
+			_ = json.Unmarshal([]byte(e.Data), &tr)
+			if tr.To == string(domain.StateValidating) {
+				t.Errorf("unexpected VALIDATING layover event: %+v", e)
+			}
+		}
+	}
+}
+
+// TestExecute_AgentError_CleansUpWorkspaceAndFails drives an Agent error
+// (the path a real backend failing mid-invocation would take) and asserts
+// failOut ran: the orphaned Workspace is cleaned up and the Issue ends in
+// the terminal FAILED state rather than stuck in IMPLEMENTING.
+func TestExecute_AgentError_CleansUpWorkspaceAndFails(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"13": {ID: "13"},
+	})
+	te.fake.ProgramError("13", errors.New("boom: agent subprocess crashed"))
+
+	// Execute returns a zero ExecuteResult on error, so pin the Execution ID
+	// it will mint to inspect the persisted Issue afterward.
+	const executionID = "exec-agent-error"
+	te.eng.NewExecutionID = func() string { return executionID }
+
+	ctx := context.Background()
+	_, err := te.eng.Execute(ctx, "13", te.base)
+	if err == nil {
+		t.Fatal("Execute: want error when the Agent errors, got nil")
+	}
+
+	if !te.ws.CleanupCalled() {
+		t.Error("Cleanup was not called after an Agent error, want the orphaned Workspace removed")
+	}
+
+	issue, getErr := te.store.GetIssue(ctx, executionID, "13")
+	if getErr != nil {
+		t.Fatalf("GetIssue: %v", getErr)
+	}
+	if issue.State != domain.StateFailed {
+		t.Fatalf("issue.State = %s, want FAILED", issue.State)
+	}
 }
 
 func TestExecute_UnknownTrackerIssue_ReturnsError(t *testing.T) {
@@ -257,7 +304,7 @@ func TestExecute_UnknownTrackerIssue_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
+func TestLoadStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"11": {ID: "11"},
 	})
@@ -269,9 +316,9 @@ func TestStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	report, err := te.eng.Status(ctx, result.ExecutionID)
+	report, err := engine.LoadStatus(ctx, te.store, result.ExecutionID)
 	if err != nil {
-		t.Fatalf("Status: %v", err)
+		t.Fatalf("LoadStatus: %v", err)
 	}
 	if report.Execution.ID != result.ExecutionID {
 		t.Errorf("report.Execution.ID = %s, want %s", report.Execution.ID, result.ExecutionID)
@@ -285,13 +332,13 @@ func TestStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 }
 
 func TestNew_DefaultsAreUsable(t *testing.T) {
-	repoRoot, _ := newTempRepo(t)
+	repoRoot, _ := gittest.NewTempRepo(t)
 	store := openTestStore(t)
-	wsMgr, err := workspace.NewManager(repoRoot)
+	mgr, err := workspace.NewManager(repoRoot)
 	if err != nil {
 		t.Fatalf("workspace.NewManager: %v", err)
 	}
-	eng := engine.New(store, &stubTracker{}, wsMgr, agent.NewFakeAgent(), config.Default(), repoRoot)
+	eng := engine.New(store, &stubTracker{}, &spyWorkspaces{mgr: mgr}, agent.NewFakeAgent(), config.Default(), repoRoot)
 
 	if eng.Now == nil {
 		t.Fatal("Now is nil, want a default time source")

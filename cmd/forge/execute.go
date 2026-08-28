@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 )
 
 // runExecute implements `forge execute <issue-number>`: the first
@@ -37,7 +38,9 @@ func runExecute(args []string) int {
 		return 1
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	store, err := openStore(ctx, *dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)

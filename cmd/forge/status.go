@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 
 	"github.com/Teagan42/forge/internal/engine"
 )
@@ -24,7 +26,9 @@ func runStatus(args []string) int {
 	}
 	executionID := fs.Arg(0)
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	store, err := openStore(ctx, *dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
@@ -34,8 +38,7 @@ func runStatus(args []string) int {
 
 	// Status is a pure read: it needs only Store, not the tracker,
 	// Workspace manager, or Agent buildEngine would otherwise wire up.
-	eng := &engine.Engine{Store: store}
-	report, err := eng.Status(ctx, executionID)
+	report, err := engine.LoadStatus(ctx, store, executionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
 		return 1
@@ -45,7 +48,7 @@ func runStatus(args []string) int {
 	return 0
 }
 
-func printStatus(w *os.File, report engine.StatusReport) {
+func printStatus(w io.Writer, report engine.StatusReport) {
 	fmt.Fprintf(w, "execution %s\n", report.Execution.ID)
 	fmt.Fprintf(w, "  base:       %s\n", report.Execution.BaseRevision)
 	fmt.Fprintf(w, "  started_at: %s\n", report.Execution.StartedAt.Format("2006-01-02T15:04:05Z07:00"))

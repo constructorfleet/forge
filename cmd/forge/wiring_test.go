@@ -3,41 +3,26 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/gittest"
 )
 
+// runGit and newTempRepo delegate to internal/gittest, the shared fixture
+// used by internal/engine and internal/workspace's tests too.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
+	return gittest.RunGit(t, dir, args...)
 }
 
 func newTempRepo(t *testing.T) (root, base string) {
 	t.Helper()
-	root = t.TempDir()
-	runGit(t, root, "init", "-q", "-b", "main")
-	runGit(t, root, "config", "user.email", "test@example.com")
-	runGit(t, root, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	runGit(t, root, "add", "README.md")
-	runGit(t, root, "commit", "-q", "-m", "initial")
-	sha := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
-	return root, sha
+	return gittest.NewTempRepo(t)
 }
 
 func TestLoadConfig_FallsBackToDefaultWhenAbsent(t *testing.T) {

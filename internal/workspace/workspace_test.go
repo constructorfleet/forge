@@ -4,42 +4,24 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Teagan42/forge/internal/gittest"
 )
 
-// runGit runs a git command against dir and fails the test on error. It is
-// the test-side helper for driving the temporary Git repositories tests run
-// against; the production code under test uses its own CommandRunner.
+// runGit and newTempRepo delegate to internal/gittest, the shared fixture
+// used by internal/engine and cmd/forge's tests too.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-	}
-	return string(out)
+	return gittest.RunGit(t, dir, args...)
 }
 
-// newTempRepo creates a temporary Git repository with one commit on its
-// default branch and returns its root path and the commit SHA.
 func newTempRepo(t *testing.T) (root, initialSHA string) {
 	t.Helper()
-	root = t.TempDir()
-	runGit(t, root, "init", "-q", "-b", "main")
-	runGit(t, root, "config", "user.email", "test@example.com")
-	runGit(t, root, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
-	runGit(t, root, "add", "README.md")
-	runGit(t, root, "commit", "-q", "-m", "initial")
-	sha := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
-	return root, sha
+	return gittest.NewTempRepo(t)
 }
 
 // newManager is the test-side helper for NewManager, failing the test on a

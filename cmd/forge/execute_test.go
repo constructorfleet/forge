@@ -7,13 +7,13 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
-	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
-// stubTrackerForCLI is a minimal tracker.Tracker double for cmd/forge tests
-// that need Engine wired against something other than the real GitHub
-// client (which buildEngine hardcodes to the production API root).
+// stubTrackerForCLI is a minimal engine.IssueFetcher double for cmd/forge
+// tests that need Engine wired against something other than the real
+// GitHub client (which buildEngine hardcodes to the production API root).
 type stubTrackerForCLI struct {
 	issue domain.Issue
 }
@@ -21,26 +21,8 @@ type stubTrackerForCLI struct {
 func (s *stubTrackerForCLI) GetIssue(context.Context, string) (domain.Issue, error) {
 	return s.issue, nil
 }
-func (s *stubTrackerForCLI) GetIssues(context.Context, []string) ([]domain.Issue, error) {
-	panic("not implemented")
-}
-func (s *stubTrackerForCLI) GetComments(context.Context, string) ([]tracker.Comment, error) {
-	panic("not implemented")
-}
-func (s *stubTrackerForCLI) AddComment(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTrackerForCLI) AddLabel(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTrackerForCLI) RemoveLabel(context.Context, string, string) error {
-	panic("not implemented")
-}
-func (s *stubTrackerForCLI) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
-	panic("not implemented")
-}
 
-var _ tracker.Tracker = (*stubTrackerForCLI)(nil)
+var _ engine.IssueFetcher = (*stubTrackerForCLI)(nil)
 
 func mustWorkspaceManager(t *testing.T, repoRoot string) *workspace.Manager {
 	t.Helper()

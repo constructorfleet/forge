@@ -4,16 +4,17 @@
 // Dependencies through the orchestration pipeline. See CONTEXT.md
 // "Execution", "Worker", "Execution Context".
 //
-// Engine depends only on the tracker.Tracker, agent.Agent, storage.Store,
-// and WorkspaceCreator interfaces — never on a concrete backend (github,
-// claude, sqlite, git). Concrete adapters are constructed and injected by
-// cmd/forge, which keeps this package's tests hermetic and the orchestration
-// core backend-agnostic.
+// Engine depends only on the narrow IssueFetcher, WorkspaceCreator, and
+// storage.Store/agent.Agent interfaces it actually calls — never on a
+// concrete backend (github, claude, sqlite, git). Concrete adapters are
+// constructed and injected by cmd/forge, which keeps this package's tests
+// hermetic and the orchestration core backend-agnostic.
 package engine
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,13 +28,22 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
+// IssueFetcher is the subset of tracker.Tracker's exported behavior the
+// engine needs: fetching a single normalized Issue. Depending on this
+// interface rather than tracker.Tracker keeps Engine backend-agnostic and
+// its test doubles down to one method.
+type IssueFetcher interface {
+	GetIssue(ctx context.Context, id string) (domain.Issue, error)
+}
+
 // WorkspaceCreator is the subset of *workspace.Manager's exported behavior
-// the engine needs. Depending on this interface rather than *workspace.Manager
-// directly keeps Engine backend-agnostic and lets tests inject a hermetic
-// double without a real git binary.
+// the engine needs: creating a Workspace before invoking the Agent, and
+// removing it (best-effort) when a run fails after it was created.
+// Depending on this interface rather than *workspace.Manager directly keeps
+// Engine backend-agnostic and lets tests inject a hermetic double without a
+// real git binary.
 type WorkspaceCreator interface {
 	Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error)
-	Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error)
 	Cleanup(ctx context.Context, executionID, issueID string) error
 }
 
@@ -43,7 +53,7 @@ type WorkspaceCreator interface {
 // Context.
 type Engine struct {
 	Store      storage.Store
-	Tracker    tracker.Tracker
+	Tracker    IssueFetcher
 	Workspaces WorkspaceCreator
 	Agent      agent.Agent
 	Config     config.Config
@@ -55,12 +65,23 @@ type Engine struct {
 
 	// Now and NewExecutionID are seams for deterministic tests; New sets
 	// both to real implementations (time.Now, uuid.NewString).
+	//
+	// Now governs only Engine's own timestamps (Execution.StartedAt and the
+	// informational Events Execute appends directly). It does NOT govern
+	// the "issue.transitioned"/"issue.claimed" Events storage.SQLiteStore
+	// appends internally — those are stamped with time.Now() inside the
+	// storage package, which has no clock seam of its own. A test that
+	// injects a fixed/synthetic Now and asserts strict Event ordering by
+	// timestamp should be aware storage-side events use the real wall
+	// clock regardless (events are still returned in insertion order, so
+	// ordering assertions that rely on that rather than on timestamp
+	// values are unaffected).
 	Now            func() time.Time
 	NewExecutionID func() string
 }
 
 // New builds an Engine from its injected dependencies.
-func New(store storage.Store, trk tracker.Tracker, workspaces WorkspaceCreator, ag agent.Agent, cfg config.Config, repoRoot string) *Engine {
+func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag agent.Agent, cfg config.Config, repoRoot string) *Engine {
 	return &Engine{
 		Store:          store,
 		Tracker:        trk,
@@ -90,15 +111,18 @@ type ExecuteResult struct {
 //	IMPLEMENTED  -> VALIDATING (Quality Gates are ticket 19's concern; this
 //	                is a resting state, not a fabricated gate pass)
 //	NEEDS_INFO   -> NEEDS_INFO
-//	FAILED       -> VALIDATING -> FAILED (the state machine has no direct
-//	                IMPLEMENTING -> FAILED edge; VALIDATING is the only
-//	                legal layover)
+//	FAILED       -> FAILED (a direct, legal edge from IMPLEMENTING)
 //
 // baseRevision is the Execution's starting base SHA, resolved by the caller
 // (cmd/forge) so Engine never shells out to git itself. Every transition is
 // persisted via Store.TransitionIssue, which validates it against
 // domain.ValidateTransition and appends an "issue.transitioned" Event before
 // any write commits.
+//
+// Once the Workspace has been created, any further error (an Agent error, a
+// failed transition, a failed Event append) drives the Issue to a terminal
+// state and best-effort removes the now-orphaned Workspace before returning
+// — see failOut.
 func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (ExecuteResult, error) {
 	execution := domain.Execution{
 		ID:           e.NewExecutionID(),
@@ -172,7 +196,8 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	}
 
 	// The Workspace is created before the Agent is invoked, while still in
-	// PREPARING.
+	// PREPARING. From here on, any error path must clean the Workspace up
+	// and drive the Issue to a terminal state via failOut.
 	ws, err := e.Workspaces.Create(ctx, execution.ID, issueID, workerBase)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: create workspace for issue %s: %w", issueID, err)
@@ -181,12 +206,12 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		"path":   ws.Path,
 		"branch": ws.Branch,
 	}); err != nil {
-		return ExecuteResult{}, err
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
 	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateImplementing)
 	if err != nil {
-		return ExecuteResult{}, err
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
 	// Execution Context (CONTEXT.md "Execution Context") is assembled here:
@@ -201,13 +226,13 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	}
 	result, err := e.Agent.Execute(ctx, req)
 	if err != nil {
-		return ExecuteResult{}, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err))
 	}
 	if err := e.appendEvent(ctx, execution.ID, issueID, "agent.result", map[string]string{
 		"status":  string(result.Status),
 		"summary": result.Summary,
 	}); err != nil {
-		return ExecuteResult{}, err
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
 	switch result.Status {
@@ -216,14 +241,12 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	case agent.StatusNeedsInfo:
 		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateNeedsInfo)
 	case agent.StatusFailed:
-		if issue, err = e.transition(ctx, execution.ID, issueID, domain.StateValidating); err == nil {
-			issue, err = e.transition(ctx, execution.ID, issueID, domain.StateFailed)
-		}
+		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateFailed)
 	default:
-		return ExecuteResult{}, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
+		err = fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
 	}
 	if err != nil {
-		return ExecuteResult{}, err
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
 	return ExecuteResult{ExecutionID: execution.ID, Issue: issue}, nil
@@ -259,4 +282,34 @@ func (e *Engine) appendEvent(ctx context.Context, executionID, issueID, eventTyp
 		return fmt.Errorf("engine: append event %s: %w", eventType, err)
 	}
 	return nil
+}
+
+// failOut is called on every error path once the Workspace has been
+// created. It best-effort removes the now-orphaned Workspace (Execute mints
+// a fresh Execution ID per call, so a leaked worktree accumulates one per
+// failed run if this is skipped) and drives the Issue to a terminal state,
+// without masking origErr — the cleanup error, if any, is joined onto it
+// via errors.Join rather than swallowed or replacing it.
+//
+// The Issue is routed to FAILED where that is a legal transition (from
+// IMPLEMENTING, per domain.state.go). For an error occurring before
+// IMPLEMENTING is reached (e.g. appending the "workspace.created" Event
+// fails while still in PREPARING, which has no FAILED edge), it falls back
+// to CANCELLED, which domain.ValidateTransition permits from any
+// non-terminal state — an infra failure before the Agent ever ran is better
+// described as an aborted run than a failed one.
+func (e *Engine) failOut(ctx context.Context, executionID, issueID string, origErr error) error {
+	errs := []error{origErr}
+
+	if err := e.Workspaces.Cleanup(ctx, executionID, issueID); err != nil {
+		errs = append(errs, fmt.Errorf("engine: cleanup workspace for issue %s: %w", issueID, err))
+	}
+
+	if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateFailed); err != nil {
+		if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCancelled); err != nil {
+			errs = append(errs, fmt.Errorf("engine: drive issue %s to a terminal state: %w", issueID, err))
+		}
+	}
+
+	return errors.Join(errs...)
 }

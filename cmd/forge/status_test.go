@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,21 +48,8 @@ func TestPrintStatus_IncludesExecutionIssuesAndEvents(t *testing.T) {
 		},
 	}
 
-	f, err := os.CreateTemp(t.TempDir(), "status-*.txt")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	printStatus(f, report)
-
-	if _, err := f.Seek(0, 0); err != nil {
-		t.Fatalf("Seek: %v", err)
-	}
 	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(f); err != nil {
-		t.Fatalf("ReadFrom: %v", err)
-	}
+	printStatus(&buf, report)
 	out := buf.String()
 
 	for _, want := range []string{"exec-1", "deadbeef", "42", string(domain.StateValidating), "issue.transitioned"} {

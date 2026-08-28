@@ -63,7 +63,7 @@ var transitions = map[IssueState][]IssueState{
 	StateReady:             {StateClaimed},
 	StateClaimed:           {StatePreparing},
 	StatePreparing:         {StateImplementing},
-	StateImplementing:      {StateNeedsInfo, StateValidating},
+	StateImplementing:      {StateNeedsInfo, StateValidating, StateFailed},
 	StateValidating:        {StateImplementing, StateReviewing, StateFailed},
 	StateReviewing:         {StateImplementing, StateCommitting, StateFailed},
 	StateCommitting:        {StatePRCreating},

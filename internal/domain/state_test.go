@@ -25,6 +25,7 @@ func legalTransitions() []struct {
 		{domain.StatePreparing, domain.StateImplementing},
 		{domain.StateImplementing, domain.StateNeedsInfo},
 		{domain.StateImplementing, domain.StateValidating},
+		{domain.StateImplementing, domain.StateFailed},
 		{domain.StateValidating, domain.StateImplementing},
 		{domain.StateValidating, domain.StateReviewing},
 		{domain.StateValidating, domain.StateFailed},

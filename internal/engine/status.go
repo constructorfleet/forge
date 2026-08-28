@@ -17,15 +17,25 @@ type StatusReport struct {
 	Events    []storage.Event
 }
 
-// Status reloads a StatusReport for executionID from Store. It performs no
-// orchestration of its own: `forge status` is a pure read over what Execute
-// already persisted.
-func (e *Engine) Status(ctx context.Context, executionID string) (StatusReport, error) {
-	state, err := e.Store.LoadExecution(ctx, executionID)
+// StatusStore is the subset of storage.Store LoadStatus needs: reloading an
+// Execution's Issues and its Event log. A narrower interface than
+// storage.Store so callers (e.g. `forge status`) don't need to construct a
+// partial Engine — with its Tracker/Workspaces/Agent fields left zero —
+// just to reach a pure read.
+type StatusStore interface {
+	LoadExecution(ctx context.Context, executionID string) (storage.ExecutionState, error)
+	EventsByExecution(ctx context.Context, executionID string) ([]storage.Event, error)
+}
+
+// LoadStatus reloads a StatusReport for executionID from store. It performs
+// no orchestration of its own: `forge status` is a pure read over whatever
+// Execute already persisted.
+func LoadStatus(ctx context.Context, store StatusStore, executionID string) (StatusReport, error) {
+	state, err := store.LoadExecution(ctx, executionID)
 	if err != nil {
 		return StatusReport{}, fmt.Errorf("engine: load execution %s: %w", executionID, err)
 	}
-	events, err := e.Store.EventsByExecution(ctx, executionID)
+	events, err := store.EventsByExecution(ctx, executionID)
 	if err != nil {
 		return StatusReport{}, fmt.Errorf("engine: load events for execution %s: %w", executionID, err)
 	}
