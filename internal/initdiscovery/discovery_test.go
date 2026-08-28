@@ -81,10 +81,7 @@ func TestDetect_GoProject(t *testing.T) {
 	writeFile(t, dir, "go.mod", "module example.com/foo\n\ngo 1.25\n")
 	writeFile(t, dir, ".golangci.yml", "run:\n  timeout: 5m\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 
 	if cmd, ok := gate(t, result.Config, "build"); !ok || cmd != "go build ./..." {
 		t.Errorf("build = %q, %v", cmd, ok)
@@ -113,10 +110,7 @@ func TestDetect_GoProject_NoLintConfig_LeavesUnresolvedMarker(t *testing.T) {
 	initRepo(t, dir)
 	writeFile(t, dir, "go.mod", "module example.com/foo\n\ngo 1.25\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if _, ok := gate(t, result.Config, "lint"); ok {
 		t.Errorf("lint should be unresolved (no golangci-lint config), got a gate")
 	}
@@ -155,10 +149,7 @@ func TestDetect_NodePnpmProject(t *testing.T) {
 }`)
 	writeFile(t, dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 
 	if cmd, ok := gate(t, result.Config, "test"); !ok || cmd != "pnpm test" {
 		t.Errorf("test = %q, %v", cmd, ok)
@@ -198,10 +189,7 @@ line-length = 100
 requires = ["setuptools"]
 `)
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 
 	if cmd, ok := gate(t, result.Config, "test"); !ok || cmd != "pytest" {
 		t.Errorf("test = %q, %v", cmd, ok)
@@ -227,10 +215,7 @@ func TestDetect_PythonProject_ConventionDefaultTest(t *testing.T) {
 	initRepo(t, dir)
 	writeFile(t, dir, "pyproject.toml", "[project]\nname = \"example\"\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if cmd, ok := gate(t, result.Config, "test"); !ok || cmd != "pytest" {
 		t.Errorf("test = %q, %v, want convention default pytest", cmd, ok)
 	}
@@ -242,10 +227,7 @@ func TestDetect_RustProject(t *testing.T) {
 	initRepo(t, dir)
 	writeFile(t, dir, "Cargo.toml", "[package]\nname = \"example\"\nversion = \"0.1.0\"\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 
 	if cmd, ok := gate(t, result.Config, "build"); !ok || cmd != "cargo build" {
 		t.Errorf("build = %q, %v", cmd, ok)
@@ -283,10 +265,7 @@ jobs:
       - run: cargo test
 `)
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 
 	// CI beats the Rust detector's convention-tier clippy command.
 	if cmd, ok := gate(t, result.Config, "lint"); !ok || cmd != "cargo clippy --all-targets -- -D warnings" {
@@ -308,10 +287,7 @@ func TestDetect_Makefile_FillsUnresolvedGate(t *testing.T) {
 	// a Makefile target should fill it.
 	writeFile(t, dir, "Makefile", "lint:\n\tgolangci-lint run ./...\n\ntest:\n\tgo test ./...\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if cmd, ok := gate(t, result.Config, "lint"); !ok || cmd != "make lint" {
 		t.Errorf("lint = %q, %v", cmd, ok)
 	}
@@ -323,16 +299,41 @@ func TestDetect_Makefile_FillsUnresolvedGate(t *testing.T) {
 	mustLoadable(t, result)
 }
 
+// TestDetect_Taskfile_ColidingAliasesAreDeterministic is a regression test:
+// detectTaskfile used to range over a Go map of task names directly, which
+// randomizes iteration order. With two tasks aliasing the same gate kind
+// ("fmt" and "format" both alias format-check), that meant a different
+// .forge.yaml on different runs. Detection must be fully deterministic, so
+// running detection many times must always pick the same task.
+func TestDetect_Taskfile_ColidingAliasesAreDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	writeFile(t, dir, "Taskfile.yml", "version: '3'\ntasks:\n  format:\n    cmds:\n      - gofmt -l .\n  fmt:\n    cmds:\n      - gofmt -w .\n")
+
+	var want string
+	for i := 0; i < 25; i++ {
+		result := Detect(dir)
+		cmd, ok := gate(t, result.Config, "format-check")
+		if !ok {
+			t.Fatalf("run %d: format-check unresolved", i)
+		}
+		if i == 0 {
+			want = cmd
+			continue
+		}
+		if cmd != want {
+			t.Fatalf("run %d: format-check = %q, want %q (nondeterministic)", i, cmd, want)
+		}
+	}
+}
+
 func TestDetect_BaseBranch_FromOriginHEAD(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
 	runGitT(t, dir, "update-ref", "refs/remotes/origin/develop", "HEAD")
 	runGitT(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if result.Config.Git.Base != "origin/develop" {
 		t.Errorf("Git.Base = %q, want origin/develop", result.Config.Git.Base)
 	}
@@ -351,10 +352,7 @@ func TestDetect_BaseBranch_FallsBackToLocalMain_WithNote(t *testing.T) {
 	// beyond what `git init -b main` implies locally — local "main"
 	// branch exists, so that's the fallback signal.
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if result.Config.Git.Base != "origin/main" {
 		t.Errorf("Git.Base = %q, want origin/main", result.Config.Git.Base)
 	}
@@ -367,10 +365,7 @@ func TestDetect_BaseBranch_Unresolved_LeavesNoteAndValidDefault(t *testing.T) {
 	// commit leaves HEAD unborn, so show-ref for main/master fails too.
 	runGitT(t, dir, "init", "-q", "-b", "totally-custom")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if result.Config.Git.Base != config.Default().Git.Base {
 		t.Errorf("Git.Base = %q, want default %q when nothing resolves", result.Config.Git.Base, config.Default().Git.Base)
 	}
@@ -391,10 +386,7 @@ func TestDetect_TrackerType_NonGithubRemote_LeavesNote(t *testing.T) {
 	initRepo(t, dir)
 	runGitT(t, dir, "remote", "set-url", "origin", "https://gitlab.com/example/repo.git")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	if result.Config.Tracker.Type != "github" {
 		t.Errorf("Tracker.Type = %q, want default github kept in place", result.Config.Tracker.Type)
 	}
@@ -415,10 +407,7 @@ func TestDetect_AgentDocs_Presence(t *testing.T) {
 	initRepo(t, dir)
 	writeFile(t, dir, "AGENTS.md", "# Agents\n")
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	found := false
 	for _, n := range result.Notes {
 		if n.Field == "agent_instructions" && strings.Contains(n.Message, "AGENTS.md") {
@@ -434,10 +423,7 @@ func TestDetect_AgentDocs_Absence(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	found := false
 	for _, n := range result.Notes {
 		if n.Field == "agent_instructions" && strings.Contains(n.Message, "no AGENTS.md") {
@@ -453,10 +439,7 @@ func TestDetect_EmptyRepo_StillProducesValidLoadableConfig(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
 
-	result, err := Detect(dir)
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
+	result := Detect(dir)
 	loaded := mustLoadable(t, result)
 	// Compare via their YAML encoding rather than reflect.DeepEqual: yaml.v3
 	// decodes an empty YAML sequence/mapping ("[]"/"{}") into a non-nil

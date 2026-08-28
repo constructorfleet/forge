@@ -42,12 +42,16 @@ type Result struct {
 	Notes  []Note
 }
 
-// Detect inspects the repository rooted at dir and returns a Result. The
-// returned Config is always valid and loadable via config.Load (it starts
-// from config.Default() and only overwrites fields Detect can confidently
+// Detect inspects the repository rooted at dir and returns a Result.
+// Detection always succeeds — it has no failure mode of its own (missing
+// files, an absent .git directory, or a git command erroring all just mean
+// "nothing detected", handled by falling back through the priority tiers
+// or leaving a Note) — so there is no error return. The returned Config is
+// always valid and loadable via config.Load (it starts from
+// config.Default() and only overwrites fields Detect can confidently
 // resolve); anything left at its default because it could not be resolved
 // is recorded in Result.Notes so Render can mark it clearly.
-func Detect(dir string) (Result, error) {
+func Detect(dir string) Result {
 	cfg := config.Default()
 	var notes []Note
 
@@ -73,16 +77,8 @@ func Detect(dir string) (Result, error) {
 		detectJustfile,
 	} {
 		expl, conv := detect(dir)
-		for k, v := range expl {
-			if _, ok := explicit[k]; !ok {
-				explicit[k] = v
-			}
-		}
-		for k, v := range conv {
-			if _, ok := convention[k]; !ok {
-				convention[k] = v
-			}
-		}
+		mergeFirstWins(explicit, expl)
+		mergeFirstWins(convention, conv)
 	}
 
 	ci := detectCIHints(dir)
@@ -90,19 +86,17 @@ func Detect(dir string) (Result, error) {
 	var gates []config.QualityGate
 	var unresolvedGates []string
 	for _, kind := range gateKinds {
-		if cmd, ok := explicit[kind]; ok {
-			gates = append(gates, config.QualityGate{Name: kind, Command: cmd})
-			continue
+		var resolved bool
+		for _, tier := range []map[string]string{explicit, ci, convention} {
+			if cmd, ok := tier[kind]; ok {
+				gates = append(gates, config.QualityGate{Name: kind, Command: cmd})
+				resolved = true
+				break
+			}
 		}
-		if cmd, ok := ci[kind]; ok {
-			gates = append(gates, config.QualityGate{Name: kind, Command: cmd})
-			continue
+		if !resolved {
+			unresolvedGates = append(unresolvedGates, kind)
 		}
-		if cmd, ok := convention[kind]; ok {
-			gates = append(gates, config.QualityGate{Name: kind, Command: cmd})
-			continue
-		}
-		unresolvedGates = append(unresolvedGates, kind)
 	}
 	cfg.Quality.Gates = gates
 	if len(unresolvedGates) > 0 {
@@ -114,5 +108,16 @@ func Detect(dir string) (Result, error) {
 
 	notes = append(notes, detectAgentDocs(dir)...)
 
-	return Result{Config: cfg, Notes: notes}, nil
+	return Result{Config: cfg, Notes: notes}
+}
+
+// mergeFirstWins copies src into dst, keeping dst's existing value for any
+// key already present — used to merge each detector's output in priority
+// order without letting a later detector overwrite an earlier one.
+func mergeFirstWins(dst, src map[string]string) {
+	for k, v := range src {
+		if _, ok := dst[k]; !ok {
+			dst[k] = v
+		}
+	}
 }

@@ -32,25 +32,7 @@ func TestHelpOutput(t *testing.T) {
 // discovery notes.
 func TestInit_WritesLoadableForgeYAML(t *testing.T) {
 	bin := buildBinary(t)
-
-	dir := t.TempDir()
-	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		out, err := cmd.CombinedOutput()
-		return string(out), err
-	}
-	if _, err := run("init", "-q", "-b", "main"); err != nil {
-		t.Fatalf("git init: %v", err)
-	}
-	if _, err := run("config", "user.email", "test@example.com"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := run("config", "user.name", "Test"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/foo\n\ngo 1.25\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	dir := initGitFixture(t)
 
 	out, err := exec.Command(bin, "init", dir).CombinedOutput()
 	if err != nil {
@@ -71,6 +53,69 @@ func TestInit_WritesLoadableForgeYAML(t *testing.T) {
 	if !strings.Contains(string(data), "go build ./...") {
 		t.Errorf(".forge.yaml missing detected go build command:\n%s", data)
 	}
+}
+
+// TestInit_RefusesToOverwriteExistingConfigWithoutForce confirms forge init
+// won't clobber a hand-edited .forge.yaml unless --force is passed.
+func TestInit_RefusesToOverwriteExistingConfigWithoutForce(t *testing.T) {
+	bin := buildBinary(t)
+	dir := initGitFixture(t)
+
+	yamlPath := filepath.Join(dir, ".forge.yaml")
+	existing := "# hand-edited, do not clobber\nversion: 1\n"
+	if err := os.WriteFile(yamlPath, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command(bin, "init", dir).CombinedOutput()
+	if err == nil {
+		t.Fatalf("forge init unexpectedly succeeded without --force, output: %s", out)
+	}
+	if !strings.Contains(string(out), "--force") {
+		t.Errorf("error output should mention --force, got: %s", out)
+	}
+
+	data, readErr := os.ReadFile(yamlPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != existing {
+		t.Errorf(".forge.yaml was overwritten without --force:\n%s", data)
+	}
+
+	// --force overwrites it.
+	out, err = exec.Command(bin, "init", "--force", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("forge init --force failed: %v\n%s", err, out)
+	}
+	data, readErr = os.ReadFile(yamlPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) == existing {
+		t.Errorf(".forge.yaml was not overwritten with --force")
+	}
+}
+
+// initGitFixture creates a minimal git+Go repo fixture and returns its
+// directory.
+func initGitFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/foo\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func buildBinary(t *testing.T) string {

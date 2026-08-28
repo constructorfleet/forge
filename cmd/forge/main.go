@@ -3,8 +3,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/Teagan42/forge/internal/initdiscovery"
 )
@@ -42,31 +44,58 @@ func main() {
 	os.Exit(1)
 }
 
+const initUsage = `Usage: forge init [--force] [dir]
+
+Generate .forge.yaml via deterministic repository-policy discovery.
+dir defaults to the current directory.
+
+  --force   Overwrite an existing .forge.yaml instead of refusing to.
+`
+
 // runInit implements `forge init`: deterministic repository-policy
 // discovery that writes .forge.yaml at the repository root. It never
 // invokes an LLM and never touches issue bodies, labels, or branch
 // protection — see internal/initdiscovery.
 func runInit(args []string) error {
 	dir := "."
+	force := false
+	var positional []string
 	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Fprint(os.Stdout, "Usage: forge init [dir]\n\nGenerate .forge.yaml via deterministic repository-policy discovery.\ndir defaults to the current directory.\n")
+		switch a {
+		case "--help", "-h":
+			fmt.Fprint(os.Stdout, initUsage)
 			return nil
+		case "--force":
+			force = true
+		default:
+			positional = append(positional, a)
 		}
-		dir = a
+	}
+	switch len(positional) {
+	case 0:
+		// dir stays "."
+	case 1:
+		dir = positional[0]
+	default:
+		return fmt.Errorf("too many arguments: %v\n\n%s", positional, initUsage)
 	}
 
-	result, err := initdiscovery.Detect(dir)
-	if err != nil {
-		return fmt.Errorf("discover repository policy: %w", err)
+	path := filepath.Join(dir, ".forge.yaml")
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("%s already exists; rerun with --force to overwrite", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
 	}
+
+	result := initdiscovery.Detect(dir)
 
 	out, err := initdiscovery.Render(result)
 	if err != nil {
 		return fmt.Errorf("render .forge.yaml: %w", err)
 	}
 
-	path := dir + "/.forge.yaml"
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

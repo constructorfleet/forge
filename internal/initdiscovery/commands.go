@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -248,7 +249,15 @@ func detectTaskfile(dir string) (explicit, convention map[string]string) {
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		return explicit, nil
 	}
+	// map iteration order is randomized; sort task names first so that two
+	// tasks aliasing the same gate kind (e.g. "fmt" and "format") resolve
+	// to the same command on every run, as detection must be deterministic.
+	names := make([]string, 0, len(doc.Tasks))
 	for name := range doc.Tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if kind, ok := matchAlias(name); ok {
 			if _, exists := explicit[kind]; !exists {
 				explicit[kind] = "task " + name
