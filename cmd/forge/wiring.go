@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/workspace"
 )
@@ -132,7 +134,7 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		return nil, err
 	}
 
-	resolver := newCompletionResolver(issueIDs)
+	resolver := newCompletionResolver(issueIDs, trk, cfg.Git.Base)
 	base := scheduler.BaseResolverFunc(func(context.Context, string) (string, error) {
 		return resolveBaseRevision(repoRoot, cfg.Git.Base)
 	})
@@ -152,30 +154,54 @@ var publishReadyStates = map[domain.IssueState]bool{
 	domain.StateDone:       true,
 }
 
-// completionResolver is the default scheduler.DependencyResolver `forge
-// execute` uses until ticket 27 wires in a real GitHub-merge-reachability
-// check. Ticket 22 (commit/PR creation) doesn't exist yet either, so there
-// is no real "PR merged" signal to check — completionResolver instead
-// considers a Dependency satisfied once its prerequisite Issue, PROVIDED
-// that prerequisite is itself part of this `forge execute` invocation's
-// requested Issue set, has locally reached a state at or beyond REVIEWING
-// (Quality Gates passed) within this same run. A prerequisite outside the
-// requested set (an External Issue, CONTEXT.md) is reported unsatisfied
-// with a descriptive error rather than left to hang forever, since forge
-// cannot check its real merge status yet either.
+// completionResolver is the scheduler.DependencyResolver `forge execute`
+// uses. Ticket 22 (commit/PR creation) doesn't exist yet, so there is no
+// real "PR merged" signal to check for a Managed prerequisite —
+// completionResolver instead considers a Dependency on a prerequisite
+// that is itself part of this `forge execute` invocation's requested Issue
+// set satisfied once that prerequisite has locally reached a state at or
+// beyond REVIEWING (Quality Gates passed) within this same run.
+//
+// A prerequisite outside the requested set is an External Issue
+// (CONTEXT.md), which does have a real satisfaction signal available today
+// (ticket 27): checker.CheckExternal consults GitHub for a merged,
+// reachable PR. completionResolver reports a Dependency on such a
+// prerequisite satisfied only once CheckExternal reports
+// tracker.ExternalSatisfied; EXTERNAL_PENDING and EXTERNAL_INVALID are
+// both reported unsatisfied (never an error) so a permanently-invalid
+// External Issue surfaces via the scheduler's existing no-progress
+// (stall) detection — reused rather than duplicated — instead of a
+// special-cased error path.
 type completionResolver struct {
-	requested map[string]bool
+	requested  map[string]bool
+	checker    tracker.ExternalChecker
+	baseBranch string
 
 	mu        sync.Mutex
 	completed map[string]domain.IssueState
+	// external caches only checker's *terminal* answers (Satisfied,
+	// Invalid) per External Issue ID. EXTERNAL_PENDING is deliberately
+	// never cached: every Satisfied call for a still-pending External
+	// Issue re-invokes checker.CheckExternal, so a poll later in the same
+	// `forge execute` run — or a subsequent `forge execute`/`forge resume`
+	// invocation, which always constructs a fresh completionResolver with
+	// an empty cache — re-evaluates against whatever has since landed on
+	// the applicable base rather than trusting a stale answer.
+	external map[string]tracker.ExternalState
 }
 
-func newCompletionResolver(issueIDs []string) *completionResolver {
+func newCompletionResolver(issueIDs []string, checker tracker.ExternalChecker, baseBranch string) *completionResolver {
 	requested := make(map[string]bool, len(issueIDs))
 	for _, id := range issueIDs {
 		requested[id] = true
 	}
-	return &completionResolver{requested: requested, completed: map[string]domain.IssueState{}}
+	return &completionResolver{
+		requested:  requested,
+		checker:    checker,
+		baseBranch: baseBranch,
+		completed:  map[string]domain.IssueState{},
+		external:   map[string]tracker.ExternalState{},
+	}
 }
 
 // onComplete is wired as the Scheduler's OnComplete hook: it records each
@@ -190,16 +216,43 @@ func (r *completionResolver) onComplete(issueID string, state domain.IssueState,
 	r.completed[issueID] = state
 }
 
-func (r *completionResolver) Satisfied(_ context.Context, issueID, dependsOnID string) (bool, error) {
+func (r *completionResolver) Satisfied(ctx context.Context, _, dependsOnID string) (bool, error) {
 	if !r.requested[dependsOnID] {
-		return false, fmt.Errorf(
-			"forge: issue %s depends on %s, which is outside this execution's requested issue set; "+
-				"external dependency satisfaction is not yet supported", issueID, dependsOnID)
+		return r.externalSatisfied(ctx, dependsOnID)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, ok := r.completed[dependsOnID]
 	return ok && publishReadyStates[state], nil
+}
+
+// externalSatisfied resolves whether an External Issue (dependsOnID, not
+// part of this run's requested set — see CONTEXT.md "External Issue") is
+// EXTERNAL_SATISFIED, consulting r.checker and caching only its terminal
+// answers (see the external field's doc comment).
+func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID string) (bool, error) {
+	r.mu.Lock()
+	if state, ok := r.external[dependsOnID]; ok {
+		r.mu.Unlock()
+		return state == tracker.ExternalSatisfied, nil
+	}
+	r.mu.Unlock()
+
+	if r.checker == nil {
+		return false, fmt.Errorf(
+			"forge: external issue %s: no external dependency checker configured", dependsOnID)
+	}
+	state, err := r.checker.CheckExternal(ctx, dependsOnID, r.baseBranch)
+	if err != nil {
+		return false, fmt.Errorf("forge: check external issue %s: %w", dependsOnID, err)
+	}
+
+	if state != tracker.ExternalPending {
+		r.mu.Lock()
+		r.external[dependsOnID] = state
+		r.mu.Unlock()
+	}
+	return state == tracker.ExternalSatisfied, nil
 }
 
 // buildTracker constructs the GitHub tracker.Tracker adapter for repoRoot,
@@ -214,7 +267,41 @@ func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
 	}
 	trk := github.NewClient(nil, "", owner, repo)
 	trk.DependencyOverrides = cfg.Dependencies.Overrides
+	// Reachability is only exercised by CheckExternal (ticket 27); wiring
+	// it unconditionally here, rather than only for `forge execute`, keeps
+	// buildTracker's one Client construction path fully usable by any
+	// future caller that needs external-dependency satisfaction (e.g. an
+	// eventual `forge resume` extension) without threading it through
+	// separately.
+	trk.Reachability = gitReachabilityChecker{repoRoot: repoRoot}
 	return trk, nil
+}
+
+// gitReachabilityChecker is the production github.GitReachabilityChecker:
+// it shells out to `git merge-base --is-ancestor` against the primary
+// checkout at repoRoot, the same pattern resolveBaseRevision uses for
+// `git rev-parse` (Engine never shells out to git itself; only this
+// package's constructors do).
+type gitReachabilityChecker struct {
+	repoRoot string
+}
+
+// IsAncestor reports whether commit is an ancestor of (reachable from)
+// branch's current tip. `git merge-base --is-ancestor` exits 0 for "yes", 1
+// for "no" (not an error — a merged-but-not-yet-landed PR is exactly this
+// case), and anything else (e.g. an unknown commit or branch) is a genuine
+// error.
+func (g gitReachabilityChecker) IsAncestor(ctx context.Context, commit, branch string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", g.repoRoot, "merge-base", "--is-ancestor", commit, branch)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("forge: git merge-base --is-ancestor %s %s: %w", commit, branch, err)
 }
 
 // buildAgent selects the Agent Adapter per cfg.Agent.Provider. "fake" opts

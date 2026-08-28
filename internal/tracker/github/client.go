@@ -43,6 +43,14 @@ type Client struct {
 	// replaces the Dependencies parsed from that issue's body. Nil means
 	// no overrides are configured.
 	DependencyOverrides map[string][]string
+
+	// Reachability checks whether a merge commit is reachable from an
+	// applicable base branch in the local git checkout, the other half of
+	// CheckExternal's satisfaction check (see external.go). Nil until the
+	// caller wires a production implementation (cmd/forge); CheckExternal
+	// errors rather than silently treating an unreachable check as
+	// unsatisfied if it is unset.
+	Reachability GitReachabilityChecker
 }
 
 // NewClient builds a Client for the given repository. httpClient is

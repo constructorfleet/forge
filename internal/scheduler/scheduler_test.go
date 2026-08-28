@@ -16,6 +16,7 @@ import (
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -532,6 +533,160 @@ func TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers(t *testing.T
 // TestRun_CycleRejected_NoWorkDispatched is the ticket's "reject cycles
 // before any work" requirement: a cycle must be detected before Executor is
 // ever invoked.
+// fakeExternalResolver simulates the real seam ticket 27 wires in cmd/forge
+// (a DependencyResolver backed by tracker.ExternalChecker, see
+// cmd/forge's completionResolver): every dependsOnID not itself a
+// requested/managed Issue is treated as an External Issue (CONTEXT.md) and
+// gated on a scripted tracker.ExternalState rather than being reported an
+// error, letting managed dependents unblock once their External
+// prerequisite is EXTERNAL_SATISFIED and stay blocked (never dispatched,
+// never added to the execution set) while it is EXTERNAL_PENDING or
+// EXTERNAL_INVALID.
+type fakeExternalResolver struct {
+	managed map[string]bool
+
+	mu     sync.Mutex
+	states map[string]tracker.ExternalState
+}
+
+func (r *fakeExternalResolver) Satisfied(_ context.Context, _, dependsOnID string) (bool, error) {
+	if r.managed[dependsOnID] {
+		return true, nil // not exercised by these tests; managed deps use other resolvers above.
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.states[dependsOnID] == tracker.ExternalSatisfied, nil
+}
+
+func (r *fakeExternalResolver) setState(id string, state tracker.ExternalState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.states[id] = state
+}
+
+var _ scheduler.DependencyResolver = (*fakeExternalResolver)(nil)
+
+// TestRun_ExternalDependencySatisfied_ManagedDependentUnblocks is ticket
+// 27's integration criterion: a managed Issue depending on an External
+// Issue (outside the requested set) must stay undispatched while the
+// external prerequisite is EXTERNAL_PENDING, then dispatch once a (fake)
+// resolver reports it EXTERNAL_SATISFIED — and the external Issue itself
+// must never be dispatched (it is never in the requested set at all).
+//
+// Issue "1" has no Dependencies and is kept in flight (gated, released only
+// at the end) for the whole test: Run's poll loop only keeps rechecking
+// Dependency satisfaction for still-blocked Issues while something is in
+// flight (see Scheduler.Run's no-progress doc comment) — an External
+// prerequisite can turn EXTERNAL_SATISFIED purely from the passage of time
+// (a human merges a PR), with no local Worker driving that change, so
+// without "1" here there would be nothing to keep Run polling at all.
+func TestRun_ExternalDependencySatisfied_ManagedDependentUnblocks(t *testing.T) {
+	issues := map[string]domain.Issue{
+		"1": {ID: "1"},
+		"2": {ID: "2", Dependencies: []domain.Dependency{{IssueID: "2", DependsOnID: "99"}}},
+	}
+	resolver := &fakeExternalResolver{managed: map[string]bool{"1": true}, states: map[string]tracker.ExternalState{"99": tracker.ExternalPending}}
+	exec := newGatedExecutor()
+	started := make(chan string, 2)
+	exec.onDispatch = func(id string) { started <- id }
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = 2 * time.Millisecond
+
+	done := make(chan map[string]scheduler.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		results, err := sch.Run(context.Background(), []string{"1", "2"})
+		errCh <- err
+		done <- results
+	}()
+
+	// "1" dispatches immediately (no Dependencies) and stays in flight.
+	select {
+	case id := <-started:
+		if id != "1" {
+			t.Fatalf("dispatched %s first, want 1", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for issue 1 to dispatch")
+	}
+
+	// While pending, "2" must not dispatch.
+	select {
+	case id := <-started:
+		t.Fatalf("issue %s dispatched while its external prerequisite is still EXTERNAL_PENDING", id)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	resolver.setState("99", tracker.ExternalSatisfied)
+
+	select {
+	case id := <-started:
+		if id != "2" {
+			t.Fatalf("dispatched %s, want 2", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for issue 2 to dispatch after EXTERNAL_SATISFIED")
+	}
+	exec.releaseOne()
+	exec.releaseOne()
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	results := <-done
+	if results["2"].State != domain.StateReviewing {
+		t.Errorf("results[2].State = %s, want REVIEWING", results["2"].State)
+	}
+	if _, ok := results["99"]; ok {
+		t.Error(`results contains "99": the External Issue must never be added to the execution set`)
+	}
+	if exec.CallCount("99") != 0 {
+		t.Errorf("CallCount(99) = %d, want 0 (External Issues are never executed)", exec.CallCount("99"))
+	}
+}
+
+// TestRun_ExternalDependencyInvalid_ManagedDependentStaysBlocked is ticket
+// 27's other integration criterion: an External prerequisite that is
+// closed without a merged PR (EXTERNAL_INVALID) never satisfies its
+// dependent. Run must not hang — it reuses the no-progress (stall)
+// detection from ticket 26 to surface an explicit "unsatisfiable
+// dependency" Result instead of polling forever.
+func TestRun_ExternalDependencyInvalid_ManagedDependentStaysBlocked(t *testing.T) {
+	issues := map[string]domain.Issue{
+		"2": {ID: "2", Dependencies: []domain.Dependency{{IssueID: "2", DependsOnID: "99"}}},
+	}
+	resolver := &fakeExternalResolver{managed: map[string]bool{}, states: map[string]tracker.ExternalState{"99": tracker.ExternalInvalid}}
+	exec := newGatedExecutor()
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = 2 * time.Millisecond
+
+	done := make(chan struct{})
+	var results map[string]scheduler.Result
+	var runErr error
+	go func() {
+		results, runErr = sch.Run(context.Background(), []string{"2"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly for an EXTERNAL_INVALID prerequisite (hang)")
+	}
+
+	if runErr == nil || !strings.Contains(runErr.Error(), "unsatisfiable") {
+		t.Fatalf("Run err = %v, want an unsatisfiable-dependency error", runErr)
+	}
+	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "99") {
+		t.Errorf("results[2].Err = %v, want it to name the invalid external prerequisite 99", results["2"].Err)
+	}
+	if exec.CallCount("2") != 0 {
+		t.Errorf("CallCount(2) = %d, want 0 (must stay blocked, never dispatched)", exec.CallCount("2"))
+	}
+}
+
 func TestRun_CycleRejected_NoWorkDispatched(t *testing.T) {
 	issues := map[string]domain.Issue{
 		"a": {ID: "a", Dependencies: []domain.Dependency{{IssueID: "a", DependsOnID: "b"}}},
