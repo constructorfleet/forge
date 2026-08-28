@@ -33,7 +33,8 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 	// executions, execution_issues, and dependencies are exercised via the
 	// Store interface elsewhere; seed the same fixture here so the
 	// remaining tables (workers, workspaces, agent_runs, gate_runs,
-	// pull_requests, ci_runs, events) can be asserted directly by name.
+	// review_runs, review_findings, pull_requests, ci_runs, events) can be
+	// asserted directly by name.
 	exec := domain.Execution{ID: "exec-schema", BaseRevision: "abc123", StartedAt: time.Now()}
 	if err := store.CreateExecution(ctx, exec); err != nil {
 		t.Fatalf("CreateExecution: %v", err)
@@ -49,8 +50,9 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 
 	tables := []string{
 		"executions", "execution_issues", "dependencies", "workers",
-		"workspaces", "agent_runs", "gate_runs", "pull_requests",
-		"ci_runs", "events", "schema_migrations",
+		"workspaces", "agent_runs", "gate_runs", "review_runs",
+		"review_findings", "pull_requests", "ci_runs", "events",
+		"schema_migrations",
 	}
 	for _, table := range tables {
 		exists, err := store.TableExists(ctx, table)

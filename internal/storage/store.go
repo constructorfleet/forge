@@ -58,6 +58,31 @@ type GateRun struct {
 	Passed      bool
 }
 
+// ReviewFinding is one structured Finding raised during a ReviewRun,
+// mirroring review.Finding but living in this package so storage has no
+// dependency on internal/review — callers (the engine) translate between
+// the two, the same convention GateRun documents for internal/gate.
+type ReviewFinding struct {
+	Severity string
+	File     string
+	Line     int
+	Message  string
+}
+
+// ReviewRun is one Review invocation's persisted outcome (CONTEXT.md
+// "Review"), scoped to an Execution and Issue: the diff it evaluated, its
+// verdict, and any structured Findings when CHANGES_REQUIRED.
+type ReviewRun struct {
+	ExecutionID string
+	IssueID     string
+	Verdict     string
+	Summary     string
+	Diff        string
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	Findings    []ReviewFinding
+}
+
 // ExecutionState is an Execution reloaded together with every Issue
 // currently recorded against it — the "full state" round-trip the
 // acceptance criteria require.
@@ -117,6 +142,16 @@ type Store interface {
 	// GateRunsByIssue returns every GateRun recorded for one Issue within an
 	// Execution, ordered by insertion (i.e. execution order).
 	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]GateRun, error)
+
+	// RecordReviewRun persists one Review invocation's outcome (CONTEXT.md
+	// "Review"), including its Findings, and appends a "review.run" Event,
+	// transactionally.
+	RecordReviewRun(ctx context.Context, run ReviewRun) error
+
+	// ReviewRunsByIssue returns every ReviewRun recorded for one Issue
+	// within an Execution, ordered by insertion (i.e. execution order), each
+	// with its Findings populated.
+	ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]ReviewRun, error)
 
 	// EventsByExecution returns every Event recorded for an Execution,
 	// ordered by occurrence time.

@@ -25,9 +25,19 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
+	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
+
+// DiffProducer produces the diff (base...HEAD) for a Workspace, used to
+// build a review.Request. Engine stays git-free per its design (see this
+// file's package doc comment): a DiffProducer seam lets cmd/forge implement
+// this with git while tests inject a fake, exactly as WorkspaceCreator does
+// for Workspace creation.
+type DiffProducer interface {
+	Diff(ctx context.Context, workspacePath, base string) (string, error)
+}
 
 // IssueFetcher is the subset of tracker.Tracker's exported behavior the
 // engine needs: fetching a single normalized Issue. Depending on this
@@ -73,6 +83,20 @@ type Engine struct {
 	// gate.ExecCommandRunner{}, the real subprocess runner; tests inject a
 	// fake so they never shell out.
 	Gates gate.CommandRunner
+
+	// Reviewer is the review.Reviewer the REVIEWING stage invokes once
+	// Quality Gates pass (ticket 20, CONTEXT.md "Review"). It is optional
+	// like NeedsInfoTracker: nil leaves REVIEWING a resting state (this
+	// ticket's predecessor behavior, and today's behavior for any caller
+	// that has not wired a production Reviewer yet), so existing callers of
+	// New keep compiling and behaving unchanged. cmd/forge wires it once a
+	// production Reviewer exists.
+	Reviewer review.Reviewer
+
+	// Diff is the DiffProducer the REVIEWING stage uses to build the
+	// review.Request's diff. Required only when Reviewer is set; see
+	// runReview.
+	Diff DiffProducer
 
 	// RepoRoot is the primary checkout's working directory, used to compile
 	// the Repository Context (internal/repocontext) and as the root
@@ -126,10 +150,15 @@ type ExecuteResult struct {
 // then, depending on the Agent's result:
 //
 //	IMPLEMENTED  -> VALIDATING -> (Quality Gates run: see runQualityGates)
-//	                -> REVIEWING (all pass; a resting state — ticket 20
-//	                   owns the actual Review) or -> FAILED (first
-//	                   failure; the retry loop that would route this back
-//	                   to IMPLEMENTING instead is ticket 21's concern)
+//	                -> REVIEWING -> (Review runs: see runReview)
+//	                   -> COMMITTING (APPROVED; a resting state — ticket 22
+//	                      owns the actual commit/PR) or -> IMPLEMENTING
+//	                      (CHANGES_REQUIRED, Findings persisted — the full
+//	                      retry loop that would re-invoke the Agent with
+//	                      them as Feedback is ticket 21's concern)
+//	                or -> FAILED (first Quality Gate failure; the retry
+//	                   loop that would route this back to IMPLEMENTING
+//	                   instead is ticket 21's concern)
 //	NEEDS_INFO   -> NEEDS_INFO
 //	FAILED       -> FAILED (a direct, legal edge from IMPLEMENTING)
 //
@@ -261,7 +290,11 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		if err != nil {
 			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 		}
-		issue, err = e.runQualityGates(ctx, execution.ID, issueID, ws.Path, issue)
+		var gateResults []gate.Result
+		issue, gateResults, err = e.runQualityGates(ctx, execution.ID, issueID, ws.Path, issue)
+		if err == nil && issue.State == domain.StateReviewing {
+			issue, err = e.runReview(ctx, execution.ID, issueID, workerBase, ws.Path, repoCtx, issue, gateResults)
+		}
 	case agent.StatusNeedsInfo:
 		issue, err = e.handleNeedsInfo(ctx, execution.ID, issueID, workerRef, result)
 	case agent.StatusFailed:
@@ -279,15 +312,17 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 // runQualityGates runs the Issue's configured Quality Gates (ticket 19,
 // internal/gate) for an Issue already in VALIDATING, persisting each
 // Result via Store.RecordGateRun (the full, bounded stdout/stderr live
-// there). All gates passing transitions the Issue to REVIEWING (ticket
-// 20's resting state — no review logic runs here); the first failure
+// there). All gates passing transitions the Issue to REVIEWING and returns
+// every passing Result (so runReview can hand them to the Reviewer as
+// gate-results context, per CONTEXT.md "Review"); the first failure
 // (Options{} defaults to stop-on-first-fail) records a lean "gate.failed"
 // diagnostic Event (name/command/exit_code — the Event log stays an audit
 // trail, not a duplicate copy of gate_runs) and transitions the Issue to
-// FAILED. Building agent.Feedback (gate.BuildFeedback) from the failing
-// GateRun and routing it back to IMPLEMENTING under a retry budget is
-// ticket 21's concern — this is deliberately a single-pass gate check.
-func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (domain.Issue, error) {
+// FAILED, with a nil Result slice. Building agent.Feedback
+// (gate.BuildFeedback) from the failing GateRun and routing it back to
+// IMPLEMENTING under a retry budget is ticket 21's concern — this is
+// deliberately a single-pass gate check.
+func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (domain.Issue, []gate.Result, error) {
 	runner := gate.NewRunner(e.Gates)
 	results := runner.Run(ctx, workspacePath, e.Config.Quality.Gates, gate.Options{
 		MaxOutputBytes: e.Config.Quality.MaxOutputBytes,
@@ -308,7 +343,7 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 			Stderr:      res.Stderr,
 			Passed:      res.Passed,
 		}); err != nil {
-			return domain.Issue{}, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
+			return domain.Issue{}, nil, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
 		}
 		if !res.Passed && failed == nil {
 			failed = &results[i]
@@ -316,7 +351,8 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 	}
 
 	if failed == nil {
-		return e.transition(ctx, executionID, issueID, domain.StateReviewing)
+		issue, err := e.transition(ctx, executionID, issueID, domain.StateReviewing)
+		return issue, results, err
 	}
 
 	// The "gate.failed" Event stays lean (name/command/exit_code, matching
@@ -329,10 +365,86 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 		"command":   failed.Command,
 		"exit_code": fmt.Sprint(failed.ExitCode),
 	}); err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, nil, err
 	}
 
-	return e.transition(ctx, executionID, issueID, domain.StateFailed)
+	issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
+	return issue, nil, err
+}
+
+// runReview implements REVIEWING once Quality Gates have passed (ticket 20,
+// CONTEXT.md "Review"): a fresh review.Reviewer invocation — never the
+// implementation Agent's prior conversation — receiving the diff (produced
+// by the injected DiffProducer, since Engine stays git-free), the Issue,
+// the Repository Context, and gateResults. When Reviewer is unset (the
+// optional-seam convention shared with NeedsInfoTracker/Gates — see
+// Engine.Reviewer's doc comment), REVIEWING stays a resting state, matching
+// this ticket's predecessor behavior.
+//
+// review.VerdictApproved transitions the Issue to COMMITTING (ticket 22
+// owns the actual commit/PR — this is deliberately another resting state
+// for now). review.VerdictChangesRequired persists the review run and its
+// Findings, and transitions the Issue back to IMPLEMENTING; converting
+// those Findings into agent.Feedback for a repair re-invocation
+// (review.BuildFeedback) and driving the full retry-budget loop is ticket
+// 21's concern — this ticket's scope stops at the single
+// CHANGES_REQUIRED -> IMPLEMENTING transition with Findings
+// persisted/available.
+func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, gateResults []gate.Result) (domain.Issue, error) {
+	if e.Reviewer == nil {
+		return issue, nil
+	}
+	if e.Diff == nil {
+		return domain.Issue{}, fmt.Errorf("engine: Reviewer is set but Diff (DiffProducer) is nil for issue %s", issueID)
+	}
+
+	diff, err := e.Diff.Diff(ctx, workspacePath, workerBase)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: produce diff for issue %s: %w", issueID, err)
+	}
+
+	started := e.Now()
+	result, err := e.Reviewer.Review(ctx, review.Request{
+		Diff:        diff,
+		Issue:       issue,
+		Repository:  repoCtx,
+		GateResults: gateResults,
+	})
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: reviewer execute issue %s: %w", issueID, err)
+	}
+	finished := e.Now()
+
+	findings := make([]storage.ReviewFinding, len(result.Findings))
+	for i, f := range result.Findings {
+		findings[i] = storage.ReviewFinding{
+			Severity: string(f.Severity),
+			File:     f.File,
+			Line:     f.Line,
+			Message:  f.Message,
+		}
+	}
+	if err := e.Store.RecordReviewRun(ctx, storage.ReviewRun{
+		ExecutionID: executionID,
+		IssueID:     issueID,
+		Verdict:     string(result.Verdict),
+		Summary:     result.Summary,
+		Diff:        diff,
+		StartedAt:   started,
+		FinishedAt:  finished,
+		Findings:    findings,
+	}); err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: record review run for issue %s: %w", issueID, err)
+	}
+
+	switch result.Verdict {
+	case review.VerdictApproved:
+		return e.transition(ctx, executionID, issueID, domain.StateCommitting)
+	case review.VerdictChangesRequired:
+		return e.transition(ctx, executionID, issueID, domain.StateImplementing)
+	default:
+		return domain.Issue{}, fmt.Errorf("engine: reviewer returned unknown verdict %q for issue %s", result.Verdict, issueID)
+	}
 }
 
 // transition moves issueID to state `to` via Store.TransitionIssue, wrapping

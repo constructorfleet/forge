@@ -90,6 +90,13 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// trk implements tracker.Tracker in full, a superset of both
 	// engine.IssueFetcher (Tracker, above) and engine.NeedsInfoTracker.
 	eng.NeedsInfoTracker = trk
+	// eng.Diff is wired unconditionally since it is inert without a
+	// Reviewer (Engine only calls it from runReview, which itself is a
+	// no-op when eng.Reviewer is nil). eng.Reviewer is intentionally left
+	// unset: ticket 20 only requires the review.Reviewer seam to exist and
+	// be injectable, not a production-ready reviewer backend; wiring a real
+	// one is deferred to a later ticket.
+	eng.Diff = gitDiffProducer{}
 	return eng, nil
 }
 
