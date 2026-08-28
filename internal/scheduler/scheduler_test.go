@@ -101,6 +101,30 @@ func (e *gatedExecutor) CallCount(issueID string) int {
 
 var _ scheduler.Executor = (*gatedExecutor)(nil)
 
+type scriptedCIWatcher struct {
+	started chan string
+	release chan struct{}
+	final   domain.IssueState
+}
+
+func newScriptedCIWatcher(final domain.IssueState) *scriptedCIWatcher {
+	return &scriptedCIWatcher{
+		started: make(chan string, 8),
+		release: make(chan struct{}),
+		final:   final,
+	}
+}
+
+func (w *scriptedCIWatcher) Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error) {
+	w.started <- executionID + "/" + issueID
+	select {
+	case <-w.release:
+		return w.final, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
 func issueSet(ids ...string) map[string]domain.Issue {
 	issues := make(map[string]domain.Issue, len(ids))
 	for _, id := range ids {
@@ -224,6 +248,52 @@ func TestRun_MaxParallelRespected(t *testing.T) {
 		if exec.CallCount(id) != 1 {
 			t.Errorf("CallCount(%s) = %d, want exactly 1", id, exec.CallCount(id))
 		}
+	}
+}
+
+func TestRun_CIPendingIssueReleasesWorkerSlotWhileCIWatches(t *testing.T) {
+	issues := issueSet("a", "b")
+	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
+		"a": {ExecutionID: "exec-a", State: domain.StateCIPending},
+		"b": {ExecutionID: "exec-b", State: domain.StateReviewing},
+	}}
+	watcher := newScriptedCIWatcher(domain.StateDone)
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, alwaysSatisfied, scheduler.FixedBase("base"), 1)
+	sch.CIWatcher = watcher
+
+	done := make(chan map[string]scheduler.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		results, err := sch.Run(context.Background(), []string{"a", "b"})
+		errCh <- err
+		done <- results
+	}()
+
+	select {
+	case started := <-watcher.started:
+		if started != "exec-a/a" {
+			t.Fatalf("watcher started for %s, want exec-a/a", started)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for CI watcher to start")
+	}
+
+	if got := exec.CallCount("b"); got != 1 {
+		t.Fatalf("CallCount(b) = %d, want 1 while a is still under CI watch", got)
+	}
+
+	watcher.release <- struct{}{}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	results := <-done
+	if results["a"].State != domain.StateDone {
+		t.Fatalf("results[a].State = %s, want DONE after CI watch finishes", results["a"].State)
+	}
+	if results["b"].State != domain.StateReviewing {
+		t.Fatalf("results[b].State = %s, want REVIEWING", results["b"].State)
 	}
 }
 

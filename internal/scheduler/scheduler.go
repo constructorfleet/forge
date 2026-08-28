@@ -131,6 +131,12 @@ type Result struct {
 	Err         error
 }
 
+// CIWatcher waits for a CI_PENDING Issue's pull-request checks to settle and
+// returns the resulting final state.
+type CIWatcher interface {
+	Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error)
+}
+
 // Scheduler computes ready work from the Dependency DAG, current Issue
 // states, and a concurrency limit, then dispatches Executor for each Issue
 // as it becomes ready (CONTEXT.md "Scheduler"). Construct one via New,
@@ -166,6 +172,11 @@ type Scheduler struct {
 	// (e.g. Run) and should do only quick, non-blocking work, since it runs
 	// serialized against every other dispatched Issue's completion.
 	OnComplete func(issueID string, state domain.IssueState, err error)
+
+	// CIWatcher, if set, monitors any Issue whose Executor finishes in
+	// CI_PENDING. Its wait happens outside MaxParallel so the worker slot is
+	// released while CI is still pending.
+	CIWatcher CIWatcher
 }
 
 // New builds a Scheduler from its dependencies, applying required defaults
@@ -290,6 +301,11 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 			s.OnComplete(issueID, outcome.State, err)
 		}
 	}
+	updateResult := func(issueID string, outcome ExecuteOutcome, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		results[issueID] = Result{IssueID: issueID, ExecutionID: outcome.ExecutionID, State: outcome.State, Err: err}
+	}
 	snapshotResults := func() map[string]Result {
 		mu.Lock()
 		defer mu.Unlock()
@@ -326,6 +342,19 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		outcome, execErr := s.Executor.Execute(ctx, issueID, base)
 		recordResult(issueID, outcome, execErr)
 		recordErr(execErr)
+		if execErr == nil && outcome.State == domain.StateCIPending && s.CIWatcher != nil {
+			wg.Add(1)
+			go func(outcome ExecuteOutcome) {
+				defer wg.Done()
+				state, err := s.CIWatcher.Wait(ctx, outcome.ExecutionID, issueID)
+				if err != nil && state == "" {
+					state = outcome.State
+				}
+				updateResult(issueID, ExecuteOutcome{ExecutionID: outcome.ExecutionID, State: state}, err)
+				recordErr(err)
+				signal()
+			}(outcome)
+		}
 	}
 
 	for remaining() > 0 {

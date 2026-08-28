@@ -100,6 +100,25 @@ type PullRequest struct {
 	CreatedAt time.Time
 }
 
+// CIRunStatus is the normalized result of one CI poll attempt.
+type CIRunStatus string
+
+const (
+	CIRunStatusPending CIRunStatus = "PENDING"
+	CIRunStatusPassed  CIRunStatus = "PASSED"
+	CIRunStatusFailed  CIRunStatus = "FAILED"
+)
+
+// CIRun is one persisted CI supervision attempt for an Issue in CI_PENDING.
+type CIRun struct {
+	ExecutionID string
+	IssueID     string
+	Status      CIRunStatus
+	CheckName   string
+	Details     string
+	CheckedAt   time.Time
+}
+
 // ExecutionState is an Execution reloaded together with every Issue
 // currently recorded against it — the "full state" round-trip the
 // acceptance criteria require.
@@ -178,6 +197,14 @@ type Store interface {
 	// PullRequestsByIssue returns every PullRequest recorded for one Issue
 	// within an Execution, ordered by insertion.
 	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]PullRequest, error)
+
+	// RecordCIRun persists one CI supervision attempt and appends a
+	// corresponding "ci.run" Event.
+	RecordCIRun(ctx context.Context, run CIRun) error
+
+	// CIRunsByIssue returns every CIRun recorded for one Issue within an
+	// Execution, ordered by insertion.
+	CIRunsByIssue(ctx context.Context, executionID, issueID string) ([]CIRun, error)
 
 	// RecordReviewRun persists one Review invocation's outcome (CONTEXT.md
 	// "Review"), including its Findings, and appends a "review.run" Event,

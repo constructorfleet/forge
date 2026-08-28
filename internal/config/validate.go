@@ -103,6 +103,12 @@ func validate(cfg Config) error {
 	default:
 		errs = append(errs, fieldErr("ci.required_checks.mode", string(cfg.CI.MergeRequirements.Mode), "unsupported mode; supported: github, explicit"))
 	}
+	if cfg.CI.PollInterval <= 0 {
+		errs = append(errs, fieldErr("ci.poll_interval", fmt.Sprint(cfg.CI.PollInterval), "must be > 0"))
+	}
+	if cfg.CI.MaxOutputBytes < 1 {
+		errs = append(errs, fieldErr("ci.max_output_bytes", fmt.Sprint(cfg.CI.MaxOutputBytes), "must be >= 1"))
+	}
 
 	if strings.TrimSpace(cfg.Blocked.Label) == "" {
 		errs = append(errs, fieldErr("blocked.label", cfg.Blocked.Label, "must not be empty"))

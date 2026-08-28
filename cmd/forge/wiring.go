@@ -13,6 +13,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
+	"github.com/Teagan42/forge/internal/ci"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
@@ -141,6 +142,9 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 
 	sch := scheduler.New(trk, scheduler.Adapt(eng), resolver, base, cfg.Execution.MaxParallel)
 	sch.OnComplete = resolver.onComplete
+	if cfg.PullRequests.WatchCI {
+		sch.CIWatcher = ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
+	}
 	return sch, nil
 }
 

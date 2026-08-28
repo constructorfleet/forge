@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 	"gopkg.in/yaml.v3"
@@ -100,6 +101,8 @@ type MergeRequirementsConfig struct {
 // CIConfig configures CI Supervisor behavior.
 type CIConfig struct {
 	MergeRequirements MergeRequirementsConfig `yaml:"required_checks"`
+	PollInterval      time.Duration           `yaml:"poll_interval"`
+	MaxOutputBytes    int                     `yaml:"max_output_bytes"`
 }
 
 // BlockedConfig configures behavior when an Issue needs human input.
@@ -176,6 +179,8 @@ func Default() Config {
 		},
 		CI: CIConfig{
 			MergeRequirements: MergeRequirementsConfig{Mode: MergeRequirementsGitHub},
+			PollInterval:      30 * time.Second,
+			MaxOutputBytes:    4000,
 		},
 		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
 		Agent:   AgentConfig{Provider: "claude-code"},

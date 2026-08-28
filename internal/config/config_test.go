@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
@@ -248,6 +249,18 @@ func TestLoad_ExplicitNullLeavesDefaultInPlace(t *testing.T) {
 	}
 	if cfg.Git.Base != "origin/main" {
 		t.Errorf("Git.Base = %q, want default origin/main to survive explicit null", cfg.Git.Base)
+	}
+}
+
+func TestLoad_CIPollIntervalParsesDuration(t *testing.T) {
+	path := writeTemp(t, "ci:\n  poll_interval: 15s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CI.PollInterval != 15*time.Second {
+		t.Fatalf("PollInterval = %v, want 15s", cfg.CI.PollInterval)
 	}
 }
 

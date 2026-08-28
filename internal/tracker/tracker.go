@@ -25,6 +25,24 @@ type MergeRequirements struct {
 	RequiredChecks []string
 }
 
+// CheckState is Forge's normalized state for one pull-request check.
+type CheckState string
+
+const (
+	CheckPending CheckState = "PENDING"
+	CheckSuccess CheckState = "SUCCESS"
+	CheckFailure CheckState = "FAILURE"
+)
+
+// PullRequestCheck is one normalized check reported against a pull request.
+// Optional checks are included here too; callers decide which names are
+// required by comparing them against MergeRequirements.
+type PullRequestCheck struct {
+	Name    string
+	State   CheckState
+	Details string
+}
+
 // PullRequest is Forge's normalized representation of a created — or
 // idempotently recovered — pull request (CONTEXT.md "COMMITTING",
 // "PR_CREATING"; ticket 22).
@@ -84,6 +102,10 @@ type Tracker interface {
 	// sourced from the tracker's native branch protection/rulesets (see
 	// CONTEXT.md "Merge Requirements").
 	GetMergeRequirements(ctx context.Context, branch string) (MergeRequirements, error)
+
+	// GetPullRequestChecks returns the current normalized checks attached to
+	// pull request number.
+	GetPullRequestChecks(ctx context.Context, number int) ([]PullRequestCheck, error)
 
 	// CreatePullRequest idempotently creates a pull request from
 	// req.Head into req.Base. If an open pull request already exists for
