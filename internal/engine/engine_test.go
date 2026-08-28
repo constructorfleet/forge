@@ -533,7 +533,7 @@ func TestLoadStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 	if report.Execution.ID != result.ExecutionID {
 		t.Errorf("report.Execution.ID = %s, want %s", report.Execution.ID, result.ExecutionID)
 	}
-	if len(report.Issues) != 1 || report.Issues[0].State != domain.StateReviewing {
+	if len(report.Issues) != 1 || report.Issues[0].Issue.State != domain.StateReviewing {
 		t.Fatalf("report.Issues = %+v, want one Issue in REVIEWING", report.Issues)
 	}
 	if len(report.Events) == 0 {

@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/storage"
 )
@@ -45,6 +47,23 @@ type StructuredEvent struct {
 	AgentBackend string
 }
 
+type ExecutionSummary struct {
+	Execution       domain.Execution
+	IssueCount      int
+	ActiveIssues    int
+	DoneIssues      int
+	FailedIssues    int
+	CancelledIssues int
+}
+
+type IssueStatus struct {
+	Issue          domain.Issue
+	WorkerRef      string
+	PullRequestURL string
+	Failure        string
+	Dependencies   []string
+}
+
 type TelemetryReport struct {
 	Summary TelemetrySummary
 	Issues  []IssueTelemetry
@@ -56,7 +75,7 @@ type TelemetryReport struct {
 // to answer "what happened" without replaying anything.
 type StatusReport struct {
 	Execution domain.Execution
-	Issues    []domain.Issue
+	Issues    []IssueStatus
 	Telemetry TelemetryReport
 	Events    []storage.Event
 }
@@ -67,12 +86,46 @@ type StatusReport struct {
 // partial Engine — with its Tracker/Workspaces/Agent fields left zero —
 // just to reach a pure read.
 type StatusStore interface {
+	ListExecutions(ctx context.Context) ([]storage.ExecutionState, error)
 	LoadExecution(ctx context.Context, executionID string) (storage.ExecutionState, error)
 	EventsByExecution(ctx context.Context, executionID string) ([]storage.Event, error)
 	AgentRunsByExecution(ctx context.Context, executionID string) ([]storage.AgentRun, error)
 	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.GateRun, error)
 	ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.ReviewRun, error)
 	CIRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.CIRun, error)
+	WorkerClaim(ctx context.Context, executionID, issueID string) (storage.WorkerClaim, error)
+	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]storage.PullRequest, error)
+}
+
+func ListActiveExecutions(ctx context.Context, store StatusStore) ([]ExecutionSummary, error) {
+	states, err := store.ListExecutions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: list executions: %w", err)
+	}
+
+	summaries := make([]ExecutionSummary, 0, len(states))
+	for _, state := range states {
+		summary := ExecutionSummary{
+			Execution:  state.Execution,
+			IssueCount: len(state.Issues),
+		}
+		for _, issue := range state.Issues {
+			switch issue.State {
+			case domain.StateDone:
+				summary.DoneIssues++
+			case domain.StateFailed:
+				summary.FailedIssues++
+			case domain.StateCancelled:
+				summary.CancelledIssues++
+			default:
+				summary.ActiveIssues++
+			}
+		}
+		if summary.ActiveIssues > 0 {
+			summaries = append(summaries, summary)
+		}
+	}
+	return summaries, nil
 }
 
 // LoadStatus reloads a StatusReport for executionID from store. It performs
@@ -91,7 +144,110 @@ func LoadStatus(ctx context.Context, store StatusStore, executionID string) (Sta
 	if err != nil {
 		return StatusReport{}, err
 	}
-	return StatusReport{Execution: state.Execution, Issues: state.Issues, Telemetry: telemetry, Events: events}, nil
+	issues, err := buildIssueStatuses(ctx, store, state, events)
+	if err != nil {
+		return StatusReport{}, err
+	}
+	return StatusReport{Execution: state.Execution, Issues: issues, Telemetry: telemetry, Events: events}, nil
+}
+
+func buildIssueStatuses(ctx context.Context, store StatusStore, state storage.ExecutionState, events []storage.Event) ([]IssueStatus, error) {
+	statuses := make([]IssueStatus, 0, len(state.Issues))
+	for _, issue := range state.Issues {
+		status := IssueStatus{
+			Issue: issue,
+		}
+		for _, dep := range issue.Dependencies {
+			status.Dependencies = append(status.Dependencies, dep.DependsOnID)
+		}
+
+		claim, err := store.WorkerClaim(ctx, state.Execution.ID, issue.ID)
+		switch {
+		case err == nil:
+			status.WorkerRef = claim.WorkerRef
+		case !errors.Is(err, storage.ErrNotFound):
+			return nil, fmt.Errorf("engine: load worker for issue %s: %w", issue.ID, err)
+		}
+
+		prs, err := store.PullRequestsByIssue(ctx, state.Execution.ID, issue.ID)
+		if err != nil {
+			return nil, fmt.Errorf("engine: load pull requests for issue %s: %w", issue.ID, err)
+		}
+		if n := len(prs); n > 0 {
+			status.PullRequestURL = prs[n-1].URL
+		}
+		gates, err := store.GateRunsByIssue(ctx, state.Execution.ID, issue.ID)
+		if err != nil {
+			return nil, fmt.Errorf("engine: load gate runs for issue %s: %w", issue.ID, err)
+		}
+		reviews, err := store.ReviewRunsByIssue(ctx, state.Execution.ID, issue.ID)
+		if err != nil {
+			return nil, fmt.Errorf("engine: load review runs for issue %s: %w", issue.ID, err)
+		}
+		ciRuns, err := store.CIRunsByIssue(ctx, state.Execution.ID, issue.ID)
+		if err != nil {
+			return nil, fmt.Errorf("engine: load ci runs for issue %s: %w", issue.ID, err)
+		}
+		status.Failure = latestFailure(issue.ID, events, gates, reviews, ciRuns)
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
+func latestFailure(issueID string, events []storage.Event, gates []storage.GateRun, reviews []storage.ReviewRun, ciRuns []storage.CIRun) string {
+	for i := len(ciRuns) - 1; i >= 0; i-- {
+		if ciRuns[i].Status != storage.CIRunStatusFailed {
+			continue
+		}
+		if ciRuns[i].Details != "" {
+			return fmt.Sprintf("ci %s failed: %s", ciRuns[i].CheckName, ciRuns[i].Details)
+		}
+		return fmt.Sprintf("ci %s failed", ciRuns[i].CheckName)
+	}
+	for i := len(reviews) - 1; i >= 0; i-- {
+		if reviews[i].Verdict != "CHANGES_REQUIRED" {
+			continue
+		}
+		if reviews[i].Summary != "" {
+			return reviews[i].Summary
+		}
+		if len(reviews[i].Findings) > 0 {
+			return reviews[i].Findings[0].Message
+		}
+	}
+	for i := len(gates) - 1; i >= 0; i-- {
+		if !gates[i].Passed {
+			return fmt.Sprintf("gate %s failed (exit %d)", gates[i].Name, gates[i].ExitCode)
+		}
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.IssueID != issueID {
+			continue
+		}
+		switch event.Type {
+		case "gate.failed":
+			var payload struct {
+				Name     string `json:"name"`
+				ExitCode string `json:"exit_code"`
+			}
+			if json.Unmarshal([]byte(event.Data), &payload) == nil && payload.Name != "" {
+				if payload.ExitCode != "" {
+					return fmt.Sprintf("gate %s failed (exit %s)", payload.Name, payload.ExitCode)
+				}
+				return fmt.Sprintf("gate %s failed", payload.Name)
+			}
+		case "agent.result":
+			var payload struct {
+				Status  string `json:"status"`
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal([]byte(event.Data), &payload) == nil && payload.Status == string(agent.StatusFailed) {
+				return payload.Summary
+			}
+		}
+	}
+	return ""
 }
 
 func buildTelemetry(ctx context.Context, store StatusStore, state storage.ExecutionState, events []storage.Event) (TelemetryReport, error) {

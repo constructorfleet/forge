@@ -20,7 +20,9 @@ Usage:
 Commands:
   init                     Generate .forge.yaml via deterministic repository-policy discovery
   execute <issue-number>   Execute a single Issue with no unmet Dependencies
-  status <execution-id>    Show an Execution's persisted state
+  status [execution-id]    Show active Executions or one Execution's persisted state
+  cancel <execution-id>    Stop an active Execution and mark running work CANCELLED
+  retry <execution>/<issue> Retry a FAILED Issue within its Execution
   resume <execution-id>    Reconcile and continue an incomplete Execution
   help                     Show this help text
 
@@ -52,6 +54,10 @@ func run(args []string) int {
 		return runExecute(rest)
 	case "status":
 		return runStatus(rest)
+	case "cancel":
+		return runCancel(rest)
+	case "retry":
+		return runRetry(rest)
 	case "resume":
 		return runResume(rest)
 	default:

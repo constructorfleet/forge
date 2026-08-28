@@ -56,7 +56,9 @@ func (e *InvalidTransitionError) Error() string {
 // Manual cancellation (-> CANCELLED) is legal from any non-terminal state
 // and is handled once in ValidateTransition rather than repeated per row.
 // Terminal states (see terminalStates) have no entry here and no outgoing
-// transitions at all, including to CANCELLED.
+// transitions at all, including to CANCELLED. Manual retry from FAILED is
+// handled once in ValidateTransition rather than encoded here as an
+// ordinary workflow edge.
 var transitions = map[IssueState][]IssueState{
 	StatePending:           {StateBlockedDependency, StateReady},
 	StateBlockedDependency: {StateReady},
@@ -75,8 +77,12 @@ var transitions = map[IssueState][]IssueState{
 
 // ValidateTransition reports whether moving an Issue from `from` to `to` is
 // legal. It returns an *InvalidTransitionError describing the attempted
-// transition when it is not.
+// transition when it is not. FAILED stays terminal for ordinary automatic
+// orchestration, but a human-triggered retry may move it back to READY.
 func ValidateTransition(from, to IssueState) error {
+	if from == StateFailed && to == StateReady {
+		return nil
+	}
 	if from.IsTerminal() {
 		return &InvalidTransitionError{From: from, To: to}
 	}

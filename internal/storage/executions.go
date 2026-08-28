@@ -36,6 +36,48 @@ func (s *SQLiteStore) LoadExecution(ctx context.Context, executionID string) (Ex
 	return ExecutionState{Execution: exec, Issues: issues}, nil
 }
 
+// ListExecutions reloads every persisted Execution together with its
+// Issues, ordered by started_at then id for stable CLI output.
+func (s *SQLiteStore) ListExecutions(ctx context.Context) ([]ExecutionState, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, base_revision, started_at
+		FROM executions
+		ORDER BY started_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list executions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var executions []domain.Execution
+	for rows.Next() {
+		var (
+			exec      domain.Execution
+			startedAt time.Time
+		)
+		if err := rows.Scan(&exec.ID, &exec.BaseRevision, &startedAt); err != nil {
+			return nil, fmt.Errorf("storage: list executions: %w", err)
+		}
+		exec.StartedAt = startedAt.UTC()
+		executions = append(executions, exec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: list executions: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("storage: list executions: %w", err)
+	}
+
+	states := make([]ExecutionState, 0, len(executions))
+	for _, exec := range executions {
+		issues, err := s.ListIssues(ctx, exec.ID)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, ExecutionState{Execution: exec, Issues: issues})
+	}
+	return states, nil
+}
+
 func (s *SQLiteStore) getExecution(ctx context.Context, q querier, executionID string) (domain.Execution, error) {
 	row := q.QueryRowContext(ctx, `
 		SELECT id, base_revision, started_at FROM executions WHERE id = ?`,

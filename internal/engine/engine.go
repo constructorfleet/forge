@@ -150,26 +150,62 @@ type Engine struct {
 	// clock regardless (events are still returned in insertion order, so
 	// ordering assertions that rely on that rather than on timestamp
 	// values are unaffected).
-	Now            func() time.Time
-	NewExecutionID func() string
-	OwnerPID       func() int
-	ProcessRunning func(pid int) (bool, error)
+	Now                func() time.Time
+	NewExecutionID     func() string
+	OwnerPID           func() int
+	ProcessRunning     func(pid int) (bool, error)
+	InterruptProcess   func(pid int) error
+	WaitForProcessExit func(ctx context.Context, pid int) error
 }
 
 // New builds an Engine from its injected dependencies.
 func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag agent.Agent, cfg config.Config, repoRoot string) *Engine {
 	return &Engine{
-		Store:          store,
-		Tracker:        trk,
-		Workspaces:     workspaces,
-		Agent:          ag,
-		Config:         cfg,
-		Gates:          gate.ExecCommandRunner{},
-		RepoRoot:       repoRoot,
-		Now:            time.Now,
-		NewExecutionID: func() string { return uuid.NewString() },
-		OwnerPID:       os.Getpid,
-		ProcessRunning: processRunning,
+		Store:              store,
+		Tracker:            trk,
+		Workspaces:         workspaces,
+		Agent:              ag,
+		Config:             cfg,
+		Gates:              gate.ExecCommandRunner{},
+		RepoRoot:           repoRoot,
+		Now:                time.Now,
+		NewExecutionID:     func() string { return uuid.NewString() },
+		OwnerPID:           os.Getpid,
+		ProcessRunning:     processRunning,
+		InterruptProcess:   interruptProcess,
+		WaitForProcessExit: waitForProcessExit,
+	}
+}
+
+func interruptProcess(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	return syscall.Kill(pid, syscall.SIGINT)
+}
+
+func waitForProcessExit(ctx context.Context, pid int) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		running, err := processRunning(pid)
+		if err != nil {
+			return err
+		}
+		if !running {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return fmt.Errorf("process %d still running after cancellation timeout", pid)
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -869,13 +905,29 @@ func (e *Engine) appendEvent(ctx context.Context, executionID, issueID, eventTyp
 func (e *Engine) failOut(ctx context.Context, executionID, issueID string, origErr error) error {
 	errs := []error{origErr}
 
-	if err := e.Workspaces.Cleanup(ctx, executionID, issueID); err != nil {
-		errs = append(errs, fmt.Errorf("engine: cleanup workspace for issue %s: %w", issueID, err))
+	cancelled := errors.Is(origErr, context.Canceled)
+	if !cancelled {
+		if err := e.Workspaces.Cleanup(ctx, executionID, issueID); err != nil {
+			errs = append(errs, fmt.Errorf("engine: cleanup workspace for issue %s: %w", issueID, err))
+		}
 	}
 
-	if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateFailed); err != nil {
-		if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCancelled); err != nil {
+	target := domain.StateFailed
+	if cancelled {
+		target = domain.StateCancelled
+	}
+	if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, target); err != nil {
+		if target != domain.StateCancelled {
+			if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCancelled); err != nil {
+				errs = append(errs, fmt.Errorf("engine: drive issue %s to a terminal state: %w", issueID, err))
+			}
+		} else {
 			errs = append(errs, fmt.Errorf("engine: drive issue %s to a terminal state: %w", issueID, err))
+		}
+	}
+	if cancelled {
+		if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issueID); err != nil {
+			errs = append(errs, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))
 		}
 	}
 

@@ -122,6 +122,10 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	return eng, nil
 }
 
+func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot string) *engine.Engine {
+	return engine.New(store, nil, nil, nil, cfg, repoRoot)
+}
+
 // buildScheduler wires a *scheduler.Scheduler (ticket 26) for a `forge
 // execute` invocation over issueIDs: the same tracker and Engine buildEngine
 // would construct for a single Issue, adapted to scheduler.Executor via

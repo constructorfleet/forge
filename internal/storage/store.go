@@ -189,6 +189,10 @@ type Store interface {
 	// budget.
 	LoadExecution(ctx context.Context, executionID string) (ExecutionState, error)
 
+	// ListExecutions reloads every persisted Execution together with its
+	// recorded Issues.
+	ListExecutions(ctx context.Context) ([]ExecutionState, error)
+
 	// CreateIssue persists a new Issue (with its Dependencies and initial
 	// RetryBudget) within an Execution.
 	CreateIssue(ctx context.Context, issue domain.Issue) error

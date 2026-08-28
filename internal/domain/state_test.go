@@ -39,6 +39,7 @@ func legalTransitions() []struct {
 		{domain.StateCIFailed, domain.StateImplementing},
 		{domain.StateCIFailed, domain.StateFailed},
 		{domain.StateNeedsInfo, domain.StateReady},
+		{domain.StateFailed, domain.StateReady},
 		// Manual cancellation is reachable from every non-terminal state.
 		{domain.StatePending, domain.StateCancelled},
 		{domain.StateBlockedDependency, domain.StateCancelled},
@@ -112,7 +113,8 @@ func TestIllegalTransitionsAreRejected(t *testing.T) {
 		// Cannot move backward past the repair loop.
 		{domain.StateDone, domain.StatePending},
 		{domain.StateCommitting, domain.StateImplementing},
-		// Terminal states have no outgoing transitions.
+		// Terminal states have no outgoing transitions except manual retry
+		// from FAILED.
 		{domain.StateDone, domain.StateCancelled},
 		{domain.StateCancelled, domain.StateReady},
 		// Self-transitions are not legal moves.
@@ -140,7 +142,7 @@ func TestIllegalTransitionsAreRejected(t *testing.T) {
 }
 
 func TestTerminalStatesHaveNoOutgoingTransitions(t *testing.T) {
-	terminal := []domain.IssueState{domain.StateDone, domain.StateCancelled, domain.StateFailed}
+	terminal := []domain.IssueState{domain.StateDone, domain.StateCancelled}
 	all := []domain.IssueState{
 		domain.StatePending, domain.StateBlockedDependency, domain.StateReady,
 		domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
@@ -153,6 +155,29 @@ func TestTerminalStatesHaveNoOutgoingTransitions(t *testing.T) {
 			if err := domain.ValidateTransition(from, to); err == nil {
 				t.Fatalf("terminal state %s should reject transition to %s", from, to)
 			}
+		}
+	}
+}
+
+func TestFailedOnlyAllowsManualRetry(t *testing.T) {
+	allowed := map[domain.IssueState]bool{domain.StateReady: true}
+	all := []domain.IssueState{
+		domain.StatePending, domain.StateBlockedDependency, domain.StateReady,
+		domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
+		domain.StateValidating, domain.StateReviewing, domain.StateCommitting,
+		domain.StatePRCreating, domain.StateCIPending, domain.StateCIFailed,
+		domain.StateNeedsInfo, domain.StateFailed, domain.StateDone, domain.StateCancelled,
+	}
+	for _, to := range all {
+		err := domain.ValidateTransition(domain.StateFailed, to)
+		if allowed[to] {
+			if err != nil {
+				t.Fatalf("FAILED -> %s should be legal, got %v", to, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("FAILED -> %s should be rejected", to)
 		}
 	}
 }

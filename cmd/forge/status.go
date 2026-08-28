@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
 )
@@ -20,11 +21,10 @@ func runStatus(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "forge status: expected exactly one argument, <execution-id>")
+	if fs.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "forge status: expected zero or one argument, [execution-id]")
 		return 2
 	}
-	executionID := fs.Arg(0)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -38,6 +38,17 @@ func runStatus(args []string) int {
 
 	// Status is a pure read: it needs only Store, not the tracker,
 	// Workspace manager, or Agent buildEngine would otherwise wire up.
+	if fs.NArg() == 0 {
+		summaries, err := engine.ListActiveExecutions(ctx, store)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
+			return 1
+		}
+		printExecutionSummaries(os.Stdout, summaries)
+		return 0
+	}
+	executionID := fs.Arg(0)
+
 	report, err := engine.LoadStatus(ctx, store, executionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
@@ -46,6 +57,23 @@ func runStatus(args []string) int {
 
 	printStatus(os.Stdout, report)
 	return 0
+}
+
+func printExecutionSummaries(w io.Writer, summaries []engine.ExecutionSummary) {
+	fmt.Fprintln(w, "ACTIVE EXECUTIONS")
+	fmt.Fprintf(w, "%-36s  %-12s  %-20s  %5s  %5s  %5s  %9s\n",
+		"EXECUTION", "BASE", "STARTED", "TOTAL", "LIVE", "DONE", "FAILED")
+	for _, summary := range summaries {
+		fmt.Fprintf(w, "%-36s  %-12s  %-20s  %5d  %5d  %5d  %9d\n",
+			summary.Execution.ID,
+			abbrev(summary.Execution.BaseRevision),
+			summary.Execution.StartedAt.Format("2006-01-02 15:04:05"),
+			summary.IssueCount,
+			summary.ActiveIssues,
+			summary.DoneIssues,
+			summary.FailedIssues,
+		)
+	}
 }
 
 func printStatus(w io.Writer, report engine.StatusReport) {
@@ -67,12 +95,30 @@ func printStatus(w io.Writer, report engine.StatusReport) {
 	for _, issue := range report.Issues {
 		cycle := ""
 		for _, metric := range report.Telemetry.Issues {
-			if metric.IssueID == issue.ID && metric.CycleTime > 0 {
+			if metric.IssueID == issue.Issue.ID && metric.CycleTime > 0 {
 				cycle = " cycle=" + metric.CycleTime.String()
 				break
 			}
 		}
-		fmt.Fprintf(w, "  %-12s %-10s scope=%s%s\n", issue.ID, issue.State, issue.Scope, cycle)
+		deps := "-"
+		if len(issue.Dependencies) > 0 {
+			deps = strings.Join(issue.Dependencies, ",")
+		}
+		worker := issue.WorkerRef
+		if worker == "" {
+			worker = "-"
+		}
+		pr := issue.PullRequestURL
+		if pr == "" {
+			pr = "-"
+		}
+		failure := issue.Failure
+		if failure == "" {
+			failure = "-"
+		}
+		fmt.Fprintf(w, "  %-12s %-18s %-12s %-18s deps=%-12s pr=%s%s\n",
+			issue.Issue.ID, issue.Issue.State, issue.Issue.Scope, worker, deps, pr, cycle)
+		fmt.Fprintf(w, "    failure=%s\n", failure)
 	}
 
 	fmt.Fprintf(w, "events (%d):\n", len(report.Events))
@@ -84,4 +130,11 @@ func printStatus(w io.Writer, report engine.StatusReport) {
 		fmt.Fprintf(w, "  %s  %-10s issue=%-8s %s\n",
 			event.OccurredAt.Format("2006-01-02T15:04:05Z07:00"), event.Type, issueLabel, event.Data)
 	}
+}
+
+func abbrev(sha string) string {
+	if len(sha) <= 12 {
+		return sha
+	}
+	return sha[:12]
 }

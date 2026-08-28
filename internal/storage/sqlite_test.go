@@ -132,6 +132,43 @@ func TestExecutionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestListExecutions_ReloadsIssuesForEachExecution(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	for _, executionID := range []string{"exec-a", "exec-b"} {
+		if err := store.CreateExecution(ctx, domain.Execution{
+			ID:           executionID,
+			BaseRevision: "base-" + executionID,
+			StartedAt:    time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("CreateExecution(%s): %v", executionID, err)
+		}
+		if err := store.CreateIssue(ctx, domain.Issue{
+			ID:          "issue-" + executionID,
+			ExecutionID: executionID,
+			State:       domain.StateReady,
+			Scope:       domain.ScopeManaged,
+			RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 3, Review: 3, CI: 3}),
+		}); err != nil {
+			t.Fatalf("CreateIssue(%s): %v", executionID, err)
+		}
+	}
+
+	states, err := store.ListExecutions(ctx)
+	if err != nil {
+		t.Fatalf("ListExecutions: %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("got %d executions, want 2", len(states))
+	}
+	for _, state := range states {
+		if len(state.Issues) != 1 {
+			t.Fatalf("execution %s issues = %+v, want one issue", state.Execution.ID, state.Issues)
+		}
+	}
+}
+
 func seedExecutionAndIssue(t *testing.T, store *storage.SQLiteStore, executionID, issueID string, state domain.IssueState) {
 	t.Helper()
 	ctx := context.Background()
