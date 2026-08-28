@@ -530,9 +530,6 @@ func TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers(t *testing.T
 	}
 }
 
-// TestRun_CycleRejected_NoWorkDispatched is the ticket's "reject cycles
-// before any work" requirement: a cycle must be detected before Executor is
-// ever invoked.
 // fakeExternalResolver simulates the real seam ticket 27 wires in cmd/forge
 // (a DependencyResolver backed by tracker.ExternalChecker, see
 // cmd/forge's completionResolver): every dependsOnID not itself a
@@ -564,7 +561,25 @@ func (r *fakeExternalResolver) setState(id string, state tracker.ExternalState) 
 	r.states[id] = state
 }
 
+// UnsatisfiedReason mirrors cmd/forge's completionResolver: EXTERNAL_INVALID
+// keeps the "unsatisfiable" wording (it never resolves), EXTERNAL_PENDING
+// gets a distinct, recheckable-sounding message (it may still resolve once
+// a PR merges) — see scheduler.UnsatisfiedReasoner.
+func (r *fakeExternalResolver) UnsatisfiedReason(_ context.Context, _, dependsOnID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch r.states[dependsOnID] {
+	case tracker.ExternalInvalid:
+		return fmt.Sprintf("external issue %s is EXTERNAL_INVALID (closed without a merged PR) and is permanently unsatisfiable", dependsOnID)
+	case tracker.ExternalPending:
+		return fmt.Sprintf("external issue %s is EXTERNAL_PENDING; re-run once its PR merges", dependsOnID)
+	default:
+		return ""
+	}
+}
+
 var _ scheduler.DependencyResolver = (*fakeExternalResolver)(nil)
+var _ scheduler.UnsatisfiedReasoner = (*fakeExternalResolver)(nil)
 
 // TestRun_ExternalDependencySatisfied_ManagedDependentUnblocks is ticket
 // 27's integration criterion: a managed Issue depending on an External
@@ -682,8 +697,56 @@ func TestRun_ExternalDependencyInvalid_ManagedDependentStaysBlocked(t *testing.T
 	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "99") {
 		t.Errorf("results[2].Err = %v, want it to name the invalid external prerequisite 99", results["2"].Err)
 	}
+	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "EXTERNAL_INVALID") {
+		t.Errorf("results[2].Err = %v, want it to identify EXTERNAL_INVALID as the reason (permanent, not recheckable)", results["2"].Err)
+	}
 	if exec.CallCount("2") != 0 {
 		t.Errorf("CallCount(2) = %d, want 0 (must stay blocked, never dispatched)", exec.CallCount("2"))
+	}
+}
+
+// TestRun_ExternalDependencyPending_LoneStallReportsRecheckable is the P3
+// fix's regression test: when a lone dependent is blocked solely on an
+// EXTERNAL_PENDING prerequisite (nothing else in flight to keep Run
+// polling — see the EXTERNAL_SATISFIED test's doc comment), Run's stall
+// message must not claim the dependency is "unsatisfiable" — it may well
+// resolve once the PR merges — but should instead point the operator at
+// re-running later.
+func TestRun_ExternalDependencyPending_LoneStallReportsRecheckable(t *testing.T) {
+	issues := map[string]domain.Issue{
+		"2": {ID: "2", Dependencies: []domain.Dependency{{IssueID: "2", DependsOnID: "99"}}},
+	}
+	resolver := &fakeExternalResolver{managed: map[string]bool{}, states: map[string]tracker.ExternalState{"99": tracker.ExternalPending}}
+	exec := newGatedExecutor()
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = 2 * time.Millisecond
+
+	done := make(chan struct{})
+	var results map[string]scheduler.Result
+	var runErr error
+	go func() {
+		results, runErr = sch.Run(context.Background(), []string{"2"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly for a lone EXTERNAL_PENDING prerequisite (hang)")
+	}
+
+	if runErr == nil {
+		t.Fatal("Run: want a non-nil error (nothing was ever in flight to keep polling), got nil")
+	}
+	if strings.Contains(runErr.Error(), "unsatisfiable") {
+		t.Errorf("Run err = %v, must not say 'unsatisfiable' for a transient EXTERNAL_PENDING block", runErr)
+	}
+	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "EXTERNAL_PENDING") {
+		t.Errorf("results[2].Err = %v, want it to identify EXTERNAL_PENDING as the (recheckable) reason", results["2"].Err)
+	}
+	if exec.CallCount("2") != 0 {
+		t.Errorf("CallCount(2) = %d, want 0", exec.CallCount("2"))
 	}
 }
 

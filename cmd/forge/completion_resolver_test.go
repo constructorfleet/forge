@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Teagan42/forge/internal/domain"
-	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
@@ -208,7 +207,7 @@ func TestGitReachabilityChecker_NotAncestor(t *testing.T) {
 	// A commit on an orphan branch shares no history with main.
 	runGit(t, root, "checkout", "--orphan", "other")
 	runGit(t, root, "commit", "--allow-empty", "-q", "-m", "unrelated")
-	other := strings.TrimSpace(gittest.RunGit(t, root, "rev-parse", "HEAD"))
+	other := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
 	runGit(t, root, "checkout", "main")
 
 	checker := gitReachabilityChecker{repoRoot: root}
@@ -221,11 +220,36 @@ func TestGitReachabilityChecker_NotAncestor(t *testing.T) {
 	}
 }
 
-func TestGitReachabilityChecker_UnknownCommitErrors(t *testing.T) {
+// TestGitReachabilityChecker_UnknownCommitIsNotReachableRatherThanError is
+// the P2 fix's regression test: a merge commit that hasn't been fetched
+// into the local checkout yet (e.g. an external PR merged into a branch
+// nothing has fetched) must be reported as "not yet reachable" — false,
+// nil — not a hard error. `git merge-base --is-ancestor` alone can't tell
+// "unknown commit" apart from "unknown base branch" (both exit 128), so
+// IsAncestor must check the commit's local presence itself before running
+// merge-base at all.
+func TestGitReachabilityChecker_UnknownCommitIsNotReachableRatherThanError(t *testing.T) {
 	root, _ := newTempRepo(t)
 	checker := gitReachabilityChecker{repoRoot: root}
 
-	if _, err := checker.IsAncestor(context.Background(), "0000000000000000000000000000000000000f", "main"); err == nil {
-		t.Fatal("expected an error for an unresolvable commit, got nil")
+	ok, err := checker.IsAncestor(context.Background(), "0000000000000000000000000000000000000f", "main")
+	if err != nil {
+		t.Fatalf("unexpected error for a not-yet-fetched commit: %v", err)
+	}
+	if ok {
+		t.Fatal("expected an unknown commit to be reported not-reachable, not ancestor")
+	}
+}
+
+// TestGitReachabilityChecker_UnknownBaseBranchErrors confirms the other
+// half of the P2 fix: once the commit itself is known locally, a genuinely
+// bad/unknown base branch is still a loud error rather than being silently
+// swallowed as "not reachable".
+func TestGitReachabilityChecker_UnknownBaseBranchErrors(t *testing.T) {
+	root, base := newTempRepo(t)
+	checker := gitReachabilityChecker{repoRoot: root}
+
+	if _, err := checker.IsAncestor(context.Background(), base, "does-not-exist"); err == nil {
+		t.Fatal("expected an error for an unresolvable base branch, got nil")
 	}
 }

@@ -289,9 +289,23 @@ type gitReachabilityChecker struct {
 // IsAncestor reports whether commit is an ancestor of (reachable from)
 // branch's current tip. `git merge-base --is-ancestor` exits 0 for "yes", 1
 // for "no" (not an error — a merged-but-not-yet-landed PR is exactly this
-// case), and anything else (e.g. an unknown commit or branch) is a genuine
-// error.
+// case), and 128 for either operand being unresolvable — which
+// `merge-base` alone gives no way to attribute to commit vs branch.
+//
+// IsAncestor therefore checks commit's local presence itself, first: an
+// External Issue's merge commit not yet present in this checkout (e.g. it
+// merged into a branch nothing here has fetched) is exactly the
+// "not-yet-reachable" case CheckExternal reports as EXTERNAL_PENDING, not
+// a hard error — the scheduler would otherwise abort the entire `forge
+// execute` run based on incidental local fetch state (see thermos review
+// of #27). Once commit is confirmed known, any remaining failure (most
+// commonly an unresolvable branch) is a genuine, loud error.
 func (g gitReachabilityChecker) IsAncestor(ctx context.Context, commit, branch string) (bool, error) {
+	verify := exec.CommandContext(ctx, "git", "-C", g.repoRoot, "cat-file", "-e", commit+"^{commit}")
+	if err := verify.Run(); err != nil {
+		return false, nil
+	}
+
 	cmd := exec.CommandContext(ctx, "git", "-C", g.repoRoot, "merge-base", "--is-ancestor", commit, branch)
 	err := cmd.Run()
 	if err == nil {

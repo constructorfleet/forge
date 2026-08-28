@@ -389,9 +389,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 					continue
 				}
 				dep := blockedOn[id]
-				stallErr := fmt.Errorf(
-					"scheduler: issue %s has an unsatisfiable dependency on %s: no further progress is possible",
-					id, dep)
+				stallErr := s.stallError(ctx, id, dep)
 				dispatched[id] = true
 				results[id] = Result{IssueID: id, Err: stallErr}
 				stallErrs = append(stallErrs, stallErr)
@@ -449,4 +447,40 @@ func (s *Scheduler) firstUnsatisfied(ctx context.Context, issueID string, depend
 		}
 	}
 	return "", nil
+}
+
+// UnsatisfiedReasoner is an optional extension a DependencyResolver may
+// implement to enrich Run's no-progress (stall) message with *why* a
+// Dependency remains unsatisfied — in particular to distinguish a
+// permanently-unsatisfiable prerequisite from a transient one that may
+// still resolve later (CONTEXT.md "External Issue": EXTERNAL_PENDING may
+// yet become EXTERNAL_SATISFIED once a PR merges, whereas EXTERNAL_INVALID
+// never will). Returning "" falls back to Run's generic
+// "unsatisfiable dependency" message.
+//
+// This is purely cosmetic: implementing it has no effect on scheduling
+// decisions. Satisfied's bool/error return remains the only signal Run
+// acts on when deciding what (not) to dispatch; UnsatisfiedReason is
+// consulted only once Run has already decided an Issue is permanently
+// blocked, to describe that decision better.
+type UnsatisfiedReasoner interface {
+	UnsatisfiedReason(ctx context.Context, issueID, dependsOnID string) string
+}
+
+// stallError builds the Result error for an Issue Run has determined can
+// never be dispatched (see Run's no-progress case, above). If s.Resolver
+// implements UnsatisfiedReasoner and supplies a non-empty reason for this
+// particular Dependency, that reason is used in place of the generic
+// message so callers (and end users) can tell a transient block (e.g. an
+// External Issue's PR hasn't merged yet — re-running later may succeed)
+// apart from a permanent one.
+func (s *Scheduler) stallError(ctx context.Context, issueID, dependsOnID string) error {
+	if reasoner, ok := s.Resolver.(UnsatisfiedReasoner); ok {
+		if reason := reasoner.UnsatisfiedReason(ctx, issueID, dependsOnID); reason != "" {
+			return fmt.Errorf("scheduler: issue %s cannot proceed on dependency %s: %s", issueID, dependsOnID, reason)
+		}
+	}
+	return fmt.Errorf(
+		"scheduler: issue %s has an unsatisfiable dependency on %s: no further progress is possible",
+		issueID, dependsOnID)
 }

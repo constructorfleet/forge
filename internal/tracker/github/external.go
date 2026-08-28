@@ -26,14 +26,21 @@ type ghIssueState struct {
 }
 
 // ghTimelineEvent is the subset of GitHub's issue-timeline JSON shape
-// CheckExternal uses to find Pull Requests that reference (and, per
-// GitHub's own closing-keyword linking, are intended to close) the Issue.
-// A "cross-referenced" event whose source is a Pull Request is GitHub's
-// normalized signal for "this PR references this issue" — the closest
-// thing GitHub's REST API exposes to reverse issue->PR linkage.
+// CheckExternal uses. Two event kinds matter:
+//
+//   - "cross-referenced": GitHub's signal that some other Issue/PR
+//     references this one. This fires for ANY mention (e.g. "related to
+//     #50"), not just the PR that actually closes the issue — so it is
+//     only a candidate list, never proof of association by itself (see
+//     findMergedPRCommit).
+//   - "closed": GitHub's authoritative record of what closed the issue.
+//     When closed by a commit (directly, or via a merged PR's merge
+//     commit), CommitID is that commit's SHA — the one signal that
+//     unambiguously ties a specific commit to this issue's closure.
 type ghTimelineEvent struct {
-	Event  string `json:"event"`
-	Source *struct {
+	Event    string `json:"event"`
+	CommitID string `json:"commit_id"`
+	Source   *struct {
 		Issue *struct {
 			Number      int `json:"number"`
 			PullRequest *struct {
@@ -54,9 +61,10 @@ type ghPullRequest struct {
 var _ tracker.ExternalChecker = (*Client)(nil)
 
 // CheckExternal implements tracker.ExternalChecker: it determines issueID's
-// current tracker.ExternalState by finding any Pull Request that
-// cross-references it and has merged, then (via Reachability) checking
-// whether that PR's merge commit is reachable from baseBranch.
+// current tracker.ExternalState by finding the Pull Request that
+// authoritatively closed it (see findMergedPRCommit — not merely any PR
+// that references it), then (via Reachability) checking whether that PR's
+// merge commit is reachable from baseBranch.
 //
 //   - A merged PR whose merge commit is reachable from baseBranch ->
 //     ExternalSatisfied.
@@ -109,17 +117,28 @@ func (c *Client) CheckExternal(ctx context.Context, issueID, baseBranch string) 
 	return tracker.ExternalSatisfied, nil
 }
 
-// findMergedPRCommit walks issue #number's timeline looking for a
-// cross-referenced Pull Request that has merged, returning its merge
-// commit SHA. If more than one merged PR references the issue, the first
-// one found (GitHub's timeline order) wins. found is false if no merged PR
-// was located (the issue may still have an open PR referencing it, or
-// none at all).
+// findMergedPRCommit walks issue #number's full timeline (following every
+// page, see fetchTimeline) to find the merged Pull Request that
+// authoritatively closed it, returning its merge commit SHA. found is
+// false if no such PR was located — the issue may still be open, closed by
+// a direct commit with no associated PR, or a "cross-referenced" PR merely
+// mentions it without being the one that closed it.
+//
+// A "cross-referenced" event fires for any mention of the issue, so it is
+// only ever a *candidate*: a merged PR that references the issue is not
+// necessarily the PR that closed it (see ghTimelineEvent's doc comment).
+// The timeline's "closed" event is the authoritative signal — its
+// CommitID is the exact commit that closed the issue — so a candidate PR
+// only counts once its merge commit matches that CommitID.
 func (c *Client) findMergedPRCommit(ctx context.Context, number int) (sha string, found bool, err error) {
-	var events []ghTimelineEvent
-	path := c.issuePath(number, "/timeline") + "?per_page=100"
-	if err := c.do(ctx, http.MethodGet, path, nil, &events); err != nil {
-		return "", false, fmt.Errorf("fetch timeline for issue #%d: %w", number, err)
+	events, err := c.fetchTimeline(ctx, number)
+	if err != nil {
+		return "", false, err
+	}
+
+	closingCommit := closingCommitSHA(events)
+	if closingCommit == "" {
+		return "", false, nil
 	}
 
 	for _, ev := range events {
@@ -136,9 +155,54 @@ func (c *Client) findMergedPRCommit(ctx context.Context, number int) (sha string
 		if err := c.do(ctx, http.MethodGet, prPath, nil, &pr); err != nil {
 			return "", false, fmt.Errorf("fetch pull request #%d: %w", src.Number, err)
 		}
-		if pr.MergedAt != nil && pr.MergeCommitSHA != "" {
+		// Re-confirm against the authoritative PR resource: the timeline
+		// cross-reference's merged_at can be stale by the time we look.
+		if pr.MergedAt == nil || pr.MergeCommitSHA == "" {
+			continue
+		}
+		if pr.MergeCommitSHA == closingCommit {
 			return pr.MergeCommitSHA, true, nil
 		}
 	}
 	return "", false, nil
+}
+
+// closingCommitSHA returns the commit that most recently closed the issue
+// according to events, or "" if the issue has never been closed by a
+// commit (still open, or closed manually with no associated commit — e.g.
+// "close as not planned"). A "reopened" event clears any prior closing
+// commit, so a since-reopened-and-not-yet-reclosed issue correctly yields
+// "".
+func closingCommitSHA(events []ghTimelineEvent) string {
+	var sha string
+	for _, ev := range events {
+		switch ev.Event {
+		case "closed":
+			sha = ev.CommitID
+		case "reopened":
+			sha = ""
+		}
+	}
+	return sha
+}
+
+// fetchTimeline fetches every page of issue #number's timeline, following
+// the Link "next" header the same way GetComments does — a long-lived
+// issue's timeline (labels, comments, cross-references, ...) can easily
+// exceed one page, and the event that matters (the authoritative "closed"
+// event, or the PR that references it) can land on any page.
+func (c *Client) fetchTimeline(ctx context.Context, number int) ([]ghTimelineEvent, error) {
+	url := c.baseURL + c.issuePath(number, "/timeline") + "?per_page=100"
+
+	var events []ghTimelineEvent
+	for url != "" {
+		var page []ghTimelineEvent
+		headers, err := c.doWithHeaders(ctx, http.MethodGet, url, nil, &page)
+		if err != nil {
+			return nil, fmt.Errorf("fetch timeline for issue #%d: %w", number, err)
+		}
+		events = append(events, page...)
+		url = nextPageURL(headers)
+	}
+	return events, nil
 }
