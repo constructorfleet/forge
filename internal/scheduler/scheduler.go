@@ -300,6 +300,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		dispatched = make(map[string]bool, len(issueIDs))
 		results    = make(map[string]Result, len(issueIDs))
 		blockedOn  = make(map[string]string, len(issueIDs)) // issueID -> unsatisfied dependsOnID, refreshed each round
+		asyncWork  int
 		firstErr   error
 	)
 
@@ -320,7 +321,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 			firstErr = err
 		}
 	}
-	recordResult := func(issueID string, outcome ExecuteOutcome, err error) {
+	recordResult := func(issueID string, outcome ExecuteOutcome, err error, notifyComplete bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		results[issueID] = Result{IssueID: issueID, ExecutionID: outcome.ExecutionID, State: outcome.State, Err: err}
@@ -329,7 +330,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		// atomic from the main dispatch loop's point of view, so a
 		// no-progress check can never observe this Issue as finished before
 		// e.g. a completion-driven DependencyResolver has learned about it.
-		if s.OnComplete != nil {
+		if notifyComplete && s.OnComplete != nil {
 			s.OnComplete(issueID, outcome.State, err)
 		}
 	}
@@ -352,6 +353,17 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		defer mu.Unlock()
 		return len(issueIDs) - len(dispatched)
 	}
+	beginAsyncWork := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		asyncWork++
+	}
+	endAsyncWork := func() {
+		mu.Lock()
+		asyncWork--
+		mu.Unlock()
+		signal()
+	}
 
 	var wg sync.WaitGroup
 
@@ -366,18 +378,19 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		base, err := s.Base.CurrentBase(ctx, issueID)
 		if err != nil {
 			err = fmt.Errorf("scheduler: resolve base for issue %s: %w", issueID, err)
-			recordResult(issueID, ExecuteOutcome{}, err)
+			recordResult(issueID, ExecuteOutcome{}, err, true)
 			recordErr(err)
 			return
 		}
 
 		outcome, execErr := s.Executor.Execute(ctx, issueID, base)
-		recordResult(issueID, outcome, execErr)
-		recordErr(execErr)
 		if execErr == nil && outcome.State == domain.StateCIPending && s.CIWatcher != nil {
+			recordResult(issueID, outcome, nil, false)
+			beginAsyncWork()
 			wg.Add(1)
 			go func(outcome ExecuteOutcome) {
 				defer wg.Done()
+				defer endAsyncWork()
 				current := outcome
 				for {
 					state, err := s.CIWatcher.Wait(ctx, current.ExecutionID, issueID)
@@ -385,24 +398,29 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 						if state == "" {
 							state = current.State
 						}
-						updateResult(issueID, ExecuteOutcome{ExecutionID: current.ExecutionID, State: state}, err)
+						recordResult(issueID, ExecuteOutcome{ExecutionID: current.ExecutionID, State: state}, err, true)
 						recordErr(err)
 						signal()
 						return
 					}
 
 					current.State = state
-					updateResult(issueID, current, nil)
 					signal()
 
-					if state != domain.StateCIFailed || s.CIRepairer == nil {
+					if state != domain.StateCIFailed {
+						recordResult(issueID, current, nil, true)
+						return
+					}
+					updateResult(issueID, current, nil)
+					if s.CIRepairer == nil {
+						recordResult(issueID, current, nil, true)
 						return
 					}
 
 					select {
 					case sem <- struct{}{}:
 					case <-ctx.Done():
-						updateResult(issueID, current, ctx.Err())
+						recordResult(issueID, current, ctx.Err(), true)
 						recordErr(ctx.Err())
 						signal()
 						return
@@ -416,16 +434,20 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 					if repaired.State == "" {
 						repaired.State = current.State
 					}
-					updateResult(issueID, repaired, repairErr)
 					recordErr(repairErr)
 					signal()
 					if repairErr != nil || repaired.State != domain.StateCIPending {
+						recordResult(issueID, repaired, repairErr, true)
 						return
 					}
+					updateResult(issueID, repaired, nil)
 					current = repaired
 				}
 			}(outcome)
+			return
 		}
+		recordResult(issueID, outcome, execErr, true)
+		recordErr(execErr)
 	}
 
 	for remaining() > 0 {
@@ -475,7 +497,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		}
 
 		mu.Lock()
-		inFlight := len(dispatched) - len(results)
+		inFlight := len(dispatched) - len(results) + asyncWork
 		if !dispatchedThisRound && inFlight == 0 {
 			// No-progress: nothing new was dispatched and nothing is
 			// running, so no future signal can ever arrive (a completing

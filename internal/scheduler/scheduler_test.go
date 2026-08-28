@@ -395,6 +395,78 @@ func TestRun_CIPendingIssueReleasesWorkerSlotWhileCIWatches(t *testing.T) {
 	}
 }
 
+func TestRun_DependentIssueWaitsForCIWatchedPrerequisiteDone(t *testing.T) {
+	issues := issueSet("a", "b")
+	issues["b"] = domain.Issue{ID: "b", Dependencies: []domain.Dependency{{IssueID: "b", DependsOnID: "a"}}}
+	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
+		"a": {ExecutionID: "exec-a", State: domain.StateCIPending},
+		"b": {ExecutionID: "exec-b", State: domain.StateReviewing},
+	}}
+	watcher := newScriptedCIWatcher(domain.StateDone)
+
+	var mu sync.Mutex
+	completed := map[string]domain.IssueState{}
+	resolver := scheduler.DependencyResolverFunc(func(_ context.Context, _, dependsOnID string) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return completed[dependsOnID] == domain.StateDone, nil
+	})
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 1)
+	sch.PollInterval = time.Millisecond
+	sch.CIWatcher = watcher
+	sch.OnComplete = func(issueID string, state domain.IssueState, err error) {
+		if err != nil {
+			return
+		}
+		mu.Lock()
+		completed[issueID] = state
+		mu.Unlock()
+	}
+
+	done := make(chan map[string]scheduler.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		results, err := sch.Run(context.Background(), []string{"a", "b"})
+		errCh <- err
+		done <- results
+	}()
+
+	select {
+	case started := <-watcher.started:
+		if started != "exec-a/a" {
+			t.Fatalf("watcher started for %s, want exec-a/a", started)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for CI watcher to start")
+	}
+
+	select {
+	case results := <-done:
+		t.Fatalf("Run returned before CI finished: %+v", results)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if got := exec.CallCount("b"); got != 0 {
+		t.Fatalf("CallCount(b) = %d, want 0 while a is still under CI watch", got)
+	}
+
+	watcher.release <- struct{}{}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	results := <-done
+	if results["a"].State != domain.StateDone {
+		t.Fatalf("results[a].State = %s, want DONE", results["a"].State)
+	}
+	if results["b"].State != domain.StateReviewing {
+		t.Fatalf("results[b].State = %s, want REVIEWING", results["b"].State)
+	}
+	if got := exec.CallCount("b"); got != 1 {
+		t.Fatalf("CallCount(b) = %d, want 1 after a reaches DONE", got)
+	}
+}
+
 func TestRun_CIFailedIssueRepairsAndReturnsToCIWatch(t *testing.T) {
 	issues := issueSet("a", "b")
 	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
