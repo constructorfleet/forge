@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # Forge MVP Spec
 
