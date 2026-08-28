@@ -263,6 +263,25 @@ func TestExecuteInExecution_UsesExistingExecutionWithoutMintingAnother(t *testin
 	}
 }
 
+func TestExecute_ReleasesWorkerClaimAfterRestingState(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"85": {ID: "85"},
+	})
+	te.fake.ProgramResult("85", agent.AgentResult{Status: agent.StatusImplemented, Summary: "done"})
+
+	result, err := te.eng.Execute(context.Background(), "85", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateReviewing {
+		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	}
+
+	if _, err := te.store.WorkerClaim(context.Background(), result.ExecutionID, "85"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("WorkerClaim after resting state = %v, want ErrNotFound", err)
+	}
+}
+
 // TestExecute_QualityGatesPass_AdvancesToReviewing is ticket 19's
 // integration test: a fake Agent reports IMPLEMENTED, every configured
 // Quality Gate passes, and the Issue advances to REVIEWING.

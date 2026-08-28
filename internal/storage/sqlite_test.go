@@ -230,6 +230,33 @@ func TestClaimIssuePreventsDuplicateClaims(t *testing.T) {
 	}
 }
 
+func TestClaimIssue_RejectsClaimHeldByAnotherExecution(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateReady)
+	seedExecutionAndIssue(t, store, "exec-2", "issue-1", domain.StateReady)
+
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("first ClaimIssue: %v", err)
+	}
+
+	err := store.ClaimIssue(ctx, "exec-2", "issue-1", "worker-b")
+	if !errors.Is(err, storage.ErrAlreadyClaimed) {
+		t.Fatalf("expected ErrAlreadyClaimed, got %v", err)
+	}
+
+	var conflict *storage.ClaimConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected ClaimConflictError, got %T", err)
+	}
+	if conflict.OwningExecutionID != "exec-1" {
+		t.Fatalf("OwningExecutionID = %q, want exec-1", conflict.OwningExecutionID)
+	}
+	if conflict.IssueID != "issue-1" {
+		t.Fatalf("IssueID = %q, want issue-1", conflict.IssueID)
+	}
+}
+
 func TestClaimIssueRejectsNonexistentIssue(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

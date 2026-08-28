@@ -17,6 +17,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -78,10 +79,12 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	if err != nil {
 		return nil, err
 	}
+	locks := repolock.New(repoRoot)
 
 	wsMgr, err := workspace.NewManager(repoRoot,
 		workspace.WithWorktreeRoot(cfg.Git.WorktreeRoot),
 		workspace.WithBranchTemplate(cfg.Git.BranchTemplate),
+		workspace.WithLocker(locks),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("forge: workspace manager: %w", err)
@@ -109,7 +112,7 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// today, so there is no "not built yet" reason to leave COMMITTING a
 	// resting state the way REVIEWING was left before a production
 	// Reviewer existed.
-	eng.Publisher = gitPublisher{}
+	eng.Publisher = gitPublisher{locks: locks}
 	// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
 	eng.PRTracker = trk
 	eng.BaseBranch = baseBranchName(cfg.Git.Base)

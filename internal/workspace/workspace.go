@@ -70,6 +70,12 @@ type CommandRunner interface {
 	Run(ctx context.Context, dir string, args ...string) (stdout, stderr string, err error)
 }
 
+// Locker serializes short-lived repository metadata mutations such as git
+// worktree add/remove and branch deletion across concurrent Executions.
+type Locker interface {
+	WithLock(ctx context.Context, resource string, fn func() error) error
+}
+
 // execCommandRunner is the default CommandRunner, backed by os/exec.
 type execCommandRunner struct {
 	gitBin string
@@ -103,6 +109,7 @@ type Manager struct {
 	branchTemplate string
 
 	runner CommandRunner
+	locker Locker
 
 	// mu serializes every mutating sequence of git worktree/branch
 	// operations against this repository. `git worktree add/remove` and
@@ -140,6 +147,11 @@ func WithRunner(runner CommandRunner) Option {
 // WithGitBinary overrides the git executable name/path (default "git").
 func WithGitBinary(bin string) Option {
 	return func(m *Manager) { m.runner = execCommandRunner{gitBin: bin} }
+}
+
+// WithLocker overrides the repository-scoped metadata lock implementation.
+func WithLocker(locker Locker) Option {
+	return func(m *Manager) { m.locker = locker }
 }
 
 // NewManager returns a Manager whose primary checkout is rooted at
@@ -236,44 +248,53 @@ func (m *Manager) Create(ctx context.Context, executionID, issueID, base string)
 		return domain.Workspace{}, err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	var ws domain.Workspace
+	err := m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 
-	path := m.path(executionID, issueID)
-	branchName := m.branch(executionID, issueID)
+		path := m.path(executionID, issueID)
+		branchName := m.branch(executionID, issueID)
 
-	if existing, ok, err := m.lookupWorktree(ctx, path); err != nil {
-		return domain.Workspace{}, err
-	} else if ok {
-		return domain.Workspace{IssueID: issueID, Path: path, Branch: existing.branch}, nil
-	}
+		if existing, ok, err := m.lookupWorktree(ctx, path); err != nil {
+			return err
+		} else if ok {
+			ws = domain.Workspace{IssueID: issueID, Path: path, Branch: existing.branch}
+			return nil
+		}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return domain.Workspace{}, fmt.Errorf("workspace: create parent dir for %s: %w", path, err)
-	}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("workspace: create parent dir for %s: %w", path, err)
+		}
 
-	branchExists, err := m.branchExists(ctx, branchName)
+		branchExists, err := m.branchExists(ctx, branchName)
+		if err != nil {
+			return err
+		}
+
+		// "--" terminates option parsing so a base/branch value that happens
+		// to start with "-" is never misread as a git worktree add flag.
+		var addArgs []string
+		if branchExists {
+			// Recovery path: the branch survived (e.g. the worktree directory
+			// vanished without going through Cleanup) but no worktree is
+			// currently registered for it. Reuse the branch as-is; base is
+			// intentionally ignored here since the branch already has commits.
+			addArgs = []string{"worktree", "add", "--", path, branchName}
+		} else {
+			addArgs = []string{"worktree", "add", "-b", branchName, "--", path, base}
+		}
+		if _, err := m.runGit(ctx, m.repoRoot, addArgs...); err != nil {
+			return err
+		}
+
+		ws = domain.Workspace{IssueID: issueID, Path: path, Branch: branchName}
+		return nil
+	})
 	if err != nil {
 		return domain.Workspace{}, err
 	}
-
-	// "--" terminates option parsing so a base/branch value that happens
-	// to start with "-" is never misread as a git worktree add flag.
-	var addArgs []string
-	if branchExists {
-		// Recovery path: the branch survived (e.g. the worktree directory
-		// vanished without going through Cleanup) but no worktree is
-		// currently registered for it. Reuse the branch as-is; base is
-		// intentionally ignored here since the branch already has commits.
-		addArgs = []string{"worktree", "add", "--", path, branchName}
-	} else {
-		addArgs = []string{"worktree", "add", "-b", branchName, "--", path, base}
-	}
-	if _, err := m.runGit(ctx, m.repoRoot, addArgs...); err != nil {
-		return domain.Workspace{}, err
-	}
-
-	return domain.Workspace{IssueID: issueID, Path: path, Branch: branchName}, nil
+	return ws, nil
 }
 
 // branchExists reports whether branchName already exists in the primary
@@ -405,45 +426,54 @@ func (m *Manager) Cleanup(ctx context.Context, executionID, issueID string) erro
 		return err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 
-	path := m.path(executionID, issueID)
+		path := m.path(executionID, issueID)
 
-	entry, ok, err := m.lookupWorktree(ctx, path)
-	if err != nil {
-		return err
-	}
+		entry, ok, err := m.lookupWorktree(ctx, path)
+		if err != nil {
+			return err
+		}
 
-	if !ok {
-		// Nothing registered with git; still clear out any leftover
-		// directory so a later Create isn't confused by stale contents.
+		if !ok {
+			// Nothing registered with git; still clear out any leftover
+			// directory so a later Create isn't confused by stale contents.
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("workspace: remove directory %s: %w", path, err)
+			}
+			return nil
+		}
+
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
+			return err
+		}
+
+		// Belt-and-suspenders: `git worktree remove` deletes the directory
+		// itself, but if it was already gone (e.g. removed out-of-band) or
+		// left behind for any reason, make sure it's gone.
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("workspace: remove directory %s: %w", path, err)
 		}
-		return nil
-	}
 
-	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
-		return err
-	}
-
-	// Belt-and-suspenders: `git worktree remove` deletes the directory
-	// itself, but if it was already gone (e.g. removed out-of-band) or
-	// left behind for any reason, make sure it's gone.
-	if err := os.RemoveAll(path); err != nil {
-		return fmt.Errorf("workspace: remove directory %s: %w", path, err)
-	}
-
-	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
-		return err
-	}
-
-	if entry.branch != "" {
-		if _, err := m.runGit(ctx, m.repoRoot, "branch", "-D", "--", entry.branch); err != nil {
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
 			return err
 		}
-	}
 
-	return nil
+		if entry.branch != "" {
+			if _, err := m.runGit(ctx, m.repoRoot, "branch", "-D", "--", entry.branch); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func (m *Manager) withGitMetadataLock(ctx context.Context, fn func() error) error {
+	if m.locker == nil {
+		return fn()
+	}
+	return m.locker.WithLock(ctx, "git-metadata", fn)
 }

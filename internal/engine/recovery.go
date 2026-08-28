@@ -34,7 +34,7 @@ func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (stora
 	return state, nil
 }
 
-func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (domain.Issue, error) {
+func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (_ domain.Issue, retErr error) {
 	if issue.State.IsTerminal() {
 		return issue, nil
 	}
@@ -53,6 +53,11 @@ func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue d
 	if err := e.ensureRecoverableWorker(ctx, exec.ID, issue.ID, issue.State); err != nil {
 		return domain.Issue{}, err
 	}
+	defer func() {
+		if err := e.Store.ReleaseWorkerClaim(ctx, exec.ID, issue.ID); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("engine: release worker claim for issue %s: %w", issue.ID, err))
+		}
+	}()
 
 	switch issue.State {
 	case domain.StateReady:

@@ -209,6 +209,28 @@ func TestHandleNeedsInfo_ReleasesWorkerClaim(t *testing.T) {
 	}
 }
 
+func TestResumeExecution_LiveForeignOwnerDoesNotReleaseClaim(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{"53b": {ID: "53b"}})
+	te.eng.OwnerPID = func() int { return 111 }
+	te.eng.ProcessRunning = func(pid int) (bool, error) {
+		return pid == 222, nil
+	}
+
+	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "53b", Title: "Resume owned issue"}, domain.StateImplementing, 222)
+	_, err := te.eng.ResumeExecution(context.Background(), executionID)
+	if err == nil {
+		t.Fatal("ResumeExecution should reject a live foreign owner")
+	}
+
+	claim, err := te.store.WorkerClaim(context.Background(), executionID, "53b")
+	if err != nil {
+		t.Fatalf("WorkerClaim after rejected resume: %v", err)
+	}
+	if claim.OwnerPID != 222 {
+		t.Fatalf("OwnerPID after rejected resume = %d, want 222", claim.OwnerPID)
+	}
+}
+
 func TestResumeExecution_PRCreatingRecovery_ReusesExistingPRWithoutDuplicateRecord(t *testing.T) {
 	te := approvedTestEngine(t, "54", domain.Issue{ID: "54", Title: "Resume PR"})
 	pub := &fakePublisher{commitSHA: "sha-54"}

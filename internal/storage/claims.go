@@ -11,11 +11,10 @@ import (
 
 // ClaimIssue records a Worker claim on an Issue and appends a claim Event,
 // transactionally. Returns ErrAlreadyClaimed if the Issue is already
-// claimed within the Execution (workers.UNIQUE(execution_id, issue_id)) or
-// ErrNotFound if the Issue doesn't exist
-// (workers.FOREIGN KEY -> execution_issues), in both cases translating a
-// database constraint violation rather than doing a read-then-write check
-// that would race.
+// claimed by any active Execution (workers.UNIQUE(issue_id)) or ErrNotFound
+// if the Issue doesn't exist (workers.FOREIGN KEY -> execution_issues), in
+// both cases translating a database constraint violation rather than doing
+// a read-then-write check that would race.
 func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -31,7 +30,15 @@ func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, work
 	); err != nil {
 		switch {
 		case isUniqueConstraintErr(err):
-			return fmt.Errorf("storage: claim issue %s/%s: %w", executionID, issueID, ErrAlreadyClaimed)
+			claim, loadErr := activeClaimByIssue(ctx, tx, issueID)
+			if loadErr != nil {
+				return fmt.Errorf("storage: claim issue %s/%s: %w", executionID, issueID, ErrAlreadyClaimed)
+			}
+			return fmt.Errorf("storage: claim issue %s/%s: %w", executionID, issueID, &ClaimConflictError{
+				IssueID:           issueID,
+				OwningExecutionID: claim.ExecutionID,
+				OwningWorkerRef:   claim.WorkerRef,
+			})
 		case isForeignKeyConstraintErr(err):
 			return fmt.Errorf("storage: claim issue %s/%s: %w", executionID, issueID, ErrNotFound)
 		default:
@@ -85,6 +92,24 @@ func (s *SQLiteStore) WorkerClaim(ctx context.Context, executionID, issueID stri
 			return WorkerClaim{}, fmt.Errorf("storage: worker claim %s/%s: %w", executionID, issueID, ErrNotFound)
 		}
 		return WorkerClaim{}, fmt.Errorf("storage: load worker claim %s/%s: %w", executionID, issueID, err)
+	}
+	claim.ClaimedAt = claim.ClaimedAt.UTC()
+	return claim, nil
+}
+
+func activeClaimByIssue(ctx context.Context, q querier, issueID string) (WorkerClaim, error) {
+	row := q.QueryRowContext(ctx, `
+		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at
+		FROM workers
+		WHERE issue_id = ?`,
+		issueID,
+	)
+	var claim WorkerClaim
+	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return WorkerClaim{}, fmt.Errorf("storage: worker claim for issue %s: %w", issueID, ErrNotFound)
+		}
+		return WorkerClaim{}, fmt.Errorf("storage: load worker claim for issue %s: %w", issueID, err)
 	}
 	claim.ClaimedAt = claim.ClaimedAt.UTC()
 	return claim, nil

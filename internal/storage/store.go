@@ -21,6 +21,26 @@ var ErrNotFound = errors.New("storage: not found")
 // unique constraint, not by a read-then-write race-prone check.
 var ErrAlreadyClaimed = errors.New("storage: issue already claimed")
 
+// ClaimConflictError reports that an Issue already has an active Worker
+// claim owned by another Execution.
+type ClaimConflictError struct {
+	IssueID           string
+	OwningExecutionID string
+	OwningWorkerRef   string
+}
+
+func (e *ClaimConflictError) Error() string {
+	if e == nil {
+		return ErrAlreadyClaimed.Error()
+	}
+	if e.OwningExecutionID == "" {
+		return ErrAlreadyClaimed.Error()
+	}
+	return "storage: issue " + e.IssueID + " already claimed by execution " + e.OwningExecutionID
+}
+
+func (e *ClaimConflictError) Unwrap() error { return ErrAlreadyClaimed }
+
 // ErrConcurrentModification is returned by TransitionIssue when the Issue's
 // persisted state no longer matches the state read at the start of the
 // transaction — i.e. something else changed it in between. Guards against
@@ -196,9 +216,10 @@ type Store interface {
 	UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error
 
 	// ClaimIssue records a Worker claim on an Issue and appends a claim
-	// Event, transactionally. Returns ErrAlreadyClaimed if the Issue is
-	// already claimed within the Execution — enforced by a unique
-	// constraint, not a read-then-write check.
+	// Event, transactionally. Returns ErrAlreadyClaimed when the Issue is
+	// already actively claimed; when the claimant belongs to another
+	// Execution, the concrete error also unwraps as *ClaimConflictError so
+	// callers can report the owning Execution explicitly.
 	ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error
 
 	// UpdateWorkerOwner records the OS process ID currently owning the

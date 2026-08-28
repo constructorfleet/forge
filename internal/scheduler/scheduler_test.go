@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -100,6 +102,70 @@ func (e *gatedExecutor) CallCount(issueID string) int {
 }
 
 var _ scheduler.Executor = (*gatedExecutor)(nil)
+
+type blockingAgent struct {
+	mu          sync.Mutex
+	running     int
+	maxObserved int
+	invocations []agent.AgentRequest
+	entered     chan string
+	release     chan struct{}
+}
+
+func newBlockingAgent() *blockingAgent {
+	return &blockingAgent{
+		entered: make(chan string, 8),
+		release: make(chan struct{}),
+	}
+}
+
+func (a *blockingAgent) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+	a.mu.Lock()
+	a.running++
+	if a.running > a.maxObserved {
+		a.maxObserved = a.running
+	}
+	a.invocations = append(a.invocations, req)
+	a.mu.Unlock()
+
+	a.entered <- req.Issue.ID
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+		return agent.AgentResult{}, ctx.Err()
+	}
+
+	a.mu.Lock()
+	a.running--
+	a.mu.Unlock()
+	return agent.AgentResult{Status: agent.StatusImplemented, Summary: "implemented"}, nil
+}
+
+func (a *blockingAgent) waitForEntries(t *testing.T, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		select {
+		case <-a.entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for agent entry %d/%d", i+1, n)
+		}
+	}
+}
+
+func (a *blockingAgent) releaseAll() {
+	close(a.release)
+}
+
+func (a *blockingAgent) snapshot() (int, []agent.AgentRequest) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.maxObserved, append([]agent.AgentRequest(nil), a.invocations...)
+}
+
+type runResult struct {
+	results map[string]scheduler.Result
+	err     error
+}
 
 type scriptedCIWatcher struct {
 	started chan string
@@ -1145,5 +1211,135 @@ func TestRun_RealEngine_ResetsSharedExecutionBetweenRuns(t *testing.T) {
 
 	if first["20"].ExecutionID == second["21"].ExecutionID {
 		t.Fatalf("execution reused across runs: %q", first["20"].ExecutionID)
+	}
+}
+
+func TestRun_ConcurrentExecutionsOnSameRepo_DisjointIssuesProceedIndependently(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{
+		"20": {ID: "20"},
+		"21": {ID: "21"},
+	}}
+	locks := repolock.New(repoRoot)
+	wsA, err := workspace.NewManager(repoRoot, workspace.WithLocker(locks))
+	if err != nil {
+		t.Fatalf("workspace.NewManager A: %v", err)
+	}
+	wsB, err := workspace.NewManager(repoRoot, workspace.WithLocker(locks))
+	if err != nil {
+		t.Fatalf("workspace.NewManager B: %v", err)
+	}
+	agentA := newBlockingAgent()
+	agentB := newBlockingAgent()
+	engA := engine.New(store, trk, wsA, agentA, config.Default(), repoRoot)
+	engB := engine.New(store, trk, wsB, agentB, config.Default(), repoRoot)
+	engA.NewExecutionID = func() string { return "exec-a" }
+	engB.NewExecutionID = func() string { return "exec-b" }
+
+	schA := scheduler.New(trk, scheduler.Adapt(engA), alwaysSatisfied, scheduler.FixedBase(base), 1)
+	schB := scheduler.New(trk, scheduler.Adapt(engB), alwaysSatisfied, scheduler.FixedBase(base), 1)
+	schA.PollInterval = time.Millisecond
+	schB.PollInterval = time.Millisecond
+
+	runA := make(chan runResult, 1)
+	runB := make(chan runResult, 1)
+	go func() {
+		results, err := schA.Run(context.Background(), []string{"20"})
+		runA <- runResult{results: results, err: err}
+	}()
+	go func() {
+		results, err := schB.Run(context.Background(), []string{"21"})
+		runB <- runResult{results: results, err: err}
+	}()
+
+	agentA.waitForEntries(t, 1)
+	agentB.waitForEntries(t, 1)
+	agentA.releaseAll()
+	agentB.releaseAll()
+
+	gotA := <-runA
+	gotB := <-runB
+	if gotA.err != nil {
+		t.Fatalf("first concurrent Run: %v", gotA.err)
+	}
+	if gotB.err != nil {
+		t.Fatalf("second concurrent Run: %v", gotB.err)
+	}
+	if gotA.results["20"].ExecutionID != "exec-a" {
+		t.Fatalf("issue 20 execution = %q, want exec-a", gotA.results["20"].ExecutionID)
+	}
+	if gotB.results["21"].ExecutionID != "exec-b" {
+		t.Fatalf("issue 21 execution = %q, want exec-b", gotB.results["21"].ExecutionID)
+	}
+
+	maxA, invA := agentA.snapshot()
+	maxB, invB := agentB.snapshot()
+	if maxA != 1 || maxB != 1 {
+		t.Fatalf("per-execution overlap = (%d, %d), want one active worker in each execution", maxA, maxB)
+	}
+	if len(invA) != 1 || len(invB) != 1 {
+		t.Fatalf("invocations = (%d, %d), want one each", len(invA), len(invB))
+	}
+	if !strings.Contains(invA[0].WorkspacePath, filepath.Join("exec-a", "20")) {
+		t.Fatalf("workspace for issue 20 = %q, want execution-scoped path", invA[0].WorkspacePath)
+	}
+	if !strings.Contains(invB[0].WorkspacePath, filepath.Join("exec-b", "21")) {
+		t.Fatalf("workspace for issue 21 = %q, want execution-scoped path", invB[0].WorkspacePath)
+	}
+}
+
+func TestRun_ConcurrentExecutionsOnSameRepo_SameIssueRejectsSecondClaim(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{
+		"20": {ID: "20"},
+	}}
+	locks := repolock.New(repoRoot)
+	wsA, err := workspace.NewManager(repoRoot, workspace.WithLocker(locks))
+	if err != nil {
+		t.Fatalf("workspace.NewManager A: %v", err)
+	}
+	wsB, err := workspace.NewManager(repoRoot, workspace.WithLocker(locks))
+	if err != nil {
+		t.Fatalf("workspace.NewManager B: %v", err)
+	}
+	firstAgent := newBlockingAgent()
+	secondAgent := agent.NewFakeAgent()
+	engA := engine.New(store, trk, wsA, firstAgent, config.Default(), repoRoot)
+	engB := engine.New(store, trk, wsB, secondAgent, config.Default(), repoRoot)
+	engA.NewExecutionID = func() string { return "exec-a" }
+	engB.NewExecutionID = func() string { return "exec-b" }
+
+	schA := scheduler.New(trk, scheduler.Adapt(engA), alwaysSatisfied, scheduler.FixedBase(base), 1)
+	schB := scheduler.New(trk, scheduler.Adapt(engB), alwaysSatisfied, scheduler.FixedBase(base), 1)
+	schA.PollInterval = time.Millisecond
+	schB.PollInterval = time.Millisecond
+
+	firstDone := make(chan runResult, 1)
+	go func() {
+		results, err := schA.Run(context.Background(), []string{"20"})
+		firstDone <- runResult{results: results, err: err}
+	}()
+	firstAgent.waitForEntries(t, 1)
+
+	secondResults, secondErr := schB.Run(context.Background(), []string{"20"})
+	if secondErr == nil {
+		t.Fatal("second Run should fail while the first execution owns the issue claim")
+	}
+	if secondResults["20"].Err == nil {
+		t.Fatal("second Run result should record the rejected claim")
+	}
+	if !strings.Contains(secondResults["20"].Err.Error(), "exec-a") {
+		t.Fatalf("claim error = %v, want owning execution exec-a", secondResults["20"].Err)
+	}
+	if got := len(secondAgent.Invocations()); got != 0 {
+		t.Fatalf("second agent invocations = %d, want 0 after claim rejection", got)
+	}
+
+	firstAgent.releaseAll()
+	first := <-firstDone
+	if first.err != nil {
+		t.Fatalf("first Run: %v", first.err)
 	}
 }

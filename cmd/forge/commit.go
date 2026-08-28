@@ -6,19 +6,23 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/Teagan42/forge/internal/repolock"
 )
 
 // gitPublisher implements engine.Publisher with the real git binary. Engine
 // itself never shells out to git (see internal/engine's package doc
 // comment); this is the seam cmd/forge implements it through, exactly as
 // gitDiffProducer does for the REVIEWING stage's diff.
-type gitPublisher struct{}
+type gitPublisher struct {
+	locks *repolock.Locker
+}
 
 // Commit stages every change in workspacePath and, if that leaves anything
 // staged, commits it with message. A Workspace with nothing to commit
 // (e.g. a retried run resuming after a prior successful commit) is not an
 // error: Commit is then a no-op and simply returns the current HEAD SHA.
-func (gitPublisher) Commit(ctx context.Context, workspacePath, message string) (string, error) {
+func (p gitPublisher) Commit(ctx context.Context, workspacePath, message string) (string, error) {
 	if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "add", "-A").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("forge: git add -A in %s: %w: %s", workspacePath, err, out)
 	}
@@ -60,11 +64,17 @@ func hasStagedChanges(ctx context.Context, workspacePath string) (bool, error) {
 // what a subsequent PR needs). Pushing a branch whose remote tip already
 // matches the local branch succeeds as a no-op, so no separate existence
 // check is needed for idempotency.
-func (gitPublisher) Push(ctx context.Context, workspacePath, branch string) error {
-	if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", "-u", "origin", branch).CombinedOutput(); err != nil {
-		return fmt.Errorf("forge: git push -u origin %s in %s: %w: %s", branch, workspacePath, err, out)
+func (p gitPublisher) Push(ctx context.Context, workspacePath, branch string) error {
+	push := func() error {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", "-u", "origin", branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git push -u origin %s in %s: %w: %s", branch, workspacePath, err, out)
+		}
+		return nil
 	}
-	return nil
+	if p.locks == nil {
+		return push()
+	}
+	return p.locks.WithLock(ctx, "branch:"+branch, push)
 }
 
 // baseBranchName strips a "origin/" remote prefix from a configured

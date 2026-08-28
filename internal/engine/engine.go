@@ -268,7 +268,7 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 // an already-created Execution. workerBase is the per-Worker base captured
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
-func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (ExecuteResult, error) {
+func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
 	issue, err := e.Tracker.GetIssue(ctx, issueID)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: fetch issue %s: %w", issueID, err)
@@ -320,6 +320,11 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	if err := e.Store.ClaimIssue(ctx, execution.ID, issueID, ref); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
 	}
+	defer func() {
+		if err := e.Store.ReleaseWorkerClaim(ctx, execution.ID, issueID); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))
+		}
+	}()
 	if err := e.Store.UpdateWorkerOwner(ctx, execution.ID, issueID, e.OwnerPID()); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issueID, err)
 	}
