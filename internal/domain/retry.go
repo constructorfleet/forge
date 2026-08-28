@@ -5,10 +5,15 @@ import "fmt"
 // RetryLimits configures the ceiling for each independent retry counter.
 // See CONTEXT.md "Retry Budget": gate failures, review rejections, and CI
 // failures are different failure classes with independent ceilings.
+//
+// The yaml tags let internal/config decode .forge.yaml's retry section
+// directly onto this type rather than through a parallel config-only type;
+// they impose no infrastructure dependency since struct tags are just
+// string literals — this package still imports nothing beyond "time".
 type RetryLimits struct {
-	Gate   int
-	Review int
-	CI     int
+	Gate   int `yaml:"gate"`
+	Review int `yaml:"review"`
+	CI     int `yaml:"ci"`
 }
 
 // retryCounter tracks failures against a single ceiling. RetryBudget holds

@@ -9,6 +9,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -16,120 +17,88 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Deterministic defaults applied to any field omitted from .forge.yaml. See
-// Default() for the fully-defaulted zero-config Config these compose into.
-const (
-	defaultVersion        = 1
-	defaultTrackerType    = "github"
-	defaultGitBase        = "origin/main"
-	defaultBranchTemplate = "agent/{issue}"
-	defaultWorktreeRoot   = ".forge/worktrees"
-	defaultMaxParallel    = 4
-	defaultRetryGate      = 3
-	defaultRetryReview    = 2
-	defaultRetryCI        = 3
-	defaultImplementation = "tdd"
-	defaultWorkflowReview = true
-	defaultPREnabled      = true
-	defaultPRWatchCI      = true
-	defaultCIMode         = "github"
-	defaultBlockedLabel   = "needs-info"
-	defaultBlockedComment = true
-	defaultAgentProvider  = "claude-code"
-)
-
 // TrackerConfig identifies the issue tracker backing an Execution.
 type TrackerConfig struct {
-	Type string
+	Type string `yaml:"type"`
 }
 
 // GitConfig configures the base revision, branch naming, and Workspace
 // location for Workers.
 type GitConfig struct {
-	Base           string
-	BranchTemplate string
-	WorktreeRoot   string
+	Base           string `yaml:"base"`
+	BranchTemplate string `yaml:"branch_template"`
+	WorktreeRoot   string `yaml:"worktree_root"`
 }
 
 // ExecutionConfig bounds how many Workers may run concurrently.
 type ExecutionConfig struct {
-	MaxParallel int
-}
-
-// RetryConfig configures the ceiling for each independent Retry Budget
-// counter. ToDomain maps it onto domain.RetryLimits, which is what the
-// Issue's RetryBudget is actually constructed from — this type exists only
-// to carry YAML structure, not to duplicate domain semantics.
-type RetryConfig struct {
-	Gate   int
-	Review int
-	CI     int
-}
-
-// ToDomain maps the parsed retry ceilings onto domain.RetryLimits.
-func (r RetryConfig) ToDomain() domain.RetryLimits {
-	return domain.RetryLimits{Gate: r.Gate, Review: r.Review, CI: r.CI}
+	MaxParallel int `yaml:"max_parallel"`
 }
 
 // WorkflowConfig configures the implementation loop and whether a Review
 // stage runs after Quality Gates pass.
 type WorkflowConfig struct {
-	Implementation string
-	Review         bool
+	Implementation string `yaml:"implementation"`
+	Review         bool   `yaml:"review"`
 }
 
 // QualityGate is one deterministic command required to pass before
 // publication. See CONTEXT.md "Quality Gate".
 type QualityGate struct {
-	Name    string
-	Command string
+	Name    string `yaml:"name"`
+	Command string `yaml:"command"`
 }
 
 // QualityConfig lists the ordered Quality Gates the Gate Runner executes.
 type QualityConfig struct {
-	Gates []QualityGate
+	Gates []QualityGate `yaml:"gates"`
 }
 
 // PullRequestsConfig configures pull-request publication behavior.
 type PullRequestsConfig struct {
-	Enabled bool
-	WatchCI bool
+	Enabled bool `yaml:"enabled"`
+	WatchCI bool `yaml:"watch_ci"`
 }
 
-// RequiredChecksMode selects where the CI Supervisor sources Merge
+// MergeRequirementsMode selects where the CI Supervisor sources Merge
 // Requirements from. See CONTEXT.md "Merge Requirements".
-type RequiredChecksMode string
+type MergeRequirementsMode string
 
 const (
-	// RequiredChecksGitHub sources required checks from the tracker's
-	// native branch protection/rulesets. Authoritative by default.
-	RequiredChecksGitHub RequiredChecksMode = "github"
-	// RequiredChecksExplicit overrides the tracker with a fixed check
-	// list, for repositories without branch protection configured.
-	RequiredChecksExplicit RequiredChecksMode = "explicit"
+	// MergeRequirementsGitHub sources Merge Requirements from the
+	// tracker's native branch protection/rulesets. Authoritative by
+	// default. Wire value: "github".
+	MergeRequirementsGitHub MergeRequirementsMode = "github"
+	// MergeRequirementsExplicit overrides the tracker with a fixed check
+	// list, for repositories without branch protection configured. Wire
+	// value: "explicit".
+	MergeRequirementsExplicit MergeRequirementsMode = "explicit"
 )
 
-// RequiredChecksConfig configures how the CI Supervisor determines Merge
-// Requirements.
-type RequiredChecksConfig struct {
-	Mode   RequiredChecksMode
-	Checks []string
+// MergeRequirementsConfig configures how the CI Supervisor determines Merge
+// Requirements. The YAML key stays `required_checks` for backward/forward
+// wire compatibility even though the Go identifiers use the domain term
+// Merge Requirements (CONTEXT.md lists "required checks" as a term to avoid
+// for this concept).
+type MergeRequirementsConfig struct {
+	Mode   MergeRequirementsMode `yaml:"mode"`
+	Checks []string              `yaml:"checks"`
 }
 
 // CIConfig configures CI Supervisor behavior.
 type CIConfig struct {
-	RequiredChecks RequiredChecksConfig
+	MergeRequirements MergeRequirementsConfig `yaml:"required_checks"`
 }
 
 // BlockedConfig configures behavior when an Issue needs human input.
 type BlockedConfig struct {
-	Label   string
-	Comment bool
+	Label   string `yaml:"label"`
+	Comment bool   `yaml:"comment"`
 }
 
 // AgentConfig selects the Agent Adapter backend.
 type AgentConfig struct {
-	Provider string
+	Provider string `yaml:"provider"`
 }
 
 // DependenciesConfig configures the escape-hatch Dependency Source. The
@@ -138,207 +107,91 @@ type AgentConfig struct {
 // values are Issue IDs; Overrides[issueID] is the full replacement list of
 // IDs issueID depends on.
 type DependenciesConfig struct {
-	Overrides map[string][]string
+	Overrides map[string][]string `yaml:"overrides"`
 }
 
 // Config is Forge's fully-resolved, defaulted, and validated repository
 // configuration, loaded from .forge.yaml. It never contains secrets.
+//
+// Retry reuses domain.RetryLimits directly rather than a parallel
+// config-only type, per CONTEXT.md's Retry Budget vocabulary — the ceilings
+// configured here are exactly what an Issue's RetryBudget is constructed
+// from.
 type Config struct {
-	Version      int
-	Tracker      TrackerConfig
-	Git          GitConfig
-	Execution    ExecutionConfig
-	Retry        RetryConfig
-	Workflow     WorkflowConfig
-	Quality      QualityConfig
-	PullRequests PullRequestsConfig
-	CI           CIConfig
-	Blocked      BlockedConfig
-	Agent        AgentConfig
-	Dependencies DependenciesConfig
+	Version      int                `yaml:"version"`
+	Tracker      TrackerConfig      `yaml:"tracker"`
+	Git          GitConfig          `yaml:"git"`
+	Execution    ExecutionConfig    `yaml:"execution"`
+	Retry        domain.RetryLimits `yaml:"retry"`
+	Workflow     WorkflowConfig     `yaml:"workflow"`
+	Quality      QualityConfig      `yaml:"quality"`
+	PullRequests PullRequestsConfig `yaml:"pull_requests"`
+	CI           CIConfig           `yaml:"ci"`
+	Blocked      BlockedConfig      `yaml:"blocked"`
+	Agent        AgentConfig        `yaml:"agent"`
+	Dependencies DependenciesConfig `yaml:"dependencies"`
 }
 
 // Default returns the fully-defaulted Config used when no .forge.yaml is
-// present — the zero-config case.
+// present — the zero-config case. It is also the single source of truth for
+// every deterministic default: Load starts from this literal and lets YAML
+// decoding overwrite only the fields the file actually sets.
 func Default() Config {
-	return resolve(rawConfig{})
+	return Config{
+		Version: 1,
+		Tracker: TrackerConfig{Type: "github"},
+		Git: GitConfig{
+			Base:           "origin/main",
+			BranchTemplate: "agent/{issue}",
+			WorktreeRoot:   ".forge/worktrees",
+		},
+		Execution: ExecutionConfig{MaxParallel: 4},
+		Retry:     domain.RetryLimits{Gate: 3, Review: 2, CI: 3},
+		Workflow: WorkflowConfig{
+			Implementation: "tdd",
+			Review:         true,
+		},
+		PullRequests: PullRequestsConfig{Enabled: true, WatchCI: true},
+		CI: CIConfig{
+			MergeRequirements: MergeRequirementsConfig{Mode: MergeRequirementsGitHub},
+		},
+		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
+		Agent:   AgentConfig{Provider: "claude-code"},
+	}
 }
 
 // Load reads, parses, defaults, and validates the .forge.yaml file at path.
+//
+// Decoding starts from Default() and unmarshals onto it, so any field
+// absent from the file keeps its default and only fields actually present
+// are overwritten — including an explicit false or 0, which correctly
+// resets a field rather than being indistinguishable from "absent". An
+// explicit YAML null is the one exception: yaml.v3 treats it as "no value
+// supplied" and leaves the pre-populated default in place rather than
+// zeroing the field (see TestLoad_ExplicitNullLeavesDefaultInPlace).
+// Unknown keys (e.g. a typo like `gats` for `gate`) are rejected rather
+// than silently ignored, since a deterministic orchestrator must not
+// tolerate an operator's misspelled config being treated as absent.
+//
 // Malformed YAML and validation failures are both returned as errors
-// identifying the offending field where possible; see ValidationError.
+// identifying the offending field where possible; see FieldError.
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
-	var raw rawConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	cfg := Default()
+	if len(bytes.TrimSpace(data)) > 0 {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&cfg); err != nil {
+			return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+		}
 	}
 
-	cfg := resolve(raw)
 	if err := validate(cfg); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	return cfg, nil
-}
-
-// resolve merges raw (possibly partial) parsed YAML onto the deterministic
-// defaults, section by section and field by field. A nil section pointer
-// takes the entire default section; a present section with nil leaf fields
-// takes the default for just those fields.
-func resolve(raw rawConfig) Config {
-	return Config{
-		Version:      intOr(raw.Version, defaultVersion),
-		Tracker:      resolveTracker(raw.Tracker),
-		Git:          resolveGit(raw.Git),
-		Execution:    resolveExecution(raw.Execution),
-		Retry:        resolveRetry(raw.Retry),
-		Workflow:     resolveWorkflow(raw.Workflow),
-		Quality:      resolveQuality(raw.Quality),
-		PullRequests: resolvePullRequests(raw.PullRequests),
-		CI:           resolveCI(raw.CI),
-		Blocked:      resolveBlocked(raw.Blocked),
-		Agent:        resolveAgent(raw.Agent),
-		Dependencies: resolveDependencies(raw.Dependencies),
-	}
-}
-
-func resolveTracker(r *rawTracker) TrackerConfig {
-	cfg := TrackerConfig{Type: defaultTrackerType}
-	if r == nil {
-		return cfg
-	}
-	cfg.Type = strOr(r.Type, defaultTrackerType)
-	return cfg
-}
-
-func resolveGit(r *rawGit) GitConfig {
-	cfg := GitConfig{
-		Base:           defaultGitBase,
-		BranchTemplate: defaultBranchTemplate,
-		WorktreeRoot:   defaultWorktreeRoot,
-	}
-	if r == nil {
-		return cfg
-	}
-	cfg.Base = strOr(r.Base, defaultGitBase)
-	cfg.BranchTemplate = strOr(r.BranchTemplate, defaultBranchTemplate)
-	cfg.WorktreeRoot = strOr(r.WorktreeRoot, defaultWorktreeRoot)
-	return cfg
-}
-
-func resolveExecution(r *rawExecution) ExecutionConfig {
-	cfg := ExecutionConfig{MaxParallel: defaultMaxParallel}
-	if r == nil {
-		return cfg
-	}
-	cfg.MaxParallel = intOr(r.MaxParallel, defaultMaxParallel)
-	return cfg
-}
-
-func resolveRetry(r *rawRetry) RetryConfig {
-	cfg := RetryConfig{Gate: defaultRetryGate, Review: defaultRetryReview, CI: defaultRetryCI}
-	if r == nil {
-		return cfg
-	}
-	cfg.Gate = intOr(r.Gate, defaultRetryGate)
-	cfg.Review = intOr(r.Review, defaultRetryReview)
-	cfg.CI = intOr(r.CI, defaultRetryCI)
-	return cfg
-}
-
-func resolveWorkflow(r *rawWorkflow) WorkflowConfig {
-	cfg := WorkflowConfig{Implementation: defaultImplementation, Review: defaultWorkflowReview}
-	if r == nil {
-		return cfg
-	}
-	cfg.Implementation = strOr(r.Implementation, defaultImplementation)
-	cfg.Review = boolOr(r.Review, defaultWorkflowReview)
-	return cfg
-}
-
-func resolveQuality(r *rawQuality) QualityConfig {
-	if r == nil || len(r.Gates) == 0 {
-		return QualityConfig{Gates: nil}
-	}
-	gates := make([]QualityGate, len(r.Gates))
-	for i, g := range r.Gates {
-		gates[i] = QualityGate{Name: g.Name, Command: g.Command}
-	}
-	return QualityConfig{Gates: gates}
-}
-
-func resolvePullRequests(r *rawPullRequests) PullRequestsConfig {
-	cfg := PullRequestsConfig{Enabled: defaultPREnabled, WatchCI: defaultPRWatchCI}
-	if r == nil {
-		return cfg
-	}
-	cfg.Enabled = boolOr(r.Enabled, defaultPREnabled)
-	cfg.WatchCI = boolOr(r.WatchCI, defaultPRWatchCI)
-	return cfg
-}
-
-func resolveCI(r *rawCI) CIConfig {
-	cfg := CIConfig{RequiredChecks: RequiredChecksConfig{Mode: RequiredChecksMode(defaultCIMode)}}
-	if r == nil || r.RequiredChecks == nil {
-		return cfg
-	}
-	rc := r.RequiredChecks
-	cfg.RequiredChecks.Mode = RequiredChecksMode(strOr(rc.Mode, defaultCIMode))
-	cfg.RequiredChecks.Checks = append([]string(nil), rc.Checks...)
-	return cfg
-}
-
-func resolveBlocked(r *rawBlocked) BlockedConfig {
-	cfg := BlockedConfig{Label: defaultBlockedLabel, Comment: defaultBlockedComment}
-	if r == nil {
-		return cfg
-	}
-	cfg.Label = strOr(r.Label, defaultBlockedLabel)
-	cfg.Comment = boolOr(r.Comment, defaultBlockedComment)
-	return cfg
-}
-
-func resolveAgent(r *rawAgent) AgentConfig {
-	cfg := AgentConfig{Provider: defaultAgentProvider}
-	if r == nil {
-		return cfg
-	}
-	cfg.Provider = strOr(r.Provider, defaultAgentProvider)
-	return cfg
-}
-
-func resolveDependencies(r *rawDependencies) DependenciesConfig {
-	if r == nil || len(r.Overrides) == 0 {
-		return DependenciesConfig{Overrides: nil}
-	}
-	overrides := make(map[string][]string, len(r.Overrides))
-	for k, v := range r.Overrides {
-		overrides[k] = append([]string(nil), v...)
-	}
-	return DependenciesConfig{Overrides: overrides}
-}
-
-func strOr(p *string, def string) string {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
-func intOr(p *int, def int) int {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
-func boolOr(p *bool, def bool) bool {
-	if p == nil {
-		return def
-	}
-	return *p
 }

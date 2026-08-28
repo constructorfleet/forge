@@ -81,15 +81,15 @@ func validate(cfg Config) error {
 		}
 	}
 
-	switch cfg.CI.RequiredChecks.Mode {
-	case RequiredChecksGitHub:
+	switch cfg.CI.MergeRequirements.Mode {
+	case MergeRequirementsGitHub:
 		// authoritative, no further constraints
-	case RequiredChecksExplicit:
-		if len(cfg.CI.RequiredChecks.Checks) == 0 {
+	case MergeRequirementsExplicit:
+		if len(cfg.CI.MergeRequirements.Checks) == 0 {
 			errs = append(errs, fieldErr("ci.required_checks.checks", "", "must list at least one check when mode is explicit"))
 		}
 	default:
-		errs = append(errs, fieldErr("ci.required_checks.mode", string(cfg.CI.RequiredChecks.Mode), "unsupported mode; supported: github, explicit"))
+		errs = append(errs, fieldErr("ci.required_checks.mode", string(cfg.CI.MergeRequirements.Mode), "unsupported mode; supported: github, explicit"))
 	}
 
 	if strings.TrimSpace(cfg.Blocked.Label) == "" {

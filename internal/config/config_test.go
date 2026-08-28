@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,8 +41,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Execution.MaxParallel != 4 {
 		t.Errorf("Execution.MaxParallel = %d, want 4", cfg.Execution.MaxParallel)
 	}
-	if cfg.Retry.Gate != 3 || cfg.Retry.Review != 2 || cfg.Retry.CI != 3 {
-		t.Errorf("Retry = %+v, want {Gate:3 Review:2 CI:3}", cfg.Retry)
+	wantRetry := domain.RetryLimits{Gate: 3, Review: 2, CI: 3}
+	if cfg.Retry != wantRetry {
+		t.Errorf("Retry = %+v, want %+v", cfg.Retry, wantRetry)
 	}
 	if cfg.Workflow.Implementation != "tdd" || !cfg.Workflow.Review {
 		t.Errorf("Workflow = %+v, want {tdd true}", cfg.Workflow)
@@ -52,8 +54,8 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if !cfg.PullRequests.Enabled || !cfg.PullRequests.WatchCI {
 		t.Errorf("PullRequests = %+v, want {true true}", cfg.PullRequests)
 	}
-	if cfg.CI.RequiredChecks.Mode != RequiredChecksGitHub {
-		t.Errorf("CI.RequiredChecks.Mode = %q, want github", cfg.CI.RequiredChecks.Mode)
+	if cfg.CI.MergeRequirements.Mode != MergeRequirementsGitHub {
+		t.Errorf("CI.MergeRequirements.Mode = %q, want github", cfg.CI.MergeRequirements.Mode)
 	}
 	if cfg.Blocked.Label != "needs-info" || !cfg.Blocked.Comment {
 		t.Errorf("Blocked = %+v, want {needs-info true}", cfg.Blocked)
@@ -71,12 +73,13 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	}
 }
 
-func TestRetryConfig_ToDomain(t *testing.T) {
-	rc := RetryConfig{Gate: 5, Review: 1, CI: 2}
-	got := rc.ToDomain()
-	want := domain.RetryLimits{Gate: 5, Review: 1, CI: 2}
-	if got != want {
-		t.Errorf("ToDomain() = %+v, want %+v", got, want)
+func TestDefault_RetryIsDomainRetryLimits(t *testing.T) {
+	// Retry must be domain.RetryLimits directly (not a parallel type), so
+	// it plugs straight into domain.NewRetryBudget without any mapping step.
+	cfg := Default()
+	budget := domain.NewRetryBudget(cfg.Retry)
+	if budget.Limits() != cfg.Retry {
+		t.Errorf("budget.Limits() = %+v, want %+v", budget.Limits(), cfg.Retry)
 	}
 }
 
@@ -133,8 +136,9 @@ dependencies:
 	if cfg.Execution.MaxParallel != 8 {
 		t.Errorf("Execution.MaxParallel = %d, want 8", cfg.Execution.MaxParallel)
 	}
-	if cfg.Retry.Gate != 5 || cfg.Retry.Review != 4 || cfg.Retry.CI != 6 {
-		t.Errorf("Retry = %+v, want {5 4 6}", cfg.Retry)
+	wantRetry := domain.RetryLimits{Gate: 5, Review: 4, CI: 6}
+	if cfg.Retry != wantRetry {
+		t.Errorf("Retry = %+v, want %+v", cfg.Retry, wantRetry)
 	}
 	if len(cfg.Quality.Gates) != 2 {
 		t.Fatalf("Quality.Gates len = %d, want 2", len(cfg.Quality.Gates))
@@ -142,13 +146,13 @@ dependencies:
 	if cfg.Quality.Gates[0] != (QualityGate{Name: "test", Command: "make test"}) {
 		t.Errorf("Quality.Gates[0] = %+v", cfg.Quality.Gates[0])
 	}
-	if cfg.CI.RequiredChecks.Mode != RequiredChecksExplicit {
-		t.Errorf("CI.RequiredChecks.Mode = %q, want explicit", cfg.CI.RequiredChecks.Mode)
+	if cfg.CI.MergeRequirements.Mode != MergeRequirementsExplicit {
+		t.Errorf("CI.MergeRequirements.Mode = %q, want explicit", cfg.CI.MergeRequirements.Mode)
 	}
-	if got, want := cfg.CI.RequiredChecks.Checks, []string{"build", "test"}; !equalStrings(got, want) {
-		t.Errorf("CI.RequiredChecks.Checks = %v, want %v", got, want)
+	if got, want := cfg.CI.MergeRequirements.Checks, []string{"build", "test"}; !slices.Equal(got, want) {
+		t.Errorf("CI.MergeRequirements.Checks = %v, want %v", got, want)
 	}
-	if deps, ok := cfg.Dependencies.Overrides["123"]; !ok || !equalStrings(deps, []string{"100", "101"}) {
+	if deps, ok := cfg.Dependencies.Overrides["123"]; !ok || !slices.Equal(deps, []string{"100", "101"}) {
 		t.Errorf("Dependencies.Overrides[123] = %v", deps)
 	}
 }
@@ -205,6 +209,41 @@ git:
 	}
 }
 
+func TestLoad_ExplicitFalseOverridesDefaultTrue(t *testing.T) {
+	// Pins that an explicitly-set false/0 is distinguishable from an
+	// absent key now that Load decodes directly onto Default() rather
+	// than through pointer-based presence tracking.
+	path := writeTemp(t, "workflow:\n  review: false\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Workflow.Review {
+		t.Errorf("Workflow.Review = true, want false (explicit override)")
+	}
+	// Sibling field left at its default.
+	if cfg.Workflow.Implementation != "tdd" {
+		t.Errorf("Workflow.Implementation = %q, want default tdd", cfg.Workflow.Implementation)
+	}
+}
+
+func TestLoad_ExplicitNullLeavesDefaultInPlace(t *testing.T) {
+	// Pins the edge case an explicit YAML null hits when decoding onto a
+	// pre-populated struct: yaml.v3 treats an explicit null as "no value
+	// provided" and does not overwrite the field, so the default survives
+	// rather than being reset to the zero value.
+	path := writeTemp(t, "git:\n  base: null\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (explicit null should not clobber the default)", err)
+	}
+	if cfg.Git.Base != "origin/main" {
+		t.Errorf("Git.Base = %q, want default origin/main to survive explicit null", cfg.Git.Base)
+	}
+}
+
 func TestLoad_MissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
@@ -221,6 +260,18 @@ func TestLoad_MalformedYAML(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse") {
 		t.Errorf("Load() error = %v, want it to mention parsing", err)
+	}
+}
+
+func TestLoad_UnknownKeyRejected(t *testing.T) {
+	path := writeTemp(t, "retry:\n  gats: 5\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error for unknown field")
+	}
+	if !strings.Contains(err.Error(), "gats") {
+		t.Errorf("Load() error = %v, want it to name the unknown field gats", err)
 	}
 }
 
@@ -354,16 +405,4 @@ tracker:
 	// sub-structs; this test exists to make that guarantee discoverable
 	// and to fail loudly (compile error) if such a field is ever added
 	// without updating this comment.
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
