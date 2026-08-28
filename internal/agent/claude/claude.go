@@ -5,7 +5,6 @@
 package claude
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -33,11 +32,23 @@ type Runner func(ctx context.Context, dir string, args []string, stdin string, e
 // principle applied here to Agent diagnostics).
 const maxDiagnosticLen = 4000
 
-// allowedEnvVars is the fixed allowlist of environment variables passed to
-// the Claude Code subprocess. The Agent's environment is sanitized rather
-// than inherited wholesale so secrets present in Forge's own process
-// environment (API tokens, tracker credentials, etc.) never reach the
-// Agent.
+// maxCapturedOutputLen bounds how much of stdout/stderr defaultRunner ever
+// holds in memory at once, independent of maxDiagnosticLen's
+// presentation-time truncation: a small multiple keeps some headroom for
+// pre-truncation formatting while still guaranteeing a runaway subprocess
+// can't force unbounded memory use.
+const maxCapturedOutputLen = 4 * maxDiagnosticLen
+
+// claudePrintFlag invokes Claude Code in headless/print mode: it reads the
+// prompt from stdin, prints its final response to stdout, and exits
+// without an interactive session.
+const claudePrintFlag = "-p"
+
+// allowedEnvVars is the fixed base allowlist of environment variables
+// passed to the Claude Code subprocess. The Agent's environment is
+// sanitized rather than inherited wholesale so secrets present in Forge's
+// own process environment (API tokens, tracker credentials, etc.) never
+// reach the Agent.
 var allowedEnvVars = []string{
 	"PATH",
 	"HOME",
@@ -47,6 +58,17 @@ var allowedEnvVars = []string{
 	"TERM",
 	"TMPDIR",
 	"SHELL",
+}
+
+// defaultAuthEnvVars is the standard set of Claude auth variables forwarded
+// by default, on top of allowedEnvVars, so the common headless (API-key)
+// case works out of the box without any Adapter configuration. Anything
+// beyond this — Bedrock/Vertex/AWS/GOOGLE credentials, for example —
+// requires explicit opt-in via Adapter.ExtraEnvPassthrough.
+var defaultAuthEnvVars = []string{
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_AUTH_TOKEN",
 }
 
 // Adapter is a production Agent Adapter that invokes Claude Code as a
@@ -60,24 +82,45 @@ type Adapter struct {
 	// Executable is the path or name of the Claude Code CLI binary used by
 	// defaultRunner. Defaults to "claude" if empty.
 	Executable string
+
+	// ExtraEnvPassthrough lists additional environment variable NAMES to
+	// forward to the subprocess beyond the base allowlist and
+	// defaultAuthEnvVars. Use this to opt in to cloud-specific credentials
+	// Forge does not forward by default — e.g. AWS_ACCESS_KEY_ID,
+	// AWS_SECRET_ACCESS_KEY, CLAUDE_CODE_USE_BEDROCK,
+	// GOOGLE_APPLICATION_CREDENTIALS, CLAUDE_CODE_USE_VERTEX. Anything not
+	// in the base allowlist, defaultAuthEnvVars, or ExtraEnvPassthrough is
+	// excluded, regardless of what's set in Forge's own environment.
+	ExtraEnvPassthrough []string
 }
 
 // Execute implements agent.Agent. It builds a prompt from req, invokes
-// Claude Code in req.WorkspacePath, and parses the result. Outcomes —
-// including subprocess errors, cancellation, and non-zero exit codes
-// without a valid structured result — are surfaced through
-// AgentResult.Status rather than a returned error, so callers get uniform
-// handling regardless of failure mode.
+// Claude Code in req.WorkspacePath, and parses the result. Ordinary
+// failures — subprocess errors, non-zero exit codes without a valid
+// structured result — are surfaced through AgentResult.Status (FAILED)
+// rather than a returned error, so callers get uniform handling. Context
+// cancellation is the one exception: it is surfaced as a wrapped ctx.Err()
+// Go error (in addition to Status FAILED) so a retry loop (tickets 21/24)
+// can distinguish "the caller gave up on this attempt" from "the agent
+// genuinely failed" and avoid miscounting it against the retry budget.
 func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
 	prompt := buildPrompt(req)
-	env := sanitizedEnv()
+	env := sanitizedEnv(a.ExtraEnvPassthrough)
 
 	runner := a.Runner
 	if runner == nil {
 		runner = a.defaultRunner()
 	}
 
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, []string{"-p"}, prompt, env)
+	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, []string{claudePrintFlag}, prompt, env)
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return agent.AgentResult{
+			Status:  agent.StatusFailed,
+			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: cancelled: %v", ctxErr), stdout, stderr),
+		}, fmt.Errorf("claude adapter: cancelled: %w", ctxErr)
+	}
+
 	if err != nil {
 		return agent.AgentResult{
 			Status:  agent.StatusFailed,
@@ -102,11 +145,11 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	case agent.StatusFailed:
 		return agent.AgentResult{Status: agent.StatusFailed, Summary: res.Summary}, nil
 	case agent.StatusNeedsInfo:
-		if res.NeedsInfo == nil {
+		if res.NeedsInfo == nil || strings.TrimSpace(res.NeedsInfo.Question) == "" {
 			return agent.AgentResult{
 				Status: agent.StatusFailed,
 				Summary: diagnosticSummary(
-					"claude adapter: NEEDS_INFO result missing needs_info details",
+					"claude adapter: NEEDS_INFO result missing a needs_info question",
 					stdout, stderr,
 				),
 			}, nil
@@ -157,12 +200,26 @@ func truncate(s string, n int) string {
 }
 
 // sanitizedEnv builds the environment passed to the Claude Code subprocess
-// from allowedEnvVars only, looking each up in Forge's own process
-// environment. Anything not on the allowlist — including secrets such as
-// tracker or CI tokens — never reaches the Agent.
-func sanitizedEnv() []string {
-	env := make([]string, 0, len(allowedEnvVars))
-	for _, key := range allowedEnvVars {
+// from allowedEnvVars, defaultAuthEnvVars, and extra (an Adapter's
+// opt-in ExtraEnvPassthrough) only, looking each up in Forge's own process
+// environment. Anything not named in one of those three sets — including
+// secrets such as tracker or CI tokens — never reaches the Agent.
+func sanitizedEnv(extra []string) []string {
+	capacity := len(allowedEnvVars) + len(defaultAuthEnvVars) + len(extra)
+	seen := make(map[string]bool, capacity)
+	keys := make([]string, 0, capacity)
+	for _, group := range [][]string{allowedEnvVars, defaultAuthEnvVars, extra} {
+		for _, key := range group {
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+
+	env := make([]string, 0, len(keys))
+	for _, key := range keys {
 		if val, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+val)
 		}
@@ -184,9 +241,13 @@ func (a *Adapter) defaultRunner() Runner {
 		cmd.Env = env
 		cmd.Stdin = strings.NewReader(stdin)
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+		// Bounded, tail-preserving writers: an unbounded bytes.Buffer here
+		// would let a runaway subprocess force Forge to hold arbitrarily
+		// large output in memory (see maxCapturedOutputLen).
+		stdout := newTailLimitWriter(maxCapturedOutputLen)
+		stderr := newTailLimitWriter(maxCapturedOutputLen)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
 
 		err := cmd.Run()
 		exitCode := 0

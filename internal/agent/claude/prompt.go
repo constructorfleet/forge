@@ -64,27 +64,29 @@ func buildPrompt(req agent.AgentRequest) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("## Repository Context\n\n")
-	if req.Repository.BaseRevision != "" {
-		fmt.Fprintf(&b, "Base revision: %s\n\n", req.Repository.BaseRevision)
-	}
-	if req.Repository.ProjectStructure != "" {
-		b.WriteString("### Project Structure\n\n")
-		b.WriteString(req.Repository.ProjectStructure)
-		b.WriteString("\n\n")
-	}
-	if req.Repository.AgentInstructions != "" {
-		b.WriteString("### Agent Instructions\n\n")
-		b.WriteString(req.Repository.AgentInstructions)
-		b.WriteString("\n\n")
-	}
-	if len(req.Repository.QualityGates) > 0 {
-		b.WriteString("### Quality Gates\n\n")
-		b.WriteString("Your implementation must pass all of the following before it is considered done:\n\n")
-		for _, gate := range req.Repository.QualityGates {
-			fmt.Fprintf(&b, "- %s\n", gate)
+	if hasRepositoryContext(req.Repository) {
+		b.WriteString("## Repository Context\n\n")
+		if req.Repository.BaseRevision != "" {
+			fmt.Fprintf(&b, "Base revision: %s\n\n", req.Repository.BaseRevision)
 		}
-		b.WriteString("\n")
+		if req.Repository.ProjectStructure != "" {
+			b.WriteString("### Project Structure\n\n")
+			b.WriteString(req.Repository.ProjectStructure)
+			b.WriteString("\n\n")
+		}
+		if req.Repository.AgentInstructions != "" {
+			b.WriteString("### Agent Instructions\n\n")
+			b.WriteString(req.Repository.AgentInstructions)
+			b.WriteString("\n\n")
+		}
+		if len(req.Repository.QualityGates) > 0 {
+			b.WriteString("### Quality Gates\n\n")
+			b.WriteString("Your implementation must pass all of the following before it is considered done:\n\n")
+			for _, gate := range req.Repository.QualityGates {
+				fmt.Fprintf(&b, "- %s\n", gate)
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	if req.Policy.Notes != "" {
@@ -109,4 +111,14 @@ func buildPrompt(req agent.AgentRequest) string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// hasRepositoryContext reports whether repo carries anything worth
+// rendering, so buildPrompt can omit an empty "## Repository Context"
+// header rather than emitting a section with nothing under it.
+func hasRepositoryContext(repo agent.RepositoryContext) bool {
+	return repo.BaseRevision != "" ||
+		repo.ProjectStructure != "" ||
+		repo.AgentInstructions != "" ||
+		len(repo.QualityGates) > 0
 }

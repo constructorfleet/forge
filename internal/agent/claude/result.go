@@ -10,7 +10,11 @@ import (
 // fencedJSONBlock matches fenced code blocks (optionally tagged "json") so
 // parseStructuredResult can pull the outcome Claude Code was instructed to
 // emit (see resultContract in prompt.go) out of otherwise free-form output.
-var fencedJSONBlock = regexp.MustCompile("(?s)```(?:json)?\\s*\\n(.*?)\\n?```")
+// The closing fence is anchored to the start of a line ((?m:^```)) so a
+// result whose summary contains a literal ``` sequence mid-line doesn't get
+// mistaken for the block's end, truncating (and discarding) the rest of
+// the JSON.
+var fencedJSONBlock = regexp.MustCompile("(?s)```(?:json)?[ \t]*\r?\n(.*?)\r?\n(?m:^```)")
 
 // structuredResult is the JSON shape Claude Code is instructed to emit as
 // the last fenced code block in its output (see resultContract).
