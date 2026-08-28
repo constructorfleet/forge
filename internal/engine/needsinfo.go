@@ -111,6 +111,9 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 	}); err != nil {
 		return domain.Issue{}, err
 	}
+	if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issueID); err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err)
+	}
 
 	return e.transition(ctx, executionID, issueID, domain.StateNeedsInfo)
 }

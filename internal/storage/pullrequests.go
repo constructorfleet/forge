@@ -11,6 +11,16 @@ import (
 // appends a "pull_request.created" Event, all inside a single database
 // transaction — mirroring RecordGateRun/RecordReviewRun's shape.
 func (s *SQLiteStore) RecordPullRequest(ctx context.Context, pr PullRequest) error {
+	existing, err := s.PullRequestsByIssue(ctx, pr.ExecutionID, pr.IssueID)
+	if err != nil {
+		return err
+	}
+	for _, prior := range existing {
+		if prior.Number == pr.Number && prior.URL == pr.URL && prior.CommitSHA == pr.CommitSHA {
+			return nil
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("storage: record pull request for issue %s/%s: %w", pr.ExecutionID, pr.IssueID, err)

@@ -114,6 +114,17 @@ type PullRequest struct {
 	CreatedAt time.Time
 }
 
+// WorkerClaim is one active Worker claim on an Issue, including the owning
+// process ID used by restart recovery to distinguish live workers from
+// orphaned ones after a crash or termination.
+type WorkerClaim struct {
+	ExecutionID string
+	IssueID     string
+	WorkerRef   string
+	OwnerPID    int
+	ClaimedAt   time.Time
+}
+
 // CIRunStatus is the normalized result of one CI poll attempt.
 type CIRunStatus string
 
@@ -190,9 +201,29 @@ type Store interface {
 	// constraint, not a read-then-write check.
 	ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error
 
+	// UpdateWorkerOwner records the OS process ID currently owning the
+	// active Worker claim for issueID within executionID.
+	UpdateWorkerOwner(ctx context.Context, executionID, issueID string, ownerPID int) error
+
+	// WorkerClaim reloads the active Worker claim for issueID within
+	// executionID. Returns ErrNotFound if no active claim exists.
+	WorkerClaim(ctx context.Context, executionID, issueID string) (WorkerClaim, error)
+
+	// ReleaseWorkerClaim removes the active Worker claim for issueID within
+	// executionID. Releasing a missing claim is a no-op.
+	ReleaseWorkerClaim(ctx context.Context, executionID, issueID string) error
+
 	// AppendEvent records a standalone Event (for occurrences that are not
 	// Issue state transitions, e.g. execution-level events).
 	AppendEvent(ctx context.Context, event Event) error
+
+	// RecordWorkspace persists the current Workspace path/branch for issueID
+	// within executionID, replacing any earlier record.
+	RecordWorkspace(ctx context.Context, executionID string, ws domain.Workspace) error
+
+	// WorkspaceByIssue reloads the persisted Workspace for issueID within
+	// executionID. Returns ErrNotFound if none has been recorded.
+	WorkspaceByIssue(ctx context.Context, executionID, issueID string) (domain.Workspace, error)
 
 	// RecordGateRun persists one executed Quality Gate Result and appends a
 	// "gate.run" Event, transactionally. See CONTEXT.md "Gate Runner".

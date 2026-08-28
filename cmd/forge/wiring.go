@@ -113,6 +113,9 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
 	eng.PRTracker = trk
 	eng.BaseBranch = baseBranchName(cfg.Git.Base)
+	if cfg.PullRequests.WatchCI {
+		eng.CIWaiter = ci.New(store, trk, cfg, eng.BaseBranch)
+	}
 	return eng, nil
 }
 

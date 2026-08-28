@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +59,11 @@ type WorkspaceCreator interface {
 	Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error)
 	Cleanup(ctx context.Context, executionID, issueID string) error
 	Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error)
+}
+
+// CIWaiter resumes CI supervision for an Issue already in CI_PENDING.
+type CIWaiter interface {
+	Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error)
 }
 
 // Engine drives a single Issue through Forge's state machine, persisting
@@ -114,6 +121,9 @@ type Engine struct {
 	// PRTracker as a single all-or-nothing seam.
 	PRTracker PRCreator
 
+	// CIWaiter resumes CI monitoring for issues already in CI_PENDING.
+	CIWaiter CIWaiter
+
 	// BaseBranch is the plain branch name (e.g. "main") pull requests
 	// target, distinct from the base revision Workers resolve to a commit
 	// SHA. Engine has no notion of git remotes, so this is resolved by
@@ -142,6 +152,8 @@ type Engine struct {
 	// values are unaffected).
 	Now            func() time.Time
 	NewExecutionID func() string
+	OwnerPID       func() int
+	ProcessRunning func(pid int) (bool, error)
 }
 
 // New builds an Engine from its injected dependencies.
@@ -156,6 +168,25 @@ func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag 
 		RepoRoot:       repoRoot,
 		Now:            time.Now,
 		NewExecutionID: func() string { return uuid.NewString() },
+		OwnerPID:       os.Getpid,
+		ProcessRunning: processRunning,
+	}
+}
+
+func processRunning(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	err := syscall.Kill(pid, 0)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, syscall.ESRCH):
+		return false, nil
+	case errors.Is(err, syscall.EPERM):
+		return true, nil
+	default:
+		return false, err
 	}
 }
 
@@ -271,6 +302,9 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	if err := e.Store.ClaimIssue(ctx, execution.ID, issueID, ref); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
 	}
+	if err := e.Store.UpdateWorkerOwner(ctx, execution.ID, issueID, e.OwnerPID()); err != nil {
+		return ExecuteResult{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issueID, err)
+	}
 	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateClaimed)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -287,6 +321,9 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	ws, err := e.Workspaces.Create(ctx, execution.ID, issueID, workerBase)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: create workspace for issue %s: %w", issueID, err)
+	}
+	if err := e.Store.RecordWorkspace(ctx, execution.ID, ws); err != nil {
+		return ExecuteResult{}, fmt.Errorf("engine: persist workspace for issue %s: %w", issueID, err)
 	}
 	if err := e.appendEvent(ctx, execution.ID, issueID, "workspace.created", map[string]string{
 		"path":   ws.Path,
@@ -537,9 +574,20 @@ func buildCIFeedback(run storage.CIRun) agent.Feedback {
 // runQualityGates' passed bool) rather than left for callers to re-derive
 // by comparing the returned Issue's State.
 func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
-	issue, err := e.transition(ctx, executionID, issueID, domain.StateImplementing)
-	if err != nil {
-		return domain.Issue{}, false, err
+	return e.executeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback, true)
+}
+
+func (e *Engine) continueAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
+	return e.executeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback, false)
+}
+
+func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback, transitionToImplementing bool) (_ domain.Issue, implemented bool, _ error) {
+	var err error
+	if transitionToImplementing {
+		issue, err = e.transition(ctx, executionID, issueID, domain.StateImplementing)
+		if err != nil {
+			return domain.Issue{}, false, err
+		}
 	}
 
 	req := agent.AgentRequest{

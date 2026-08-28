@@ -21,7 +21,7 @@ Commands:
   init                     Generate .forge.yaml via deterministic repository-policy discovery
   execute <issue-number>   Execute a single Issue with no unmet Dependencies
   status <execution-id>    Show an Execution's persisted state
-  resume <execution-id>    Resume a NEEDS_INFO Issue after new human input
+  resume <execution-id>    Reconcile and continue an incomplete Execution
   help                     Show this help text
 
 Run 'forge <command> --help' for command-specific flags.

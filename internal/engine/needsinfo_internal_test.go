@@ -45,6 +45,10 @@ func (s *inMemoryStore) AppendEvent(_ context.Context, event storage.Event) erro
 	return nil
 }
 
+func (s *inMemoryStore) ReleaseWorkerClaim(context.Context, string, string) error {
+	return nil
+}
+
 func (s *inMemoryStore) TransitionIssue(_ context.Context, _, _ string, to domain.IssueState) (domain.Issue, error) {
 	s.state = to
 	return domain.Issue{State: to}, nil
