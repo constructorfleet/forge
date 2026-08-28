@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -166,5 +167,95 @@ func TestFakeAgent_RepeatsFinalQueuedOutcomeOnLaterCalls(t *testing.T) {
 	}
 	if third.Status != agent.StatusImplemented {
 		t.Errorf("third Status = %q, want %q (last queued outcome repeats)", third.Status, agent.StatusImplemented)
+	}
+}
+
+func TestFakeAgent_ProgramErrorReturnsExactErrorWithoutFallingThroughToDefault(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	sentinel := errors.New("boom")
+	fake.ProgramError("issue-err", sentinel)
+	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: "should not be used"})
+
+	result, err := fake.Execute(context.Background(), agent.AgentRequest{Issue: domain.Issue{ID: "issue-err"}})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Execute() error = %v, want %v", err, sentinel)
+	}
+	if result != (agent.AgentResult{}) {
+		t.Errorf("Execute() result = %+v, want zero value alongside a programmed error", result)
+	}
+}
+
+func TestFakeAgent_ProgramDefaultAppliesOnlyToUnprogrammedScenarios(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusFailed, Summary: "default failure"})
+	fake.ProgramResult("issue-specific", agent.AgentResult{Status: agent.StatusImplemented, Summary: "specific success"})
+
+	defaultResult, err := fake.Execute(context.Background(), agent.AgentRequest{Issue: domain.Issue{ID: "issue-unprogrammed"}})
+	if err != nil {
+		t.Fatalf("Execute(unprogrammed) returned unexpected error: %v", err)
+	}
+	if defaultResult.Status != agent.StatusFailed {
+		t.Errorf("unprogrammed scenario Status = %q, want default %q", defaultResult.Status, agent.StatusFailed)
+	}
+
+	specificResult, err := fake.Execute(context.Background(), agent.AgentRequest{Issue: domain.Issue{ID: "issue-specific"}})
+	if err != nil {
+		t.Fatalf("Execute(issue-specific) returned unexpected error: %v", err)
+	}
+	if specificResult.Status != agent.StatusImplemented {
+		t.Errorf("issue-specific Status = %q, want its programmed %q, not the default (precedence)", specificResult.Status, agent.StatusImplemented)
+	}
+}
+
+func TestFakeAgent_InvocationsReturnsIndependentCopyAcrossCalls(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	fake.ProgramResult("issue-copy", agent.AgentResult{Status: agent.StatusImplemented})
+	req := agent.AgentRequest{WorkspacePath: "/tmp/original", Issue: domain.Issue{ID: "issue-copy"}}
+	if _, err := fake.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	got := fake.Invocations()
+	got[0].WorkspacePath = "/tmp/mutated"
+
+	again := fake.Invocations()
+	if again[0].WorkspacePath != "/tmp/original" {
+		t.Errorf("Invocations() = %q after mutating a prior copy's slice element, want %q unaffected", again[0].WorkspacePath, "/tmp/original")
+	}
+}
+
+func TestFakeAgent_RecordedInvocationIsImmuneToLaterCallerMutation(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	fake.ProgramResult("issue-mutate", agent.AgentResult{Status: agent.StatusImplemented})
+
+	feedback := []agent.Feedback{{Source: agent.FeedbackSourceGate, Message: "original gate feedback"}}
+	gates := []string{"go test ./..."}
+	deps := []domain.Dependency{{IssueID: "issue-mutate", DependsOnID: "issue-dep"}}
+
+	req := agent.AgentRequest{
+		Issue:      domain.Issue{ID: "issue-mutate", Dependencies: deps},
+		Repository: agent.RepositoryContext{QualityGates: gates},
+		Feedback:   feedback,
+	}
+
+	if _, err := fake.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	// Mutate the caller's backing arrays after the call, as a repair
+	// iteration reusing/growing these slices in place might.
+	feedback[0].Message = "mutated gate feedback"
+	gates[0] = "mutated gate command"
+	deps[0].DependsOnID = "mutated-dep"
+
+	got := fake.Invocations()[0]
+	if got.Feedback[0].Message != "original gate feedback" {
+		t.Errorf("recorded Feedback[0].Message = %q, want %q (immune to later mutation)", got.Feedback[0].Message, "original gate feedback")
+	}
+	if got.Repository.QualityGates[0] != "go test ./..." {
+		t.Errorf("recorded QualityGates[0] = %q, want %q (immune to later mutation)", got.Repository.QualityGates[0], "go test ./...")
+	}
+	if got.Issue.Dependencies[0].DependsOnID != "issue-dep" {
+		t.Errorf("recorded Dependencies[0].DependsOnID = %q, want %q (immune to later mutation)", got.Issue.Dependencies[0].DependsOnID, "issue-dep")
 	}
 }
