@@ -239,8 +239,8 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		return ExecuteResult{}, err
 	}
 
-	workerRef := fmt.Sprintf("worker-%s-%s", execution.ID, issueID)
-	if err := e.Store.ClaimIssue(ctx, execution.ID, issueID, workerRef); err != nil {
+	ref := workerRef(execution.ID, issueID)
+	if err := e.Store.ClaimIssue(ctx, execution.ID, issueID, ref); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
 	}
 	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateClaimed)
@@ -267,73 +267,61 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
-	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateImplementing)
+	// Execution Context (CONTEXT.md "Execution Context") is assembled inside
+	// invokeAgent: the compiled Repository Context plus this Worker's
+	// Issue-specific data (Workspace path, normalized Issue, workflow
+	// policy). Feedback is nil on this first attempt — invokeAgent also
+	// owns the PREPARING -> IMPLEMENTING transition, so this call is the
+	// same one runRepairLoop's repair iterations make (see invokeAgent),
+	// just with no prior diagnostic to report.
+	var implemented bool
+	issue, implemented, err = e.invokeAgent(ctx, execution.ID, issueID, ws.Path, repoCtx, issue, nil)
 	if err != nil {
 		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 	}
 
-	// Execution Context (CONTEXT.md "Execution Context") is assembled here:
-	// the compiled Repository Context plus this Worker's Issue-specific
-	// data (Workspace path, normalized Issue, workflow policy). Feedback is
-	// empty on this first attempt — every subsequent repair iteration's
-	// Feedback is bounded to that iteration's own diagnostic (see
-	// runRepairLoop / invokeAgent).
-	req := agent.AgentRequest{
-		WorkspacePath: ws.Path,
-		Issue:         issue,
-		Repository:    repoCtx,
-		Policy:        agent.WorkflowPolicy{},
-	}
-	result, err := e.Agent.Execute(ctx, req)
-	if err != nil {
-		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err))
-	}
-	if err := e.appendEvent(ctx, execution.ID, issueID, "agent.result", map[string]string{
-		"status":  string(result.Status),
-		"summary": result.Summary,
-	}); err != nil {
-		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
-	}
-
-	switch result.Status {
-	case agent.StatusImplemented:
+	if implemented {
 		issue, err = e.runRepairLoop(ctx, execution.ID, issueID, workerBase, ws.Path, repoCtx, issue)
-	case agent.StatusNeedsInfo:
-		issue, err = e.handleNeedsInfo(ctx, execution.ID, issueID, workerRef, result)
-	case agent.StatusFailed:
-		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateFailed)
-	default:
-		err = fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
+		if err != nil {
+			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+		}
 	}
-	if err != nil {
-		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
-	}
+	// A non-implemented, non-error outcome (NEEDS_INFO or FAILED) is already
+	// a resting state driven there by invokeAgent itself — nothing further
+	// to do.
 
 	return ExecuteResult{ExecutionID: execution.ID, Issue: issue}, nil
 }
 
+// workerRef derives the Worker identity used both to claim an Issue
+// (Store.ClaimIssue) and to release its slot on a NEEDS_INFO outcome
+// (handleNeedsInfo's "worker.released" Event) — one source for the shape
+// rather than the executionID/issueID concatenation being hand-rebuilt at
+// each call site.
+func workerRef(executionID, issueID string) string {
+	return fmt.Sprintf("worker-%s-%s", executionID, issueID)
+}
+
 // runRepairLoop drives an Issue already IMPLEMENTED (the Agent's first
-// attempt has already run and returned StatusImplemented — this is called
-// from Execute's result switch) through VALIDATING and REVIEWING,
-// repeatedly, until it reaches a resting state: COMMITTING (Review
-// approved, or no Reviewer configured), REVIEWING (no Reviewer configured
-// — the ticket-20 predecessor resting state), or FAILED (a Quality Gate
-// failure or CHANGES_REQUIRED review verdict once its retry budget is
-// exhausted).
+// attempt has already run and returned StatusImplemented — invokeAgent
+// reported that via its implemented bool, and Execute calls this next)
+// through VALIDATING and REVIEWING, repeatedly, until it reaches a resting
+// state: COMMITTING (Review approved, or no Reviewer configured), REVIEWING
+// (no Reviewer configured — the ticket-20 predecessor resting state), or
+// FAILED (a Quality Gate failure or CHANGES_REQUIRED review verdict once
+// its retry budget is exhausted).
 //
 // Each iteration: run the full configured Quality Gate set (runQualityGates
 // — the "Every repair reruns the complete gate set" requirement holds
 // because a repair always re-enters this loop from the top, never resuming
 // mid-way through Review only). A gate failure or CHANGES_REQUIRED verdict
 // consults the Issue's RetryBudget (CONTEXT.md "Retry Budget", independent
-// gate/review counters): budget remaining records the failure, persists it
-// (Store.UpdateRetryBudget — TransitionIssue always reloads the Issue fresh,
-// so an unpersisted in-memory increment would otherwise be silently
-// discarded by the very next transition), and repairs (invokeAgent) with
-// only that iteration's bounded diagnostic before looping back to
-// VALIDATING; budget exhausted transitions straight to FAILED instead. The
-// Workspace is the same one Execute created before IMPLEMENTING and is
-// never recreated or cleaned up between iterations — repair works in place.
+// gate/review counters) via repair: budget remaining records the failure,
+// persists it, and repairs (invokeAgent) with only that iteration's bounded
+// diagnostic before looping back to VALIDATING; budget exhausted
+// transitions straight to FAILED instead. The Workspace is the same one
+// Execute created before IMPLEMENTING and is never recreated or cleaned up
+// between iterations — repair works in place.
 func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue) (domain.Issue, error) {
 	for {
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateValidating)
@@ -347,7 +335,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		}
 
 		if !gatesPassed {
-			issue, retried, err := e.repairAfterGateFailure(ctx, executionID, issueID, workspacePath, repoCtx, issue, failedGate)
+			feedback := []agent.Feedback{gate.BuildFeedback(*failedGate)}
+			issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+				issue.RetryBudget.GateExhausted(), (*domain.Issue).RecordGateFailure, feedback, "gate")
 			if err != nil {
 				return domain.Issue{}, err
 			}
@@ -360,9 +350,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			continue
 		}
 
-		if e.Reviewer == nil {
-			return issue, nil
-		}
+		// runReview itself short-circuits on a nil Reviewer (returning
+		// VerdictApproved, the ticket-20 predecessor resting state), so
+		// there is no separate nil check needed here.
 		issue, verdict, findings, err := e.runReview(ctx, executionID, issueID, workerBase, workspacePath, repoCtx, issue, gateResults)
 		if err != nil {
 			return domain.Issue{}, err
@@ -371,7 +361,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			return issue, nil
 		}
 
-		issue, retried, err := e.repairAfterReviewRejection(ctx, executionID, issueID, workspacePath, repoCtx, issue, findings)
+		feedback := review.BuildFeedback(findings)
+		issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+			issue.RetryBudget.ReviewExhausted(), (*domain.Issue).RecordReviewRejection, feedback, "review")
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -381,72 +373,59 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// repairAfterGateFailure implements the gate side of the Retry Budget
-// (CONTEXT.md): if the Issue's gate counter still has room, it records the
-// failure (in memory and persisted via Store.UpdateRetryBudget), builds
-// bounded agent.Feedback from failed (gate.BuildFeedback — only the new
-// diagnostic, never prior attempts), and repairs via invokeAgent, returning
-// retried=true so runRepairLoop's caller re-enters VALIDATING. If the
-// counter is already exhausted, it transitions the Issue to FAILED and
-// returns retried=false.
-func (e *Engine) repairAfterGateFailure(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, failed *gate.Result) (_ domain.Issue, retried bool, _ error) {
-	if issue.RetryBudget.GateExhausted() {
+// repair implements the Retry Budget's (CONTEXT.md) shared shape for both
+// the gate and review repair paths — the two differ only in which
+// RetryBudget counter they consult/record and which bounded Feedback they
+// hand the Agent. exhausted is the caller's already-evaluated
+// GateExhausted()/ReviewExhausted() check; record is the corresponding
+// pointer-receiver mutator (domain.Issue.RecordGateFailure or
+// .RecordReviewRejection, passed as a method expression so it mutates the
+// addressable local issue this function holds, not a copy — see
+// RecordGateFailure's doc comment for why that matters); what names the
+// class purely for error messages. A future CI retry budget (ticket 24)
+// becomes a one-line call to this same helper rather than a third copy.
+//
+// exhausted transitions the Issue straight to FAILED and returns
+// retried=false. Otherwise it records the failure in memory, persists it
+// (Store.UpdateRetryBudget — TransitionIssue always reloads the Issue
+// fresh, so an unpersisted in-memory increment would otherwise be silently
+// discarded by the very next transition; this persist and the following
+// invokeAgent transition are two separate writes, safe today since nothing
+// resumes mid-repair, but worth folding into one transaction if a
+// resume-through-Execute path is ever added — see ticket 31/restart
+// recovery), and delegates to invokeAgent, returning its (issue,
+// implemented, error) directly: implemented is exactly this function's
+// retried.
+func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, exhausted bool, record func(*domain.Issue) error, feedback []agent.Feedback, what string) (_ domain.Issue, retried bool, _ error) {
+	if exhausted {
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
 		return issue, false, err
 	}
 
-	if err := issue.RecordGateFailure(); err != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: record gate failure for issue %s: %w", issueID, err)
+	if err := record(&issue); err != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: record %s failure for issue %s: %w", what, issueID, err)
 	}
 	if err := e.Store.UpdateRetryBudget(ctx, executionID, issueID, issue.RetryBudget); err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: persist retry budget for issue %s: %w", issueID, err)
 	}
 
-	feedback := []agent.Feedback{gate.BuildFeedback(*failed)}
-	issue, err := e.invokeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback)
-	if err != nil {
-		return domain.Issue{}, false, err
-	}
-	return issue, issue.State == domain.StateImplementing, nil
+	return e.invokeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback)
 }
 
-// repairAfterReviewRejection is repairAfterGateFailure's review-side
-// counterpart: the review.BuildFeedback findings, one agent.Feedback per
-// Finding, are the bounded diagnostic the Agent receives (never the prior
-// implementation attempt's own history).
-func (e *Engine) repairAfterReviewRejection(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, findings []review.Finding) (_ domain.Issue, retried bool, _ error) {
-	if issue.RetryBudget.ReviewExhausted() {
-		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
-		return issue, false, err
-	}
-
-	if err := issue.RecordReviewRejection(); err != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: record review rejection for issue %s: %w", issueID, err)
-	}
-	if err := e.Store.UpdateRetryBudget(ctx, executionID, issueID, issue.RetryBudget); err != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: persist retry budget for issue %s: %w", issueID, err)
-	}
-
-	feedback := review.BuildFeedback(findings)
-	issue, err := e.invokeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback)
-	if err != nil {
-		return domain.Issue{}, false, err
-	}
-	return issue, issue.State == domain.StateImplementing, nil
-}
-
-// invokeAgent transitions issue to IMPLEMENTING and re-invokes the Agent
-// with feedback as its AgentRequest.Feedback — bounded to the current
-// repair iteration's diagnostic, never a full-history replay. It mirrors
-// Execute's own first-attempt Agent invocation (result handling included)
-// so a repair's StatusFailed/StatusNeedsInfo outcome is driven to the same
-// terminal states the first attempt would reach, rather than silently
-// looping. On StatusImplemented, the returned Issue is left in IMPLEMENTING
-// — runRepairLoop's caller transitions it onward to VALIDATING itself.
-func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (domain.Issue, error) {
+// invokeAgent transitions issue to IMPLEMENTING and invokes the Agent with
+// feedback as its AgentRequest.Feedback — nil on Execute's first attempt,
+// bounded to the current repair iteration's diagnostic on every subsequent
+// call from repair, never a full-history replay. Both Execute's first
+// attempt and every repair iteration route through this one method, so a
+// StatusFailed/StatusNeedsInfo outcome is driven to the same terminal
+// states regardless of which attempt produced it. The returned implemented
+// bool is explicit ("did the Agent report StatusImplemented", mirroring
+// runQualityGates' passed bool) rather than left for callers to re-derive
+// by comparing the returned Issue's State.
+func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
 	issue, err := e.transition(ctx, executionID, issueID, domain.StateImplementing)
 	if err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, false, err
 	}
 
 	req := agent.AgentRequest{
@@ -458,24 +437,26 @@ func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspac
 	}
 	result, err := e.Agent.Execute(ctx, req)
 	if err != nil {
-		return domain.Issue{}, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
+		return domain.Issue{}, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "agent.result", map[string]string{
 		"status":  string(result.Status),
 		"summary": result.Summary,
 	}); err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, false, err
 	}
 
 	switch result.Status {
 	case agent.StatusImplemented:
-		return issue, nil
+		return issue, true, nil
 	case agent.StatusNeedsInfo:
-		return e.handleNeedsInfo(ctx, executionID, issueID, fmt.Sprintf("worker-%s-%s", executionID, issueID), result)
+		issue, err := e.handleNeedsInfo(ctx, executionID, issueID, workerRef(executionID, issueID), result)
+		return issue, false, err
 	case agent.StatusFailed:
-		return e.transition(ctx, executionID, issueID, domain.StateFailed)
+		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
+		return issue, false, err
 	default:
-		return domain.Issue{}, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
+		return domain.Issue{}, false, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
 	}
 }
 

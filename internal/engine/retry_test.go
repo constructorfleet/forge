@@ -303,6 +303,68 @@ func TestExecute_GateBudgetExhaustion_RoutesToFailed(t *testing.T) {
 	}
 }
 
+// TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo drives a
+// gate-failure repair whose re-invoked Agent reports StatusNeedsInfo rather
+// than StatusImplemented, asserting invokeAgent's non-StatusImplemented
+// arms are reachable from a repair iteration too, not just Execute's first
+// attempt.
+func TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"44": {ID: "44"},
+	})
+	te.fake.ProgramResult("44", agent.AgentResult{Status: agent.StatusImplemented})
+	te.fake.ProgramResult("44", agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	})
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := &flakyRunner{failUntil: 1000} // never passes; repair's Agent call is what changes
+	te.eng.Gates = runner
+
+	result, err := te.eng.Execute(context.Background(), "44", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+	if got := len(te.fake.Invocations()); got != 2 {
+		t.Errorf("got %d agent invocations, want 2 (initial + 1 repair)", got)
+	}
+}
+
+// TestExecute_GateRepair_AgentReturnsFailed_RoutesToFailed is the FAILED
+// counterpart: the repair's re-invoked Agent itself reports StatusFailed.
+func TestExecute_GateRepair_AgentReturnsFailed_RoutesToFailed(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"45": {ID: "45"},
+	})
+	te.fake.ProgramResult("45", agent.AgentResult{Status: agent.StatusImplemented})
+	te.fake.ProgramResult("45", agent.AgentResult{Status: agent.StatusFailed, Summary: "gave up"})
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := &flakyRunner{failUntil: 1000}
+	te.eng.Gates = runner
+
+	result, err := te.eng.Execute(context.Background(), "45", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	}
+	if got := len(te.fake.Invocations()); got != 2 {
+		t.Errorf("got %d agent invocations, want 2 (initial + 1 repair)", got)
+	}
+
+	// The gate ran only once: the repair's Agent call failed outright, so
+	// the loop never got back to a second gate rerun.
+	if got := runner.Calls(); got != 1 {
+		t.Errorf("got %d gate calls, want 1 (repair Agent failed before a rerun)", got)
+	}
+}
+
 // TestExecute_ReviewBudgetExhaustion_RoutesToFailed is ticket 21's budget
 // exhaustion integration test for the review side: Review keeps returning
 // CHANGES_REQUIRED, so once the review retry budget (independent from
