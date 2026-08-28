@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,10 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
 )
+
+// botAuthor is the identity fakeTracker.AddComment reports for forge's own
+// posted comments, so tests can distinguish them from human-authored ones.
+const botAuthor = "forge-bot"
 
 // fakeTracker is an in-memory engine.IssueFetcher + engine.NeedsInfoTracker
 // + engine.ResumeTracker double: it never hits real GitHub, and records
@@ -52,15 +57,20 @@ func (f *fakeTracker) AddLabel(_ context.Context, id string, label string) error
 	return nil
 }
 
-func (f *fakeTracker) AddComment(_ context.Context, id string, body string) error {
+// AddComment posts as botAuthor and returns the normalized comment
+// (including that author and its CreatedAt), mirroring the real
+// tracker.Tracker.AddComment contract that handleNeedsInfo and Resume rely
+// on to distinguish forge's own comment from human replies.
+func (f *fakeTracker) AddComment(_ context.Context, id string, body string) (tracker.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.comments[id] = append(f.comments[id], tracker.Comment{
-		Author:    "forge",
+	c := tracker.Comment{
+		Author:    botAuthor,
 		Body:      body,
 		CreatedAt: time.Now(),
-	})
-	return nil
+	}
+	f.comments[id] = append(f.comments[id], c)
+	return c, nil
 }
 
 func (f *fakeTracker) GetComments(_ context.Context, id string) ([]tracker.Comment, error) {
@@ -155,11 +165,11 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 		t.Fatalf("GetComments: %v", err)
 	}
 	body := comments[0].Body
-	if !contains(body, "which config flag should control this?") {
+	if !strings.Contains(body, "which config flag should control this?") {
 		t.Errorf("comment body missing question: %s", body)
 	}
-	if !contains(body, "two plausible flags exist in .forge.yaml") {
-		t.Errorf("comment body missing reason/context: %s", body)
+	if !strings.Contains(body, "two plausible flags exist in .forge.yaml") {
+		t.Errorf("comment body missing context: %s", body)
 	}
 
 	checkpoint, err := store.GetNeedsInfoCheckpoint(ctx, result.ExecutionID, "7")
@@ -171,6 +181,12 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 	}
 	if !checkpoint.CommentPosted {
 		t.Error("checkpoint.CommentPosted = false, want true")
+	}
+	if checkpoint.CommentAuthor != botAuthor {
+		t.Errorf("checkpoint.CommentAuthor = %q, want %q", checkpoint.CommentAuthor, botAuthor)
+	}
+	if checkpoint.CommentPostedAt.IsZero() {
+		t.Error("checkpoint.CommentPostedAt is zero, want the tracker-reported timestamp")
 	}
 	if checkpoint.CreatedAt.IsZero() {
 		t.Error("checkpoint.CreatedAt is zero, want a timestamp")
@@ -190,13 +206,14 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 	if err != nil {
 		t.Fatalf("EventsByExecution: %v", err)
 	}
-	var sawCheckpointEvent, sawReleaseEvent, sawPREvent bool
+	// worker.released is deliberately not asserted on here: it is a forward
+	// seam for ticket 26's real slot release (see handleNeedsInfo's doc
+	// comment), and its representation may change once that lands.
+	var sawCheckpointEvent, sawPREvent bool
 	for _, e := range events {
 		switch e.Type {
 		case "needsinfo.checkpoint_saved":
 			sawCheckpointEvent = true
-		case "worker.released":
-			sawReleaseEvent = true
 		case "pr.created":
 			sawPREvent = true
 		}
@@ -204,23 +221,7 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 	if !sawCheckpointEvent {
 		t.Error("no needsinfo.checkpoint_saved event recorded")
 	}
-	if !sawReleaseEvent {
-		t.Error("no worker.released event recorded")
-	}
 	if sawPREvent {
 		t.Error("a pr.created event was recorded for a NEEDS_INFO issue, want none")
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }

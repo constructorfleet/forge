@@ -52,11 +52,15 @@ func (c *Client) GetComments(ctx context.Context, id string) ([]tracker.Comment,
 	return comments, nil
 }
 
-// AddComment posts a new comment on an Issue.
-func (c *Client) AddComment(ctx context.Context, id string, body string) error {
+// AddComment posts a new comment on an Issue and returns it normalized from
+// GitHub's create-comment response — in particular the author login and
+// server-assigned CreatedAt, which callers use as the authoritative
+// identity/clock for a comment forge itself posted (see tracker.Tracker's
+// AddComment doc comment).
+func (c *Client) AddComment(ctx context.Context, id string, body string) (tracker.Comment, error) {
 	number, err := parseIssueID(id)
 	if err != nil {
-		return err
+		return tracker.Comment{}, err
 	}
 
 	reqBody := struct {
@@ -64,5 +68,13 @@ func (c *Client) AddComment(ctx context.Context, id string, body string) error {
 	}{Body: body}
 
 	path := c.issuePath(number, "/comments")
-	return c.do(ctx, http.MethodPost, path, reqBody, nil)
+	var resp ghComment
+	if err := c.do(ctx, http.MethodPost, path, reqBody, &resp); err != nil {
+		return tracker.Comment{}, err
+	}
+	return tracker.Comment{
+		Author:    resp.User.Login,
+		Body:      resp.Body,
+		CreatedAt: resp.CreatedAt,
+	}, nil
 }

@@ -41,8 +41,14 @@ type Tracker interface {
 	// GetComments fetches the comments on an Issue, oldest first.
 	GetComments(ctx context.Context, id string) ([]Comment, error)
 
-	// AddComment posts a new comment on an Issue.
-	AddComment(ctx context.Context, id string, body string) error
+	// AddComment posts a new comment on an Issue and returns it normalized,
+	// including the author identity and the tracker-server-clock CreatedAt
+	// the tracker assigned — callers that need to later distinguish their
+	// own posted comment from subsequent human replies (see the NEEDS_INFO
+	// resume flow, CONTEXT.md issue 07) must use these tracker-reported
+	// values rather than a locally captured identity/clock, which could
+	// diverge from the tracker's under clock skew.
+	AddComment(ctx context.Context, id string, body string) (Comment, error)
 
 	// AddLabel idempotently ensures label is set on the Issue. Adding a
 	// label that is already present is not an error.

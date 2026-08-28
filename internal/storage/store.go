@@ -122,20 +122,35 @@ type Store interface {
 }
 
 // NeedsInfoCheckpoint is the persisted record of an Issue's transition to
-// NEEDS_INFO: the question asked, the reason it arose, when, and the state
-// of the idempotent label/comment side effects. ResumedAt/ResumedContext
-// are populated once `forge resume` detects new human input and moves the
-// Issue back to READY — ResumedContext is the JSON-encoded focused context
-// (original Issue + previous question + only the new comments) the next
-// Worker invocation should receive.
+// NEEDS_INFO: the question asked, the context it arose from, when, and the
+// state of the idempotent label/comment side effects.
+//
+// CommentAuthor/CommentPostedAt are the tracker-reported (server-clock)
+// identity and timestamp of forge's own posted comment, returned by
+// tracker.Tracker.AddComment — NOT locally captured — so `forge resume` can
+// (a) compare candidate "new" comments against the same clock the tracker
+// itself stamped them with, avoiding false positives from local/tracker
+// clock skew, and (b) exclude forge's own comment from the "new human
+// input" check by author. Both are zero/empty if no comment was ever
+// posted (e.g. Blocked.Comment is configured false).
+//
+// ResumedAt/ResumedContext are populated once `forge resume` detects new
+// human input and moves the Issue back to READY — ResumedContext is the
+// JSON-encoded focused context (original Issue + previous question + only
+// the new comments). It is currently write-only: no ticket yet re-drives a
+// resumed Issue through Execute, so this is a forward seam for a future
+// re-execution path (tickets 21/24 territory) rather than something read
+// back today.
 type NeedsInfoCheckpoint struct {
-	ExecutionID    string
-	IssueID        string
-	Question       string
-	Reason         string
-	LabelAdded     bool
-	CommentPosted  bool
-	CreatedAt      time.Time
-	ResumedAt      *time.Time
-	ResumedContext string
+	ExecutionID     string
+	IssueID         string
+	Question        string
+	Context         string
+	LabelAdded      bool
+	CommentPosted   bool
+	CommentAuthor   string
+	CommentPostedAt time.Time
+	CreatedAt       time.Time
+	ResumedAt       *time.Time
+	ResumedContext  string
 }

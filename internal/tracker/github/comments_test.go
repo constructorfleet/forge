@@ -76,7 +76,7 @@ func TestGetComments_FollowsLinkPaginationAcrossPages(t *testing.T) {
 	}
 }
 
-func TestAddComment_PostsBody(t *testing.T) {
+func TestAddComment_PostsBodyAndReturnsNormalizedComment(t *testing.T) {
 	var captured map[string]string
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -87,12 +87,20 @@ func TestAddComment_PostsBody(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&captured)
 		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"body":"hi there","created_at":"2024-01-02T03:04:05Z","user":{"login":"forge-bot"}}`))
 	})
 
-	if err := c.AddComment(context.Background(), "5", "hi there"); err != nil {
+	got, err := c.AddComment(context.Background(), "5", "hi there")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if captured["body"] != "hi there" {
-		t.Fatalf("got body %q", captured["body"])
+		t.Fatalf("got posted body %q", captured["body"])
+	}
+	if got.Author != "forge-bot" || got.Body != "hi there" {
+		t.Fatalf("unexpected returned comment: %+v", got)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Fatal("returned comment CreatedAt is zero, want the server-assigned timestamp")
 	}
 }

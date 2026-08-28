@@ -9,6 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // inMemoryStore is a minimal in-package storage.Store double covering only
@@ -60,15 +61,18 @@ func (c *countingTracker) AddLabel(_ context.Context, _ string, _ string) error 
 	return nil
 }
 
-func (c *countingTracker) AddComment(_ context.Context, _ string, _ string) error {
+func (c *countingTracker) AddComment(_ context.Context, _ string, _ string) (tracker.Comment, error) {
 	c.commentCalls++
-	return nil
+	return tracker.Comment{Author: "forge-bot", CreatedAt: time.Now()}, nil
 }
 
-// TestHandleNeedsInfo_IdempotentOnRepeat calls handleNeedsInfo twice for the
-// same Execution/Issue (simulating a retried step, e.g. after a crash
-// between the comment post and the checkpoint write completing) and asserts
-// the label and comment are each posted exactly once.
+// TestHandleNeedsInfo_IdempotentOnRepeat calls handleNeedsInfo twice to
+// completion for the same Execution/Issue (e.g. an external caller retrying
+// after both calls succeeded) and asserts the label and comment are each
+// posted exactly once. This does NOT simulate a crash between AddComment
+// succeeding and the checkpoint write that records CommentPosted=true —
+// see handleNeedsInfo's doc comment for why that narrower window is not
+// fully closed.
 func TestHandleNeedsInfo_IdempotentOnRepeat(t *testing.T) {
 	store := &inMemoryStore{}
 	trk := &countingTracker{}
@@ -107,5 +111,36 @@ func TestHandleNeedsInfo_IdempotentOnRepeat(t *testing.T) {
 	cp := store.checkpoints["exec-1/7"]
 	if !cp.CommentPosted {
 		t.Error("checkpoint.CommentPosted = false, want true")
+	}
+}
+
+// TestHandleNeedsInfo_NilTracker_LabelAddedReflectsNoLabelActuallyAdded
+// asserts checkpoint.LabelAdded tracks whether AddLabel actually ran (label
+// configured AND a NeedsInfoTracker present), not just whether a label is
+// configured — a nil NeedsInfoTracker with a configured label must persist
+// LabelAdded=false, since nothing was added.
+func TestHandleNeedsInfo_NilTracker_LabelAddedReflectsNoLabelActuallyAdded(t *testing.T) {
+	store := &inMemoryStore{}
+	e := &Engine{
+		Store:            store,
+		NeedsInfoTracker: nil,
+		Config:           config.Default(), // Blocked.Label is non-empty by default
+		Now:              time.Now,
+	}
+	result := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	}
+
+	if _, err := e.handleNeedsInfo(context.Background(), "exec-2", "9", "worker-1", result); err != nil {
+		t.Fatalf("handleNeedsInfo: %v", err)
+	}
+
+	cp := store.checkpoints["exec-2/9"]
+	if cp.LabelAdded {
+		t.Error("checkpoint.LabelAdded = true, want false (no NeedsInfoTracker to add it)")
+	}
+	if cp.CommentPosted {
+		t.Error("checkpoint.CommentPosted = true, want false (no NeedsInfoTracker to post it)")
 	}
 }

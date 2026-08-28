@@ -59,13 +59,32 @@ type ResumeResult struct {
 
 // Resume implements `forge resume <execution-id>` (see
 // .scratch/forge-mvp/issues/28-needs-info-flow.md): it re-fetches issueID's
-// comments via trk, detects comments posted after the persisted needs-info
-// checkpoint's timestamp, and — only if at least one new comment exists —
+// comments via trk, detects comments posted after forge's own needs-info
+// checkpoint, and — only if at least one new *human* comment exists —
 // transitions the Issue NEEDS_INFO -> READY (the sole legal edge out of
 // NEEDS_INFO; see domain.state.go) and persists the resumed, focused
 // context for the next Worker invocation. Resume errors if no checkpoint
 // was ever recorded for issueID (Store.GetNeedsInfoCheckpoint returns
 // storage.ErrNotFound) — there is nothing to resume.
+//
+// "New" is judged against checkpoint.CommentPostedAt — the tracker-server
+// clock timestamp of forge's own posted comment, as returned by
+// tracker.Tracker.AddComment — rather than checkpoint.CreatedAt (a local
+// clock), and any comment authored by checkpoint.CommentAuthor is excluded
+// outright. Both guard against forge's own needs-info comment being
+// misread as new human input under local/tracker clock skew, which a naive
+// "after the checkpoint's local timestamp" comparison would not catch. If
+// no comment was ever posted (e.g. Blocked.Comment configured false),
+// checkpoint.CommentPostedAt is zero and Resume falls back to
+// checkpoint.CreatedAt — a real, if lesser, skew exposure in that
+// configuration, since there is no tracker-clock anchor to compare against.
+//
+// The READY transition is performed last, after the checkpoint's resumed
+// context and the "needsinfo.resumed" Event are durably saved: if either of
+// those fails, the Issue remains in NEEDS_INFO and `forge resume` can
+// simply be re-run (findNeedsInfoIssue only finds Issues still in
+// NEEDS_INFO) rather than being left in READY with a lost resumed context
+// and no way to retry via the same command.
 func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, executionID, issueID string, now func() time.Time) (ResumeResult, error) {
 	checkpoint, err := store.GetNeedsInfoCheckpoint(ctx, executionID, issueID)
 	if err != nil {
@@ -82,9 +101,17 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 		return ResumeResult{}, fmt.Errorf("engine: resume issue %s: fetch comments: %w", issueID, err)
 	}
 
+	baseline := checkpoint.CommentPostedAt
+	if baseline.IsZero() {
+		baseline = checkpoint.CreatedAt
+	}
+
 	var newComments []tracker.Comment
 	for _, c := range comments {
-		if c.CreatedAt.After(checkpoint.CreatedAt) {
+		if checkpoint.CommentAuthor != "" && c.Author == checkpoint.CommentAuthor {
+			continue // forge's own posted comment, never "new human input"
+		}
+		if c.CreatedAt.After(baseline) {
 			newComments = append(newComments, c)
 		}
 	}
@@ -97,11 +124,6 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 
 	if len(newComments) == 0 {
 		return ResumeResult{Issue: issue, Resumed: false, Context: resumedCtx}, nil
-	}
-
-	issue, err = store.TransitionIssue(ctx, executionID, issueID, domain.StateReady)
-	if err != nil {
-		return ResumeResult{}, fmt.Errorf("engine: resume issue %s: %w", issueID, err)
 	}
 
 	contextJSON, err := json.Marshal(resumedCtx)
@@ -127,6 +149,11 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 		OccurredAt:  resumedAt,
 	}); err != nil {
 		return ResumeResult{}, fmt.Errorf("engine: resume issue %s: append event: %w", issueID, err)
+	}
+
+	issue, err = store.TransitionIssue(ctx, executionID, issueID, domain.StateReady)
+	if err != nil {
+		return ResumeResult{}, fmt.Errorf("engine: resume issue %s: %w", issueID, err)
 	}
 
 	return ResumeResult{Issue: issue, Resumed: true, Context: resumedCtx}, nil

@@ -32,14 +32,17 @@ func TestNeedsInfoCheckpoint_SaveAndGet_RoundTrips(t *testing.T) {
 	seedIssue(t, store, "exec-1", "7")
 
 	createdAt := time.Now().UTC().Truncate(time.Second)
+	commentPostedAt := createdAt.Add(time.Second)
 	checkpoint := storage.NeedsInfoCheckpoint{
-		ExecutionID:   "exec-1",
-		IssueID:       "7",
-		Question:      "which config flag?",
-		Reason:        "ambiguous flags",
-		LabelAdded:    true,
-		CommentPosted: true,
-		CreatedAt:     createdAt,
+		ExecutionID:     "exec-1",
+		IssueID:         "7",
+		Question:        "which config flag?",
+		Context:         "ambiguous flags",
+		LabelAdded:      true,
+		CommentPosted:   true,
+		CommentAuthor:   "forge-bot",
+		CommentPostedAt: commentPostedAt,
+		CreatedAt:       createdAt,
 	}
 	if err := store.SaveNeedsInfoCheckpoint(ctx, checkpoint); err != nil {
 		t.Fatalf("SaveNeedsInfoCheckpoint: %v", err)
@@ -49,11 +52,17 @@ func TestNeedsInfoCheckpoint_SaveAndGet_RoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNeedsInfoCheckpoint: %v", err)
 	}
-	if got.Question != checkpoint.Question || got.Reason != checkpoint.Reason {
-		t.Errorf("got = %+v, want question/reason to match", got)
+	if got.Question != checkpoint.Question || got.Context != checkpoint.Context {
+		t.Errorf("got = %+v, want question/context to match", got)
 	}
 	if !got.LabelAdded || !got.CommentPosted {
 		t.Errorf("got.LabelAdded=%v CommentPosted=%v, want both true", got.LabelAdded, got.CommentPosted)
+	}
+	if got.CommentAuthor != "forge-bot" {
+		t.Errorf("got.CommentAuthor = %q, want forge-bot", got.CommentAuthor)
+	}
+	if !got.CommentPostedAt.Equal(commentPostedAt) {
+		t.Errorf("got.CommentPostedAt = %v, want %v", got.CommentPostedAt, commentPostedAt)
 	}
 	if !got.CreatedAt.Equal(createdAt) {
 		t.Errorf("got.CreatedAt = %v, want %v", got.CreatedAt, createdAt)
