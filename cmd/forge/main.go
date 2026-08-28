@@ -1,5 +1,6 @@
 // Command forge is Forge's CLI entrypoint. Subcommands land incrementally
-// across tickets; `forge init` (ticket 29) is the first one wired up here.
+// across tickets: `forge init` (ticket 29) generates .forge.yaml, and
+// `forge execute`/`forge status` (ticket 18) drive and inspect an Execution.
 package main
 
 import (
@@ -17,31 +18,44 @@ Usage:
   forge [command]
 
 Commands:
-  init    Generate .forge.yaml via deterministic repository-policy discovery
+  init                     Generate .forge.yaml via deterministic repository-policy discovery
+  execute <issue-number>   Execute a single Issue with no unmet Dependencies
+  status <execution-id>    Show an Execution's persisted state
+  help                     Show this help text
 
-Run 'forge help' with no other commands implemented yet; this is a project
-skeleton beyond init.
+Run 'forge <command> --help' for command-specific flags.
 `
 
 func main() {
-	args := os.Args[1:]
+	os.Exit(run(os.Args[1:]))
+}
+
+// run dispatches args to a subcommand and returns the process exit code, so
+// main itself stays a thin os.Exit wrapper that tests never need to invoke
+// directly.
+func run(args []string) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
 		fmt.Fprint(os.Stdout, helpText)
-		return
+		return 0
 	}
 
-	switch args[0] {
+	cmd, rest := args[0], args[1:]
+	switch cmd {
 	case "init":
-		if err := runInit(args[1:]); err != nil {
+		if err := runInit(rest); err != nil {
 			fmt.Fprintf(os.Stderr, "forge init: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
+	case "execute":
+		return runExecute(rest)
+	case "status":
+		return runStatus(rest)
+	default:
+		fmt.Fprintf(os.Stderr, "forge: unknown command %q\n\n", cmd)
+		fmt.Fprint(os.Stderr, helpText)
+		return 1
 	}
-
-	fmt.Fprintf(os.Stderr, "forge: unknown command %q\n\n", args[0])
-	fmt.Fprint(os.Stderr, helpText)
-	os.Exit(1)
 }
 
 const initUsage = `Usage: forge init [--force] [dir]
