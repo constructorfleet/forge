@@ -144,6 +144,7 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 	sch.OnComplete = resolver.onComplete
 	if cfg.PullRequests.WatchCI {
 		sch.CIWatcher = ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
+		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}
 	return sch, nil
 }

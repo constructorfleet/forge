@@ -20,7 +20,17 @@ func Adapt(eng *engine.Engine) Executor {
 	return engineExecutor{eng: eng}
 }
 
+// AdaptCIRepairer wraps eng as a scheduler.CIRepairer.
+func AdaptCIRepairer(eng *engine.Engine) CIRepairer {
+	return engineExecutor{eng: eng}
+}
+
 func (a engineExecutor) Execute(ctx context.Context, issueID, baseRevision string) (ExecuteOutcome, error) {
 	result, err := a.eng.Execute(ctx, issueID, baseRevision)
 	return ExecuteOutcome{ExecutionID: result.ExecutionID, State: result.Issue.State}, err
+}
+
+func (a engineExecutor) Repair(ctx context.Context, executionID, issueID string) (ExecuteOutcome, error) {
+	issue, err := a.eng.RepairCIFailure(ctx, executionID, issueID)
+	return ExecuteOutcome{ExecutionID: executionID, State: issue.State}, err
 }

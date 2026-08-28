@@ -137,6 +137,14 @@ type CIWatcher interface {
 	Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error)
 }
 
+// CIRepairer resumes an Issue that CI supervision has transitioned to
+// CI_FAILED, returning the Issue's next resting state (typically
+// CI_PENDING again after a corrective push, or FAILED/NEEDS_INFO if the
+// repair cannot continue).
+type CIRepairer interface {
+	Repair(ctx context.Context, executionID, issueID string) (ExecuteOutcome, error)
+}
+
 // Scheduler computes ready work from the Dependency DAG, current Issue
 // states, and a concurrency limit, then dispatches Executor for each Issue
 // as it becomes ready (CONTEXT.md "Scheduler"). Construct one via New,
@@ -177,6 +185,12 @@ type Scheduler struct {
 	// CI_PENDING. Its wait happens outside MaxParallel so the worker slot is
 	// released while CI is still pending.
 	CIWatcher CIWatcher
+
+	// CIRepairer, if set alongside CIWatcher, is invoked whenever CIWatcher
+	// reports CI_FAILED. Repair work reacquires MaxParallel capacity for the
+	// duration of the repair attempt, then hands a CI_PENDING result back to
+	// CIWatcher for another supervision pass.
+	CIRepairer CIRepairer
 }
 
 // New builds a Scheduler from its dependencies, applying required defaults
@@ -346,13 +360,52 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 			wg.Add(1)
 			go func(outcome ExecuteOutcome) {
 				defer wg.Done()
-				state, err := s.CIWatcher.Wait(ctx, outcome.ExecutionID, issueID)
-				if err != nil && state == "" {
-					state = outcome.State
+				current := outcome
+				for {
+					state, err := s.CIWatcher.Wait(ctx, current.ExecutionID, issueID)
+					if err != nil {
+						if state == "" {
+							state = current.State
+						}
+						updateResult(issueID, ExecuteOutcome{ExecutionID: current.ExecutionID, State: state}, err)
+						recordErr(err)
+						signal()
+						return
+					}
+
+					current.State = state
+					updateResult(issueID, current, nil)
+					signal()
+
+					if state != domain.StateCIFailed || s.CIRepairer == nil {
+						return
+					}
+
+					select {
+					case sem <- struct{}{}:
+					case <-ctx.Done():
+						updateResult(issueID, current, ctx.Err())
+						recordErr(ctx.Err())
+						signal()
+						return
+					}
+
+					repaired, repairErr := s.CIRepairer.Repair(ctx, current.ExecutionID, issueID)
+					<-sem
+					if repaired.ExecutionID == "" {
+						repaired.ExecutionID = current.ExecutionID
+					}
+					if repaired.State == "" {
+						repaired.State = current.State
+					}
+					updateResult(issueID, repaired, repairErr)
+					recordErr(repairErr)
+					signal()
+					if repairErr != nil || repaired.State != domain.StateCIPending {
+						return
+					}
+					current = repaired
 				}
-				updateResult(issueID, ExecuteOutcome{ExecutionID: outcome.ExecutionID, State: state}, err)
-				recordErr(err)
-				signal()
 			}(outcome)
 		}
 	}

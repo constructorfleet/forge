@@ -12,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/review"
+	"github.com/Teagan42/forge/internal/storage"
 )
 
 // flakyRunner is a gate.CommandRunner double that fails every call up to
@@ -411,5 +412,169 @@ func TestExecute_ReviewBudgetExhaustion_RoutesToFailed(t *testing.T) {
 	}
 	if issue.RetryBudget.GateFailures() != 0 {
 		t.Errorf("GateFailures() = %d, want 0 (independent of review budget)", issue.RetryBudget.GateFailures())
+	}
+}
+
+func TestRepairCIFailure_RetriesInSameWorkspaceReachesCIPending(t *testing.T) {
+	te := approvedTestEngine(t, "46", domain.Issue{ID: "46", Title: "repair CI"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := &flakyRunner{failUntil: 0}
+	te.eng.Gates = runner
+
+	ctx := context.Background()
+	initial, err := te.eng.Execute(ctx, "46", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if initial.Issue.State != domain.StateCIPending {
+		t.Fatalf("initial state = %s, want CI_PENDING", initial.Issue.State)
+	}
+
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "46",
+		Status:      storage.CIRunStatusFailed,
+		CheckName:   "build",
+		Details:     "stacktrace line 1\nstacktrace line 2",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "46", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	te.fake.ProgramResult("46", agent.AgentResult{Status: agent.StatusImplemented, Summary: "ci repaired"})
+
+	repaired, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "46")
+	if err != nil {
+		t.Fatalf("RepairCIFailure: %v", err)
+	}
+	if repaired.State != domain.StateCIPending {
+		t.Fatalf("repaired state = %s, want CI_PENDING", repaired.State)
+	}
+
+	invocations := te.fake.Invocations()
+	if len(invocations) != 2 {
+		t.Fatalf("got %d agent invocations, want 2 (initial + CI repair)", len(invocations))
+	}
+	if invocations[1].WorkspacePath != invocations[0].WorkspacePath {
+		t.Fatalf("repair WorkspacePath = %q, want same as initial %q", invocations[1].WorkspacePath, invocations[0].WorkspacePath)
+	}
+	if len(invocations[1].Feedback) != 1 {
+		t.Fatalf("repair Feedback = %+v, want exactly 1 entry", invocations[1].Feedback)
+	}
+	if invocations[1].Feedback[0].Source != agent.FeedbackSourceCI {
+		t.Fatalf("repair Feedback[0].Source = %s, want CI", invocations[1].Feedback[0].Source)
+	}
+	if got := invocations[1].Feedback[0].Message; got != "CI check failed:\nCheck: build\nDetails:\nstacktrace line 1\nstacktrace line 2" {
+		t.Fatalf("repair Feedback[0].Message = %q", got)
+	}
+
+	if got := runner.Calls(); got != 2 {
+		t.Fatalf("gate calls = %d, want 2 (initial + repair rerun)", got)
+	}
+	if got := pub.pushCallCount(); got != 2 {
+		t.Fatalf("push calls = %d, want 2 (initial publish + repair publish)", got)
+	}
+	if got := prTracker.callCount(); got != 2 {
+		t.Fatalf("CreatePullRequest calls = %d, want 2 (repair should recover existing PR)", got)
+	}
+
+	issue, err := te.store.GetIssue(ctx, initial.ExecutionID, "46")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.RetryBudget.CIFailures() != 1 {
+		t.Fatalf("CIFailures() = %d, want 1", issue.RetryBudget.CIFailures())
+	}
+	if issue.RetryBudget.GateFailures() != 0 || issue.RetryBudget.ReviewFailures() != 0 {
+		t.Fatalf("unexpected retry budget after CI repair: %+v", issue.RetryBudget)
+	}
+
+	events, err := te.store.EventsByIssue(ctx, initial.ExecutionID, "46")
+	if err != nil {
+		t.Fatalf("EventsByIssue: %v", err)
+	}
+	var sawCIFailed, sawCIPending bool
+	for _, e := range events {
+		if e.Type != "issue.transitioned" {
+			continue
+		}
+		var tr struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.Unmarshal([]byte(e.Data), &tr); err != nil {
+			t.Fatalf("unmarshal transition: %v", err)
+		}
+		if tr.From == string(domain.StateCIPending) && tr.To == string(domain.StateCIFailed) {
+			sawCIFailed = true
+		}
+		if tr.From == string(domain.StatePRCreating) && tr.To == string(domain.StateCIPending) {
+			sawCIPending = true
+		}
+	}
+	if !sawCIFailed {
+		t.Fatal("did not record CI_PENDING -> CI_FAILED transition")
+	}
+	if !sawCIPending {
+		t.Fatal("did not record repaired PR_CREATING -> CI_PENDING transition")
+	}
+}
+
+func TestRepairCIFailure_CIBudgetExhaustion_RoutesToFailed(t *testing.T) {
+	te := approvedTestEngine(t, "47", domain.Issue{ID: "47", Title: "ci budget exhausted"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	te.eng.Publisher = pub
+	te.eng.PRTracker = newFakePRTracker()
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 0}
+
+	ctx := context.Background()
+	initial, err := te.eng.Execute(ctx, "47", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "47",
+		Status:      storage.CIRunStatusFailed,
+		CheckName:   "test",
+		Details:     "boom",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "47", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	repaired, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "47")
+	if err != nil {
+		t.Fatalf("RepairCIFailure: %v", err)
+	}
+	if repaired.State != domain.StateFailed {
+		t.Fatalf("repaired state = %s, want FAILED", repaired.State)
+	}
+	if got := len(te.fake.Invocations()); got != 1 {
+		t.Fatalf("agent invocations = %d, want 1 (no CI repair attempt after exhaustion)", got)
+	}
+
+	issue, err := te.store.GetIssue(ctx, initial.ExecutionID, "47")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if !issue.RetryBudget.CIExhausted() {
+		t.Fatal("CIExhausted() = false, want true")
+	}
+	if issue.RetryBudget.CIFailures() != 0 {
+		t.Fatalf("CIFailures() = %d, want 0 (ceiling already exhausted before recording)", issue.RetryBudget.CIFailures())
 	}
 }

@@ -61,6 +61,10 @@ func (s *spyWorkspaces) Cleanup(ctx context.Context, executionID, issueID string
 	return s.mgr.Cleanup(ctx, executionID, issueID)
 }
 
+func (s *spyWorkspaces) Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error) {
+	return s.mgr.Validate(ctx, executionID, issueID)
+}
+
 func (s *spyWorkspaces) CleanupCalled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

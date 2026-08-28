@@ -56,6 +56,7 @@ type IssueFetcher interface {
 type WorkspaceCreator interface {
 	Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error)
 	Cleanup(ctx context.Context, executionID, issueID string) error
+	Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error)
 }
 
 // Engine drives a single Issue through Forge's state machine, persisting
@@ -326,6 +327,65 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	return ExecuteResult{ExecutionID: execution.ID, Issue: issue}, nil
 }
 
+// RepairCIFailure resumes an Issue already parked in CI_FAILED: it reloads
+// the persisted Execution/Issue state, validates the existing Workspace,
+// rebuilds the latest failed CI diagnostic into bounded Agent feedback,
+// decrements the independent CI retry budget, and re-enters the existing
+// implementation -> validate -> review -> commit/push flow in place.
+func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
+	state, err := e.Store.LoadExecution(ctx, executionID)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: load execution %s: %w", executionID, err)
+	}
+
+	issue, err := e.Store.GetIssue(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: load issue %s: %w", issueID, err)
+	}
+	if issue.State != domain.StateCIFailed {
+		return domain.Issue{}, fmt.Errorf("engine: issue %s is %s, want CI_FAILED", issueID, issue.State)
+	}
+
+	ws, err := e.Workspaces.Validate(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: validate workspace for issue %s: %w", issueID, err)
+	}
+
+	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, state.Execution.BaseRevision)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
+	}
+
+	feedback, err := e.latestCIFeedback(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+
+	issue, retried, err := e.repair(
+		ctx, executionID, issueID, ws.Path, repoCtx, issue,
+		issue.RetryBudget.CIExhausted(), (*domain.Issue).RecordCIFailure, []agent.Feedback{feedback}, "ci",
+	)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if !retried {
+		return issue, nil
+	}
+
+	// Today each managed Issue still runs in its own Execution (see ADR
+	// 0010), so the Execution base revision is also this Worker's captured
+	// review base. If/when Forge gains one shared Execution across many
+	// Issues, Worker base capture will need to be persisted separately.
+	issue, err = e.runRepairLoop(ctx, executionID, issueID, state.Execution.BaseRevision, ws.Path, repoCtx, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if issue.State != domain.StateCommitting {
+		return issue, nil
+	}
+	return e.runCommitAndPR(ctx, executionID, issueID, ws, issue)
+}
+
 // workerRef derives the Worker identity used both to claim an Issue
 // (Store.ClaimIssue) and to release its slot on a NEEDS_INFO outcome
 // (handleNeedsInfo's "worker.released" Event) — one source for the shape
@@ -443,6 +503,27 @@ func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath
 	}
 
 	return e.invokeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback)
+}
+
+func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID string) (agent.Feedback, error) {
+	runs, err := e.Store.CIRunsByIssue(ctx, executionID, issueID)
+	if err != nil {
+		return agent.Feedback{}, fmt.Errorf("engine: load ci runs for issue %s: %w", issueID, err)
+	}
+	for i := len(runs) - 1; i >= 0; i-- {
+		if runs[i].Status == storage.CIRunStatusFailed {
+			return buildCIFeedback(runs[i]), nil
+		}
+	}
+	return agent.Feedback{}, fmt.Errorf("engine: issue %s has no failed CI run to repair", issueID)
+}
+
+func buildCIFeedback(run storage.CIRun) agent.Feedback {
+	message := fmt.Sprintf("CI check failed:\nCheck: %s", run.CheckName)
+	if run.Details != "" {
+		message += "\nDetails:\n" + run.Details
+	}
+	return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
 }
 
 // invokeAgent transitions issue to IMPLEMENTING and invokes the Agent with

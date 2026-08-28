@@ -125,6 +125,38 @@ func (w *scriptedCIWatcher) Wait(ctx context.Context, executionID, issueID strin
 	}
 }
 
+type scriptedCIRepairer struct {
+	mu       sync.Mutex
+	outcomes []scheduler.ExecuteOutcome
+	errs     []error
+	calls    []string
+}
+
+func (r *scriptedCIRepairer) Repair(_ context.Context, executionID, issueID string) (scheduler.ExecuteOutcome, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, executionID+"/"+issueID)
+	idx := len(r.calls) - 1
+	if idx >= len(r.outcomes) {
+		idx = len(r.outcomes) - 1
+	}
+	var err error
+	if len(r.errs) > 0 {
+		errIdx := len(r.calls) - 1
+		if errIdx >= len(r.errs) {
+			errIdx = len(r.errs) - 1
+		}
+		err = r.errs[errIdx]
+	}
+	return r.outcomes[idx], err
+}
+
+func (r *scriptedCIRepairer) CallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
 func issueSet(ids ...string) map[string]domain.Issue {
 	issues := make(map[string]domain.Issue, len(ids))
 	for _, id := range ids {
@@ -291,6 +323,72 @@ func TestRun_CIPendingIssueReleasesWorkerSlotWhileCIWatches(t *testing.T) {
 	results := <-done
 	if results["a"].State != domain.StateDone {
 		t.Fatalf("results[a].State = %s, want DONE after CI watch finishes", results["a"].State)
+	}
+	if results["b"].State != domain.StateReviewing {
+		t.Fatalf("results[b].State = %s, want REVIEWING", results["b"].State)
+	}
+}
+
+func TestRun_CIFailedIssueRepairsAndReturnsToCIWatch(t *testing.T) {
+	issues := issueSet("a", "b")
+	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
+		"a": {ExecutionID: "exec-a", State: domain.StateCIPending},
+		"b": {ExecutionID: "exec-b", State: domain.StateReviewing},
+	}}
+	watcher := newScriptedCIWatcher(domain.StateCIFailed)
+	repairer := &scriptedCIRepairer{
+		outcomes: []scheduler.ExecuteOutcome{
+			{ExecutionID: "exec-a", State: domain.StateCIPending},
+		},
+	}
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, alwaysSatisfied, scheduler.FixedBase("base"), 1)
+	sch.CIWatcher = watcher
+	sch.CIRepairer = repairer
+
+	done := make(chan map[string]scheduler.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		results, err := sch.Run(context.Background(), []string{"a", "b"})
+		errCh <- err
+		done <- results
+	}()
+
+	select {
+	case started := <-watcher.started:
+		if started != "exec-a/a" {
+			t.Fatalf("watcher started for %s, want exec-a/a", started)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first CI watcher start")
+	}
+	if got := exec.CallCount("b"); got != 1 {
+		t.Fatalf("CallCount(b) = %d, want 1 while a is only under CI watch", got)
+	}
+
+	watcher.release <- struct{}{}
+
+	select {
+	case started := <-watcher.started:
+		if started != "exec-a/a" {
+			t.Fatalf("second watcher start for %s, want exec-a/a", started)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for CI watcher restart after repair")
+	}
+	if got := repairer.CallCount(); got != 1 {
+		t.Fatalf("repairer calls = %d, want 1", got)
+	}
+
+	watcher.final = domain.StateDone
+	watcher.release <- struct{}{}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	results := <-done
+	if results["a"].State != domain.StateDone {
+		t.Fatalf("results[a].State = %s, want DONE after repair and second watch", results["a"].State)
 	}
 	if results["b"].State != domain.StateReviewing {
 		t.Fatalf("results[b].State = %s, want REVIEWING", results["b"].State)
