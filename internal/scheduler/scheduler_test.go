@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,7 @@ func newGatedExecutor() *gatedExecutor {
 	return &gatedExecutor{calls: map[string]int{}, release: make(chan struct{})}
 }
 
-func (e *gatedExecutor) Execute(ctx context.Context, issueID, _ string) (domain.IssueState, error) {
+func (e *gatedExecutor) Execute(ctx context.Context, issueID, _ string) (scheduler.ExecuteOutcome, error) {
 	e.mu.Lock()
 	e.running++
 	if e.running > e.maxObserved {
@@ -80,7 +81,7 @@ func (e *gatedExecutor) Execute(ctx context.Context, issueID, _ string) (domain.
 	e.mu.Lock()
 	e.running--
 	e.mu.Unlock()
-	return domain.StateReviewing, nil
+	return scheduler.ExecuteOutcome{ExecutionID: "exec-" + issueID, State: domain.StateReviewing}, nil
 }
 
 func (e *gatedExecutor) releaseOne() { e.release <- struct{}{} }
@@ -233,7 +234,7 @@ type recordingExecutor struct {
 	bases map[string]string
 }
 
-func (e *recordingExecutor) Execute(_ context.Context, issueID, base string) (domain.IssueState, error) {
+func (e *recordingExecutor) Execute(_ context.Context, issueID, base string) (scheduler.ExecuteOutcome, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.order = append(e.order, issueID)
@@ -241,7 +242,7 @@ func (e *recordingExecutor) Execute(_ context.Context, issueID, base string) (do
 		e.bases = map[string]string{}
 	}
 	e.bases[issueID] = base
-	return domain.StateReviewing, nil
+	return scheduler.ExecuteOutcome{ExecutionID: "exec-" + issueID, State: domain.StateReviewing}, nil
 }
 
 func (e *recordingExecutor) Order() []string {
@@ -314,6 +315,217 @@ func TestRun_DependentIssueWaitsThenUsesUpdatedBase(t *testing.T) {
 	}
 	if got := exec.BaseFor("b"); got != "base-after-merge" {
 		t.Errorf("BaseFor(b) = %s, want base-after-merge (captured at b's READY moment, after a's merge)", got)
+	}
+}
+
+// scriptedExecutor is a fake Executor that returns a fixed, programmed
+// ExecuteOutcome/error per Issue ID, without blocking. Used for the no-
+// -progress (stall) tests below where the prerequisite's own Execute must
+// return promptly in a non-publish-ready state.
+type scriptedExecutor struct {
+	mu       sync.Mutex
+	outcomes map[string]scheduler.ExecuteOutcome
+	errs     map[string]error
+	calls    map[string]int
+}
+
+func (e *scriptedExecutor) Execute(_ context.Context, issueID, _ string) (scheduler.ExecuteOutcome, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.calls == nil {
+		e.calls = map[string]int{}
+	}
+	e.calls[issueID]++
+	return e.outcomes[issueID], e.errs[issueID]
+}
+
+func (e *scriptedExecutor) CallCount(issueID string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls[issueID]
+}
+
+var _ scheduler.Executor = (*scriptedExecutor)(nil)
+
+// TestRun_PrerequisiteFailed_DependentRecordedUnsatisfiable is the P1
+// no-progress fix's core regression test: "a" finishes FAILED (a legal,
+// non-error Executor outcome), which a realistic DependencyResolver (like
+// cmd/forge's completionResolver) never considers satisfied. "b" (which
+// depends on "a") must never be dispatched, and Run must return promptly
+// with an explicit "unsatisfiable dependency" Result for "b" instead of
+// polling forever.
+func TestRun_PrerequisiteFailed_DependentRecordedUnsatisfiable(t *testing.T) {
+	issues := issueSet("a", "b")
+	issues["b"] = domain.Issue{ID: "b", Dependencies: []domain.Dependency{{IssueID: "b", DependsOnID: "a"}}}
+
+	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
+		"a": {ExecutionID: "exec-a", State: domain.StateFailed},
+		"b": {ExecutionID: "exec-b", State: domain.StateReviewing},
+	}}
+
+	// A resolver that only ever considers "a" satisfied once it locally
+	// reports success — mirroring cmd/forge's completionResolver, which
+	// never marks a FAILED prerequisite satisfied.
+	var mu sync.Mutex
+	satisfied := map[string]bool{}
+	resolver := scheduler.DependencyResolverFunc(func(_ context.Context, _, dependsOnID string) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return satisfied[dependsOnID], nil
+	})
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = 2 * time.Millisecond
+	sch.OnComplete = func(issueID string, state domain.IssueState, err error) {
+		if err != nil || state != domain.StateReviewing {
+			return // FAILED never satisfies a Dependency.
+		}
+		mu.Lock()
+		satisfied[issueID] = true
+		mu.Unlock()
+	}
+
+	done := make(chan struct{})
+	var results map[string]scheduler.Result
+	var runErr error
+	go func() {
+		results, runErr = sch.Run(context.Background(), []string{"a", "b"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly after the prerequisite failed (hang)")
+	}
+
+	if runErr == nil {
+		t.Fatal("Run: want a non-nil error, got nil")
+	}
+	if results["a"].State != domain.StateFailed {
+		t.Errorf("results[a].State = %s, want FAILED", results["a"].State)
+	}
+	if results["b"].Err == nil || !strings.Contains(results["b"].Err.Error(), "unsatisfiable") {
+		t.Errorf("results[b].Err = %v, want an unsatisfiable-dependency error", results["b"].Err)
+	}
+	if results["b"].Err == nil || !strings.Contains(results["b"].Err.Error(), "a") {
+		t.Errorf("results[b].Err = %v, want it to name the unsatisfied prerequisite %q", results["b"].Err, "a")
+	}
+	if got := exec.CallCount("b"); got != 0 {
+		t.Errorf("CallCount(b) = %d, want 0 (b must never be dispatched)", got)
+	}
+}
+
+// TestRun_PrerequisiteHardErrors_DependentRecordedUnsatisfiable is the P1
+// fix's other required case: the prerequisite's Executor.Execute call
+// itself returns a hard error (rather than merely finishing in a
+// non-publish-ready state). The dependent must still be recorded
+// unsatisfiable and Run must still return promptly.
+func TestRun_PrerequisiteHardErrors_DependentRecordedUnsatisfiable(t *testing.T) {
+	issues := issueSet("a", "b")
+	issues["b"] = domain.Issue{ID: "b", Dependencies: []domain.Dependency{{IssueID: "b", DependsOnID: "a"}}}
+
+	exec := &scriptedExecutor{
+		outcomes: map[string]scheduler.ExecuteOutcome{"b": {State: domain.StateReviewing}},
+		errs:     map[string]error{"a": errors.New("boom: agent subprocess crashed")},
+	}
+	resolver := alwaysUnsatisfied
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = 2 * time.Millisecond
+
+	done := make(chan struct{})
+	var results map[string]scheduler.Result
+	var runErr error
+	go func() {
+		results, runErr = sch.Run(context.Background(), []string{"a", "b"})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly after the prerequisite hard-errored (hang)")
+	}
+
+	if runErr == nil {
+		t.Fatal("Run: want a non-nil error, got nil")
+	}
+	if results["a"].Err == nil {
+		t.Error("results[a].Err is nil, want the hard error Executor returned")
+	}
+	if results["b"].Err == nil || !strings.Contains(results["b"].Err.Error(), "unsatisfiable") {
+		t.Errorf("results[b].Err = %v, want an unsatisfiable-dependency error", results["b"].Err)
+	}
+	if got := exec.CallCount("b"); got != 0 {
+		t.Errorf("CallCount(b) = %d, want 0 (b must never be dispatched)", got)
+	}
+}
+
+// alwaysUnsatisfied is a DependencyResolver reporting every Dependency
+// unsatisfied, for the hard-error stall test above where satisfaction is
+// never expected to flip.
+var alwaysUnsatisfied = scheduler.DependencyResolverFunc(func(context.Context, string, string) (bool, error) {
+	return false, nil
+})
+
+// TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers is the P2
+// fix's regression test: while "a" is still mid-Execute (in flight),
+// DependencyResolver.Satisfied errors for an unrelated Issue "c" (the
+// out-of-set-dependency case cmd/forge's completionResolver hits). Run must
+// not abandon "a": it cancels its internal context, waits for "a" to
+// finish, and returns "a"'s Result alongside the error rather than leaking
+// the goroutine or hanging.
+func TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers(t *testing.T) {
+	issues := issueSet("a", "c")
+	issues["c"] = domain.Issue{ID: "c", Dependencies: []domain.Dependency{{IssueID: "c", DependsOnID: "x"}}}
+
+	exec := newGatedExecutor()
+	started := make(chan string, 1)
+	exec.onDispatch = func(id string) { started <- id }
+
+	wantErrSubstring := "outside the requested set"
+	resolver := scheduler.DependencyResolverFunc(func(_ context.Context, issueID, dependsOnID string) (bool, error) {
+		if issueID == "c" {
+			return false, fmt.Errorf("issue c depends on %s, which is %s", dependsOnID, wantErrSubstring)
+		}
+		return true, nil
+	})
+
+	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = time.Millisecond
+
+	done := make(chan struct{})
+	var results map[string]scheduler.Result
+	var runErr error
+	go func() {
+		results, runErr = sch.Run(context.Background(), []string{"a", "c"})
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a to start")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after a dependency-check error (goroutine leak / hang)")
+	}
+
+	if runErr == nil || !strings.Contains(runErr.Error(), wantErrSubstring) {
+		t.Fatalf("Run err = %v, want it to mention %q", runErr, wantErrSubstring)
+	}
+	if _, ok := results["a"]; !ok {
+		t.Error(`results missing "a": the in-flight Worker must be waited for, not abandoned`)
+	}
+	if _, ok := results["c"]; ok {
+		t.Error(`results contains "c": it should never have been dispatched`)
+	}
+	if got := exec.CallCount("c"); got != 0 {
+		t.Errorf("CallCount(c) = %d, want 0", got)
 	}
 }
 
@@ -440,6 +652,9 @@ func TestRun_RealEngine_DependentIssueStartsFromMergedBase(t *testing.T) {
 	for _, id := range []string{"20", "21"} {
 		if results[id].State != domain.StateReviewing {
 			t.Errorf("results[%s].State = %s, want REVIEWING", id, results[id].State)
+		}
+		if results[id].ExecutionID == "" {
+			t.Errorf("results[%s].ExecutionID is empty, want the Execution ID Engine.Execute minted", id)
 		}
 	}
 

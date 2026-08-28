@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 
-	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 )
 
@@ -21,7 +20,7 @@ func Adapt(eng *engine.Engine) Executor {
 	return engineExecutor{eng: eng}
 }
 
-func (a engineExecutor) Execute(ctx context.Context, issueID, baseRevision string) (domain.IssueState, error) {
+func (a engineExecutor) Execute(ctx context.Context, issueID, baseRevision string) (ExecuteOutcome, error) {
 	result, err := a.eng.Execute(ctx, issueID, baseRevision)
-	return result.Issue.State, err
+	return ExecuteOutcome{ExecutionID: result.ExecutionID, State: result.Issue.State}, err
 }
