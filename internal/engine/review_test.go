@@ -126,15 +126,21 @@ func TestExecute_ReviewApproved_AdvancesToCommitting(t *testing.T) {
 	}
 }
 
-// TestExecute_ReviewChangesRequired_RoutesFindingsAndReturnsToImplementing
-// is ticket 20's second integration test: gates pass, Review returns
-// CHANGES_REQUIRED, and the Issue returns to IMPLEMENTING with structured
-// Findings persisted and available as agent.Feedback.
-func TestExecute_ReviewChangesRequired_RoutesFindingsAndReturnsToImplementing(t *testing.T) {
+// TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed
+// is ticket 20's second integration test, updated for ticket 21's repair
+// loop: gates pass, Review returns CHANGES_REQUIRED, and — with the review
+// retry budget pinned to 0 so this stays a single Review attempt — the
+// Issue is routed straight to FAILED once that budget is exhausted, with
+// the structured Findings persisted. (The full retry path, where a
+// remaining budget instead re-invokes the Agent with these Findings as
+// agent.Feedback per review.BuildFeedback, has its own dedicated tests in
+// retry_test.go.)
+func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"31": {ID: "31"},
 	})
 	te.fake.ProgramResult("31", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Retry.Review = 0
 
 	reviewer := review.NewFakeReviewer()
 	reviewer.ProgramResult("31", review.Result{
@@ -152,8 +158,8 @@ func TestExecute_ReviewChangesRequired_RoutesFindingsAndReturnsToImplementing(t 
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateImplementing {
-		t.Fatalf("final state = %s, want IMPLEMENTING", result.Issue.State)
+	if result.Issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
 	}
 
 	runs, err := te.store.ReviewRunsByIssue(ctx, result.ExecutionID, "31")
@@ -171,11 +177,11 @@ func TestExecute_ReviewChangesRequired_RoutesFindingsAndReturnsToImplementing(t 
 		t.Errorf("persisted finding = %+v, want ERROR main.go:42 %q", f, "unhandled error")
 	}
 
-	// review.BuildFeedback (see internal/review/feedback_test.go) can turn
-	// these persisted Findings into agent.Feedback with Source = review, per
-	// issue 20's acceptance criteria; the engine itself does not call it yet
-	// — actually re-invoking the Agent with that Feedback is ticket 21's
-	// concern, not this one's.
+	// The Agent was never re-invoked: the review budget was already
+	// exhausted before a repair could be attempted.
+	if got := len(te.fake.Invocations()); got != 1 {
+		t.Errorf("got %d agent invocations, want 1 (no repair attempted)", got)
+	}
 }
 
 func TestExecute_ReviewerUnset_ReviewingStaysRestingState(t *testing.T) {
@@ -239,6 +245,10 @@ func TestExecute_QualityGateFails_ReviewerNeverInvoked(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{
 		{Name: "test", Command: "make test"},
 	}
+	// A zero gate budget keeps this a single-attempt check (the repair loop
+	// itself, including a retry that eventually reaches Review, has its own
+	// dedicated tests in retry_test.go).
+	te.eng.Config.Retry.Gate = 0
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 1, "failure output", "")
 	te.eng.Gates = runner

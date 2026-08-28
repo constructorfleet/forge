@@ -257,6 +257,26 @@ func (s *SQLiteStore) TransitionIssue(ctx context.Context, executionID, issueID 
 	return issue, nil
 }
 
+// UpdateRetryBudget persists budget's used-counters for issueID within
+// executionID. See Store.UpdateRetryBudget's doc comment for why the
+// repair loop needs this: TransitionIssue always reloads the Issue fresh
+// from execution_issues, so an in-memory-only RecordGateFailure/
+// RecordReviewRejection/RecordCIFailure would otherwise be silently
+// discarded on the very next transition.
+func (s *SQLiteStore) UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE execution_issues
+		SET retry_gate_used = ?, retry_review_used = ?, retry_ci_used = ?
+		WHERE execution_id = ? AND issue_id = ?`,
+		budget.GateFailures(), budget.ReviewFailures(), budget.CIFailures(),
+		executionID, issueID,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: update retry budget for issue %s/%s: %w", executionID, issueID, err)
+	}
+	return nil
+}
+
 // updateIssueStateCAS updates an Issue's state only if it still matches
 // `from`, returning the number of rows affected (0 or 1). This is a
 // compare-and-swap guard on top of the transactional isolation the current

@@ -125,6 +125,15 @@ type Store interface {
 	// and returns *domain.InvalidTransitionError.
 	TransitionIssue(ctx context.Context, executionID, issueID string, to domain.IssueState) (domain.Issue, error)
 
+	// UpdateRetryBudget persists budget's current used-counters (gate,
+	// review, CI) for issueID within executionID; the configured limits are
+	// immutable after CreateIssue and are not touched. Ticket 21's repair
+	// loop calls this immediately after incrementing a counter in memory
+	// (domain.Issue.RecordGateFailure/RecordReviewRejection/RecordCIFailure)
+	// so a subsequent TransitionIssue/GetIssue reload reflects the new
+	// count rather than silently reverting it to what CreateIssue wrote.
+	UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error
+
 	// ClaimIssue records a Worker claim on an Issue and appends a claim
 	// Event, transactionally. Returns ErrAlreadyClaimed if the Issue is
 	// already claimed within the Execution — enforced by a unique

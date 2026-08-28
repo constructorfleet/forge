@@ -251,6 +251,10 @@ func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
 // FAILED with the diagnostic persisted — the full bounded stdout/stderr via
 // the gate_runs row (Store.GateRunsByIssue), and a lean "gate.failed" Event
 // (name/command/exit_code only, not a duplicate of the captured output).
+// The gate retry budget is pinned to 0 so this exercises the
+// budget-immediately-exhausted path of ticket 21's repair loop (a single
+// gate attempt, straight to FAILED) rather than its retry path, which has
+// its own dedicated tests in retry_test.go.
 func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"21": {ID: "21"},
@@ -260,6 +264,7 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 		{Name: "test", Command: "make test"},
 		{Name: "lint", Command: "make lint"},
 	}
+	te.eng.Config.Retry.Gate = 0
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 1, "1 test failed", "assertion error in foo_test.go")
 	te.eng.Gates = runner
