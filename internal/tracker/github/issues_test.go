@@ -2,10 +2,12 @@ package github_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
@@ -121,5 +123,73 @@ func TestGetIssues_FetchesMultiple(t *testing.T) {
 	}
 	if !seen["/repos/acme/widgets/issues/1"] || !seen["/repos/acme/widgets/issues/2"] {
 		t.Fatalf("did not fetch both issues: %v", seen)
+	}
+}
+
+func TestCreateIssue_PostsAndNormalizesResponse(t *testing.T) {
+	var gotBody map[string]string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		if r.URL.Path != "/repos/acme/widgets/issues" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"number":99,"html_url":"https://github.com/acme/widgets/issues/99"}`))
+	})
+
+	created, err := c.CreateIssue(context.Background(), tracker.IssueRequest{Title: "New thing", Body: "desc"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["title"] != "New thing" || gotBody["body"] != "desc" {
+		t.Fatalf("unexpected request body: %+v", gotBody)
+	}
+	if created.ID != "99" {
+		t.Fatalf("got ID %q, want 99", created.ID)
+	}
+	if created.URL != "https://github.com/acme/widgets/issues/99" {
+		t.Fatalf("got URL %q", created.URL)
+	}
+}
+
+func TestCreateIssue_ThenGetIssue_FetchesTheCreatedIssue(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/issues":
+			_, _ = w.Write([]byte(`{"number":5,"title":"Created","html_url":"https://github.com/acme/widgets/issues/5"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/issues/5":
+			_, _ = w.Write([]byte(`{"number":5,"title":"Created","body":"## Dependencies: None"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	created, err := c.CreateIssue(context.Background(), tracker.IssueRequest{Title: "Created"})
+	if err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	fetched, err := c.GetIssue(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if fetched.ID != created.ID || fetched.Title != "Created" {
+		t.Fatalf("fetched issue %+v does not match created issue %+v", fetched, created)
+	}
+}
+
+func TestCapabilities_PlanningMirrorIsFalse(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("Capabilities should not make a network request")
+	})
+
+	caps := c.Capabilities()
+	if caps.PlanningMirror {
+		t.Fatal("expected PlanningMirror to be false for MVP")
 	}
 }
