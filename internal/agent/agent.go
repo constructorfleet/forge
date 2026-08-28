@@ -57,13 +57,27 @@ type RepositoryContext struct {
 	// layout supplied to the Agent (e.g. directory tree, key files).
 	ProjectStructure string
 
-	// AgentInstructions is repository-level guidance for the Agent (e.g.
-	// CLAUDE.md contents or equivalent).
+	// AgentInstructions is repository-level guidance for the Agent,
+	// normalized and merged from AGENTS.md and CLAUDE.md when present (see
+	// ticket 17, the Repository Context compiler).
 	AgentInstructions string
 
 	// QualityGates lists the Quality Gate commands the implementation must
-	// satisfy before publication (see CONTEXT.md "Quality Gate").
+	// satisfy before publication (see CONTEXT.md "Quality Gate"). These are
+	// sourced exclusively from configuration (config.Config); Workers never
+	// rediscover them by scanning the repository.
 	QualityGates []string
+
+	// Languages lists the programming languages detected in the repository
+	// from project manifests (e.g. go.mod -> Go). Informational only: it
+	// describes the repository for the Agent's benefit and never determines
+	// QualityGates, which are configured, not detected.
+	Languages []string
+
+	// PackageManagers lists the package managers detected in the repository
+	// from project manifests (e.g. go.mod -> Go Modules). Informational
+	// only, for the same reason as Languages.
+	PackageManagers []string
 }
 
 // WorkflowPolicy is the set of workflow rules in effect for a Worker. This

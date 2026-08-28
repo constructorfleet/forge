@@ -88,10 +88,11 @@ func (f *FakeAgent) Execute(_ context.Context, req AgentRequest) (AgentResult, e
 
 // Invocations returns every AgentRequest passed to Execute so far, in call
 // order. Each returned AgentRequest (including its reference-typed fields,
-// such as Feedback, Repository.QualityGates, and Issue.Dependencies) is
-// independent of both the caller's original slices and any other snapshot
-// returned by Invocations; mutating one has no effect on the FakeAgent or
-// on other snapshots.
+// such as Feedback, Repository.QualityGates, Repository.Languages,
+// Repository.PackageManagers, and Issue.Dependencies) is independent of both
+// the caller's original slices and any other snapshot returned by
+// Invocations; mutating one has no effect on the FakeAgent or on other
+// snapshots.
 func (f *FakeAgent) Invocations() []AgentRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -102,14 +103,17 @@ func (f *FakeAgent) Invocations() []AgentRequest {
 	return out
 }
 
-// cloneRequest returns a copy of req whose reference-typed fields
-// (Feedback, Repository.QualityGates, Issue.Dependencies) have independent
-// backing arrays, so neither the caller nor a recorded invocation can
-// retroactively mutate the other through a shared slice.
+// cloneRequest returns a copy of req whose reference-typed fields (Feedback,
+// Repository.QualityGates, Repository.Languages, Repository.PackageManagers,
+// Issue.Dependencies) have independent backing arrays, so neither the caller
+// nor a recorded invocation can retroactively mutate the other through a
+// shared slice.
 func cloneRequest(req AgentRequest) AgentRequest {
 	clone := req
 	clone.Feedback = append([]Feedback(nil), req.Feedback...)
 	clone.Repository.QualityGates = append([]string(nil), req.Repository.QualityGates...)
+	clone.Repository.Languages = append([]string(nil), req.Repository.Languages...)
+	clone.Repository.PackageManagers = append([]string(nil), req.Repository.PackageManagers...)
 	clone.Issue.Dependencies = append([]domain.Dependency(nil), req.Issue.Dependencies...)
 	return clone
 }
