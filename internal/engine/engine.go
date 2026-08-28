@@ -290,9 +290,10 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 		if err != nil {
 			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 		}
+		var gatesPassed bool
 		var gateResults []gate.Result
-		issue, gateResults, err = e.runQualityGates(ctx, execution.ID, issueID, ws.Path, issue)
-		if err == nil && issue.State == domain.StateReviewing {
+		issue, gatesPassed, gateResults, err = e.runQualityGates(ctx, execution.ID, issueID, ws.Path, issue)
+		if err == nil && gatesPassed {
 			issue, err = e.runReview(ctx, execution.ID, issueID, workerBase, ws.Path, repoCtx, issue, gateResults)
 		}
 	case agent.StatusNeedsInfo:
@@ -322,7 +323,12 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 // (gate.BuildFeedback) from the failing GateRun and routing it back to
 // IMPLEMENTING under a retry budget is ticket 21's concern — this is
 // deliberately a single-pass gate check.
-func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (domain.Issue, []gate.Result, error) {
+//
+// The returned passed bool is Execute's explicit "did gates pass" signal —
+// callers should branch on it directly rather than re-deriving the same
+// fact by comparing the returned Issue's State against
+// domain.StateReviewing.
+func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (_ domain.Issue, passed bool, _ []gate.Result, _ error) {
 	runner := gate.NewRunner(e.Gates)
 	results := runner.Run(ctx, workspacePath, e.Config.Quality.Gates, gate.Options{
 		MaxOutputBytes: e.Config.Quality.MaxOutputBytes,
@@ -343,7 +349,7 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 			Stderr:      res.Stderr,
 			Passed:      res.Passed,
 		}); err != nil {
-			return domain.Issue{}, nil, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
+			return domain.Issue{}, false, nil, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
 		}
 		if !res.Passed && failed == nil {
 			failed = &results[i]
@@ -352,7 +358,7 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 
 	if failed == nil {
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateReviewing)
-		return issue, results, err
+		return issue, true, results, err
 	}
 
 	// The "gate.failed" Event stays lean (name/command/exit_code, matching
@@ -365,11 +371,11 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 		"command":   failed.Command,
 		"exit_code": fmt.Sprint(failed.ExitCode),
 	}); err != nil {
-		return domain.Issue{}, nil, err
+		return domain.Issue{}, false, nil, err
 	}
 
 	issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
-	return issue, nil, err
+	return issue, false, nil, err
 }
 
 // runReview implements REVIEWING once Quality Gates have passed (ticket 20,
@@ -390,6 +396,11 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 // 21's concern — this ticket's scope stops at the single
 // CHANGES_REQUIRED -> IMPLEMENTING transition with Findings
 // persisted/available.
+//
+// The diff itself only reflects committed work (see cmd/forge's
+// gitDiffProducer doc comment): until ticket 22's commit step exists, a
+// production Reviewer wired up here would see an empty diff regardless of
+// what the Agent changed on disk.
 func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, gateResults []gate.Result) (domain.Issue, error) {
 	if e.Reviewer == nil {
 		return issue, nil

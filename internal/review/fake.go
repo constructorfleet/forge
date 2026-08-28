@@ -2,87 +2,60 @@ package review
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/fake"
 	"github.com/Teagan42/forge/internal/gate"
 )
 
 // var declaration ensures FakeReviewer satisfies Reviewer at compile time.
 var _ Reviewer = (*FakeReviewer)(nil)
 
-// outcome is one programmed Review response: either a result or an error.
-type outcome struct {
-	result Result
-	err    error
-}
-
 // FakeReviewer is a deterministic Reviewer implementation for tests,
-// mirroring agent.FakeAgent: outcomes are programmed per Issue ID, and each
-// Review call consumes the next queued outcome for its Issue (or repeats
-// the last one) and is recorded for later assertion.
+// mirroring agent.FakeAgent: outcomes are programmed per Issue ID via the
+// shared fake.OutcomeQueue (consume in order, repeat the last one, fall
+// back to a default), and FakeReviewer itself only owns recording
+// invocations for later assertion.
 type FakeReviewer struct {
-	mu             sync.Mutex
-	invocations    []Request
-	outcomes       map[string][]outcome
-	defaultOutcome *outcome
+	outcomes *fake.OutcomeQueue[Result]
+
+	mu          sync.Mutex
+	invocations []Request
 }
 
 // NewFakeReviewer returns an empty FakeReviewer with no programmed
 // outcomes.
 func NewFakeReviewer() *FakeReviewer {
-	return &FakeReviewer{outcomes: map[string][]outcome{}}
+	return &FakeReviewer{outcomes: fake.NewOutcomeQueue[Result]()}
 }
 
 // ProgramResult queues result as the next outcome Review returns for the
 // Issue identified by issueID.
 func (f *FakeReviewer) ProgramResult(issueID string, result Result) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.outcomes[issueID] = append(f.outcomes[issueID], outcome{result: result})
+	f.outcomes.ProgramResult(issueID, result)
 }
 
 // ProgramError queues err as the next outcome Review returns for the Issue
 // identified by issueID.
 func (f *FakeReviewer) ProgramError(issueID string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.outcomes[issueID] = append(f.outcomes[issueID], outcome{err: err})
+	f.outcomes.ProgramError(issueID, err)
 }
 
 // ProgramDefault sets the outcome Review returns for any Issue with no (or
 // exhausted) queued outcomes of its own.
 func (f *FakeReviewer) ProgramDefault(result Result) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.defaultOutcome = &outcome{result: result}
+	f.outcomes.ProgramDefault(result)
 }
 
 // Review records req and returns the next programmed outcome for
-// req.Issue.ID, per the same consume/repeat/default rules as
-// agent.FakeAgent.Execute.
+// req.Issue.ID, per fake.OutcomeQueue's consume/repeat/default rules.
 func (f *FakeReviewer) Review(_ context.Context, req Request) (Result, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	f.invocations = append(f.invocations, cloneRequest(req))
+	f.mu.Unlock()
 
-	issueID := req.Issue.ID
-	queue := f.outcomes[issueID]
-	var oc outcome
-	switch {
-	case len(queue) > 0:
-		oc = queue[0]
-		if len(queue) > 1 {
-			f.outcomes[issueID] = queue[1:]
-		}
-	case f.defaultOutcome != nil:
-		oc = *f.defaultOutcome
-	default:
-		return Result{}, fmt.Errorf("review: no outcome programmed for issue %q", issueID)
-	}
-	return oc.result, oc.err
+	return f.outcomes.Next(req.Issue.ID)
 }
 
 // Invocations returns every Request passed to Review so far, in call order.

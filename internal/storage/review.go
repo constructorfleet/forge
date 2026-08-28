@@ -82,6 +82,14 @@ func appendReviewRunEvent(ctx context.Context, tx *sql.Tx, run ReviewRun) error 
 
 // ReviewRunsByIssue returns every ReviewRun recorded for one Issue within an
 // Execution, ordered by insertion, each with its Findings populated.
+// ReviewRunsByIssue issues one findings query per ReviewRun (N+1) rather
+// than a single join. Acceptable for now: an Issue accumulates at most a
+// handful of ReviewRuns (one per Review invocation, bounded by the review
+// retry ceiling — CONTEXT.md "Retry Budget"), not an unbounded collection,
+// so this stays a small, fixed number of round trips per call rather than
+// scaling with data volume. Revisit with a single review_runs/
+// review_findings join (grouping rows as they're scanned, ordered by run
+// id then finding id) if that assumption stops holding.
 func (s *SQLiteStore) ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]ReviewRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, execution_id, issue_id, verdict, summary, diff, started_at, finished_at

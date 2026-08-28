@@ -171,15 +171,11 @@ func TestExecute_ReviewChangesRequired_RoutesFindingsAndReturnsToImplementing(t 
 		t.Errorf("persisted finding = %+v, want ERROR main.go:42 %q", f, "unhandled error")
 	}
 
-	// Findings are available as agent.Feedback with Source = review (routed
-	// back to the implementation Worker per issue 20's acceptance
-	// criteria); ticket 21 owns actually re-invoking the Agent with them.
-	feedback := review.BuildFeedback([]review.Finding{
-		{Severity: review.Severity(f.Severity), File: f.File, Line: f.Line, Message: f.Message},
-	})
-	if len(feedback) != 1 || feedback[0].Source != agent.FeedbackSourceReview {
-		t.Fatalf("BuildFeedback(persisted finding) = %+v, want one Feedback with Source REVIEW", feedback)
-	}
+	// review.BuildFeedback (see internal/review/feedback_test.go) can turn
+	// these persisted Findings into agent.Feedback with Source = review, per
+	// issue 20's acceptance criteria; the engine itself does not call it yet
+	// — actually re-invoking the Agent with that Feedback is ticket 21's
+	// concern, not this one's.
 }
 
 func TestExecute_ReviewerUnset_ReviewingStaysRestingState(t *testing.T) {

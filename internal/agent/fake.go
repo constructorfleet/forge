@@ -2,88 +2,58 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/fake"
 )
 
 // var declaration ensures FakeAgent satisfies Agent at compile time.
 var _ Agent = (*FakeAgent)(nil)
 
-// outcome is one programmed Execute response: either a result or an error.
-type outcome struct {
-	result AgentResult
-	err    error
-}
-
 // FakeAgent is a deterministic Agent implementation for tests. Outcomes are
-// programmed per Issue ID; each Execute call consumes the next queued
-// outcome for its Issue (or repeats the last one, so repair-iteration tests
-// can call Execute more times than were explicitly programmed) and is
-// recorded for later assertion.
+// programmed per Issue ID via the shared fake.OutcomeQueue (consume in
+// order, repeat the last one, fall back to a default — see its doc
+// comment); FakeAgent itself only owns recording invocations for later
+// assertion.
 type FakeAgent struct {
-	mu             sync.Mutex
-	invocations    []AgentRequest
-	outcomes       map[string][]outcome
-	defaultOutcome *outcome
+	outcomes *fake.OutcomeQueue[AgentResult]
+
+	mu          sync.Mutex
+	invocations []AgentRequest
 }
 
 // NewFakeAgent returns an empty FakeAgent with no programmed outcomes.
 func NewFakeAgent() *FakeAgent {
-	return &FakeAgent{outcomes: map[string][]outcome{}}
+	return &FakeAgent{outcomes: fake.NewOutcomeQueue[AgentResult]()}
 }
 
 // ProgramResult queues result as the next outcome Execute returns for the
 // Issue identified by issueID.
 func (f *FakeAgent) ProgramResult(issueID string, result AgentResult) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.outcomes[issueID] = append(f.outcomes[issueID], outcome{result: result})
+	f.outcomes.ProgramResult(issueID, result)
 }
 
 // ProgramError queues err as the next outcome Execute returns for the Issue
 // identified by issueID.
 func (f *FakeAgent) ProgramError(issueID string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.outcomes[issueID] = append(f.outcomes[issueID], outcome{err: err})
+	f.outcomes.ProgramError(issueID, err)
 }
 
 // ProgramDefault sets the outcome Execute returns for any Issue with no (or
 // exhausted) queued outcomes of its own.
 func (f *FakeAgent) ProgramDefault(result AgentResult) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.defaultOutcome = &outcome{result: result}
+	f.outcomes.ProgramDefault(result)
 }
 
 // Execute records req and returns the next programmed outcome for
-// req.Issue.ID. If that Issue's queue has more than one outcome, each call
-// consumes one until only the last remains, which is then repeated. If
-// nothing is programmed for the Issue, the default outcome is used; if no
-// default is set either, Execute returns an error.
+// req.Issue.ID, per fake.OutcomeQueue's consume/repeat/default rules.
 func (f *FakeAgent) Execute(_ context.Context, req AgentRequest) (AgentResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	f.invocations = append(f.invocations, cloneRequest(req))
+	f.mu.Unlock()
 
-	issueID := req.Issue.ID
-	queue := f.outcomes[issueID]
-	var oc outcome
-	switch {
-	case len(queue) > 0:
-		oc = queue[0]
-		if len(queue) > 1 {
-			f.outcomes[issueID] = queue[1:]
-		}
-	case f.defaultOutcome != nil:
-		oc = *f.defaultOutcome
-	default:
-		return AgentResult{}, fmt.Errorf("agent: no outcome programmed for issue %q", issueID)
-	}
-	return oc.result, oc.err
+	return f.outcomes.Next(req.Issue.ID)
 }
 
 // Invocations returns every AgentRequest passed to Execute so far, in call
