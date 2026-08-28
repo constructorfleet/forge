@@ -4,17 +4,17 @@
 
 **Blocked by:** 12 — Configuration loading and validation
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Detects base branch from Git config
-- [ ] Detects package manager from lockfiles and manifests
-- [ ] Detects test, lint, format-check, typecheck, and build commands
-- [ ] Reads CI workflow files for command hints
-- [ ] Reads AGENTS.md / CLAUDE.md for agent instruction presence
-- [ ] Detects tracker type from Git remote
-- [ ] Priority: explicit config formats > CI workflows > conventional defaults
-- [ ] Unresolved fields left with clear markers (not silently defaulted to wrong values)
-- [ ] Generated `.forge.yaml` is valid and loadable
-- [ ] Does not modify issue bodies, create labels, or configure branch protection
-- [ ] No LLM invocation
-- [ ] Tests cover Go, Node/pnpm, Python, and Rust project detection
+- [x] Detects base branch from Git config
+- [x] Detects package manager from lockfiles and manifests
+- [x] Detects test, lint, format-check, typecheck, and build commands
+- [x] Reads CI workflow files for command hints
+- [x] Reads AGENTS.md / CLAUDE.md for agent instruction presence
+- [x] Detects tracker type from Git remote
+- [x] Priority: explicit config formats > CI workflows > conventional defaults
+- [x] Unresolved fields left with clear markers (not silently defaulted to wrong values)
+- [x] Generated `.forge.yaml` is valid and loadable
+- [x] Does not modify issue bodies, create labels, or configure branch protection
+- [x] No LLM invocation
+- [x] Tests cover Go, Node/pnpm, Python, and Rust project detection

@@ -4,13 +4,13 @@
 
 **Blocked by:** 11 — Project skeleton, domain model, and state machine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Agent interface defined with `Execute` method
-- [ ] AgentRequest carries workspace path, issue context, repository context, workflow policy, and feedback
-- [ ] AgentResult carries status (IMPLEMENTED / NEEDS_INFO / FAILED), summary, and structured needs-info detail
-- [ ] Fake adapter supports configurable outcomes per scenario
-- [ ] Fake adapter supports success, failure, and needs-info scenarios
-- [ ] Fake adapter records invocations for test assertions
-- [ ] Orchestrator code has no Claude or Codex dependencies
-- [ ] Scheduler integration tests can use fake adapter
+- [x] Agent interface defined with `Execute` method
+- [x] AgentRequest carries workspace path, issue context, repository context, workflow policy, and feedback
+- [x] AgentResult carries status (IMPLEMENTED / NEEDS_INFO / FAILED), summary, and structured needs-info detail
+- [x] Fake adapter supports configurable outcomes per scenario
+- [x] Fake adapter supports success, failure, and needs-info scenarios
+- [x] Fake adapter records invocations for test assertions
+- [x] Orchestrator code has no Claude or Codex dependencies
+- [x] Scheduler integration tests can use fake adapter

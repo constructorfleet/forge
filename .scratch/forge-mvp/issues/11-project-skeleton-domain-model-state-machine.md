@@ -4,15 +4,15 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Go module initializes and builds
-- [ ] CLI executable runs and prints help
-- [ ] Domain types defined: Execution, Issue, Dependency, Worker, Workspace
-- [ ] Issue state enum covers all 16 states (PENDING through CANCELLED)
-- [ ] State transition validation accepts legal transitions and rejects illegal ones with explicit errors
-- [ ] External Issue scope type distinguishes managed vs. external issues
-- [ ] Retry budget type with separate gate, review, and CI counters
-- [ ] Domain package has zero infrastructure dependencies (no GitHub, Git, Claude, SQLite imports)
-- [ ] Unit tests cover all legal state transitions
-- [ ] Unit tests cover representative illegal transitions
+- [x] Go module initializes and builds
+- [x] CLI executable runs and prints help
+- [x] Domain types defined: Execution, Issue, Dependency, Worker, Workspace
+- [x] Issue state enum covers all 16 states (PENDING through CANCELLED)
+- [x] State transition validation accepts legal transitions and rejects illegal ones with explicit errors
+- [x] External Issue scope type distinguishes managed vs. external issues
+- [x] Retry budget type with separate gate, review, and CI counters
+- [x] Domain package has zero infrastructure dependencies (no GitHub, Git, Claude, SQLite imports)
+- [x] Unit tests cover all legal state transitions
+- [x] Unit tests cover representative illegal transitions

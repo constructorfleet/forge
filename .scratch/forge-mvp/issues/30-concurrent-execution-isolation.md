@@ -4,15 +4,15 @@
 
 **Blocked by:** 13 — SQLite persistence; 15 — Workspace manager; 26 — Multi-issue scheduling and concurrency
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Multiple Executions can run against the same repository
-- [ ] Git metadata lock: short-lived, serializes fetch/worktree add/worktree remove
-- [ ] Issue lock: prevents two Executions from implementing the same Issue
-- [ ] Branch lock: serializes publication operations on a specific branch
-- [ ] Worker implementation inside isolated Workspaces requires no lock
-- [ ] Attempting to claim an already-active Issue produces a clear error identifying the owning Execution
-- [ ] Each Execution has independent scheduler, states, and worktree paths
-- [ ] Lock contention does not deadlock (consistent acquisition order or timeout)
-- [ ] Integration test: two Executions with disjoint issues run concurrently
-- [ ] Integration test: two Executions claiming the same issue — second is rejected
+- [x] Multiple Executions can run against the same repository
+- [x] Git metadata lock: short-lived, serializes fetch/worktree add/worktree remove
+- [x] Issue lock: prevents two Executions from implementing the same Issue
+- [x] Branch lock: serializes publication operations on a specific branch
+- [x] Worker implementation inside isolated Workspaces requires no lock
+- [x] Attempting to claim an already-active Issue produces a clear error identifying the owning Execution
+- [x] Each Execution has independent scheduler, states, and worktree paths
+- [x] Lock contention does not deadlock (consistent acquisition order or timeout)
+- [x] Integration test: two Executions with disjoint issues run concurrently
+- [x] Integration test: two Executions claiming the same issue — second is rejected

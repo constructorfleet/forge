@@ -4,17 +4,17 @@
 
 **Blocked by:** 19 — Quality gate runner; 20 — Review stage
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Gate failure re-invokes Agent with only the new diagnostic information
-- [ ] Review rejection re-invokes Agent with structured findings
-- [ ] Agent receives bounded failure context, not full history replay
-- [ ] Every repair reruns the full configured quality gate set
-- [ ] Gate retry budget decrements independently from review budget
-- [ ] Gate budget exhaustion transitions to FAILED
-- [ ] Review budget exhaustion transitions to FAILED
-- [ ] Workspace preserved across retries (same worktree)
-- [ ] All retry attempts persisted with execution history
-- [ ] Integration test: gate fail → retry → pass → review → done
-- [ ] Integration test: review reject → retry → gates → review approve → done
-- [ ] Integration test: budget exhaustion → FAILED
+- [x] Gate failure re-invokes Agent with only the new diagnostic information
+- [x] Review rejection re-invokes Agent with structured findings
+- [x] Agent receives bounded failure context, not full history replay
+- [x] Every repair reruns the full configured quality gate set
+- [x] Gate retry budget decrements independently from review budget
+- [x] Gate budget exhaustion transitions to FAILED
+- [x] Review budget exhaustion transitions to FAILED
+- [x] Workspace preserved across retries (same worktree)
+- [x] All retry attempts persisted with execution history
+- [x] Integration test: gate fail → retry → pass → review → done
+- [x] Integration test: review reject → retry → gates → review approve → done
+- [x] Integration test: budget exhaustion → FAILED

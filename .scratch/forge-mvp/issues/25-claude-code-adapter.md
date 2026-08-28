@@ -4,15 +4,15 @@
 
 **Blocked by:** 16 — Agent interface and fake adapter
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Claude Code invoked as a subprocess in the Workspace directory
-- [ ] Prompt constructed from Execution Context: issue, acceptance criteria, repository context, workflow policy, rules
-- [ ] Agent instructed not to create PRs, manage labels, or decide workflow state
-- [ ] Feedback (gate failures, review findings, CI diagnostics) included in prompt on retries
-- [ ] IMPLEMENTED, NEEDS_INFO, and FAILED are distinguishable from agent output
-- [ ] NEEDS_INFO result includes structured reason and questions
-- [ ] stdout/stderr captured for diagnostics
-- [ ] Cancellation support (context cancellation kills subprocess)
-- [ ] Non-zero exit codes handled appropriately
-- [ ] Environment sanitized — secrets excluded from agent context
+- [x] Claude Code invoked as a subprocess in the Workspace directory
+- [x] Prompt constructed from Execution Context: issue, acceptance criteria, repository context, workflow policy, rules
+- [x] Agent instructed not to create PRs, manage labels, or decide workflow state
+- [x] Feedback (gate failures, review findings, CI diagnostics) included in prompt on retries
+- [x] IMPLEMENTED, NEEDS_INFO, and FAILED are distinguishable from agent output
+- [x] NEEDS_INFO result includes structured reason and questions
+- [x] stdout/stderr captured for diagnostics
+- [x] Cancellation support (context cancellation kills subprocess)
+- [x] Non-zero exit codes handled appropriately
+- [x] Environment sanitized — secrets excluded from agent context

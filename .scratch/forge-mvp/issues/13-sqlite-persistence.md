@@ -4,14 +4,14 @@
 
 **Blocked by:** 11 — Project skeleton, domain model, and state machine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Schema migrations create all tables
-- [ ] Execution can be created and reloaded with full state
-- [ ] Issue state transitions persist transactionally
-- [ ] Duplicate issue claims are prevented at the database level
-- [ ] Every state transition creates a timestamped event record
-- [ ] Event log is queryable by execution, issue, and time range
-- [ ] Storage interface abstracts SQLite — no SQL leaks into domain or orchestration code
-- [ ] Migration tests pass
-- [ ] Tests verify state survives simulated process restart (close and reopen DB)
+- [x] Schema migrations create all tables
+- [x] Execution can be created and reloaded with full state
+- [x] Issue state transitions persist transactionally
+- [x] Duplicate issue claims are prevented at the database level
+- [x] Every state transition creates a timestamped event record
+- [x] Event log is queryable by execution, issue, and time range
+- [x] Storage interface abstracts SQLite — no SQL leaks into domain or orchestration code
+- [x] Migration tests pass
+- [x] Tests verify state survives simulated process restart (close and reopen DB)

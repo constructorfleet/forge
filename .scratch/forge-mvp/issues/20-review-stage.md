@@ -4,14 +4,14 @@
 
 **Blocked by:** 16 — Agent interface and fake adapter; 19 — Quality gate runner
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Review is a separate Agent invocation, not a continuation of the implementation session
-- [ ] Reviewer receives: diff (base...HEAD), issue requirements, repository policy, gate results
-- [ ] Reviewer does NOT receive implementation conversation history
-- [ ] APPROVED result transitions to COMMITTING
-- [ ] CHANGES_REQUIRED result includes structured findings with severity, file, line, message
-- [ ] CHANGES_REQUIRED findings route back to implementation Worker as feedback
-- [ ] Review invocations recorded in persistence
-- [ ] Integration test: gates pass → review APPROVED → state advances to COMMITTING
-- [ ] Integration test: gates pass → review CHANGES_REQUIRED → findings route to worker
+- [x] Review is a separate Agent invocation, not a continuation of the implementation session
+- [x] Reviewer receives: diff (base...HEAD), issue requirements, repository policy, gate results
+- [x] Reviewer does NOT receive implementation conversation history
+- [x] APPROVED result transitions to COMMITTING
+- [x] CHANGES_REQUIRED result includes structured findings with severity, file, line, message
+- [x] CHANGES_REQUIRED findings route back to implementation Worker as feedback
+- [x] Review invocations recorded in persistence
+- [x] Integration test: gates pass → review APPROVED → state advances to COMMITTING
+- [x] Integration test: gates pass → review CHANGES_REQUIRED → findings route to worker

@@ -4,14 +4,14 @@
 
 **Blocked by:** 11 — Project skeleton, domain model, and state machine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Valid `.forge.yaml` loads with all sections parsed
-- [ ] Missing optional fields receive deterministic defaults
-- [ ] Invalid fields produce useful error messages identifying the problem
-- [ ] Partial configurations load successfully with defaults for missing sections
-- [ ] Retry budget defaults: gates 3, review 2, CI 3
-- [ ] CI required checks mode supports `github` and `explicit`
-- [ ] Dependency overrides section parsed correctly
-- [ ] Secrets are never expected or stored in config
-- [ ] Tests cover malformed, partial, and complete configurations
+- [x] Valid `.forge.yaml` loads with all sections parsed
+- [x] Missing optional fields receive deterministic defaults
+- [x] Invalid fields produce useful error messages identifying the problem
+- [x] Partial configurations load successfully with defaults for missing sections
+- [x] Retry budget defaults: gates 3, review 2, CI 3
+- [x] CI required checks mode supports `github` and `explicit`
+- [x] Dependency overrides section parsed correctly
+- [x] Secrets are never expected or stored in config
+- [x] Tests cover malformed, partial, and complete configurations

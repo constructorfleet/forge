@@ -4,18 +4,18 @@
 
 **Blocked by:** 13 — SQLite persistence; 15 — Workspace manager; 22 — Commit and PR creation; 23 — CI supervisor
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Load incomplete Executions from persistence
-- [ ] Validate worktrees exist and are consistent
-- [ ] Reconcile issue states against actual worktree/branch/PR state
-- [ ] Reconcile open PR states against GitHub
-- [ ] Resume CI monitoring for issues in CI_PENDING
-- [ ] Orphaned active workers (no running process) marked recoverable
-- [ ] NEEDS_INFO issues: re-fetch comments and detect new human input
-- [ ] Recovery does not create duplicate PRs, branches, or commits
-- [ ] Crash during implementation → resume in existing worktree
-- [ ] Crash during CI wait → resume monitoring
-- [ ] Crash during PR creation → detect existing PR
-- [ ] Integration test: kill during implementation → resume → complete
-- [ ] Integration test: kill during CI_PENDING → resume → monitor → complete
+- [x] Load incomplete Executions from persistence
+- [x] Validate worktrees exist and are consistent
+- [x] Reconcile issue states against actual worktree/branch/PR state
+- [x] Reconcile open PR states against GitHub
+- [x] Resume CI monitoring for issues in CI_PENDING
+- [x] Orphaned active workers (no running process) marked recoverable
+- [x] NEEDS_INFO issues: re-fetch comments and detect new human input
+- [x] Recovery does not create duplicate PRs, branches, or commits
+- [x] Crash during implementation → resume in existing worktree
+- [x] Crash during CI wait → resume monitoring
+- [x] Crash during PR creation → detect existing PR
+- [x] Integration test: kill during implementation → resume → complete
+- [x] Integration test: kill during CI_PENDING → resume → monitor → complete

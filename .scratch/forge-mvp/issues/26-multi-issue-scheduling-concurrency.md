@@ -4,17 +4,17 @@
 
 **Blocked by:** 13 — SQLite persistence; 14 — GitHub tracker adapter; 18 — Single-issue execution engine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Multiple issues accepted in `forge execute`
-- [ ] Dependency DAG resolved across all issues
-- [ ] Independent issues execute concurrently
-- [ ] Worker concurrency never exceeds configured max parallel
-- [ ] Dependency-blocked issues remain BLOCKED_DEPENDENCY until prerequisite PR merges
-- [ ] When prerequisite merges, dependent issue transitions to READY
-- [ ] Dependent issue's Worker base captured from current base branch (containing merged prerequisite code)
-- [ ] Scheduler wakes on meaningful state changes (issue completion, dependency satisfaction)
-- [ ] Duplicate scheduling does not occur (atomic READY → CLAIMED)
-- [ ] Integration test: independent issues run concurrently
-- [ ] Integration test: dependent issue waits for prerequisite, then starts from updated base
-- [ ] Integration test: max parallel respected
+- [x] Multiple issues accepted in `forge execute`
+- [x] Dependency DAG resolved across all issues
+- [x] Independent issues execute concurrently
+- [x] Worker concurrency never exceeds configured max parallel
+- [x] Dependency-blocked issues remain BLOCKED_DEPENDENCY until prerequisite PR merges
+- [x] When prerequisite merges, dependent issue transitions to READY
+- [x] Dependent issue's Worker base captured from current base branch (containing merged prerequisite code)
+- [x] Scheduler wakes on meaningful state changes (issue completion, dependency satisfaction)
+- [x] Duplicate scheduling does not occur (atomic READY → CLAIMED)
+- [x] Integration test: independent issues run concurrently
+- [x] Integration test: dependent issue waits for prerequisite, then starts from updated base
+- [x] Integration test: max parallel respected

@@ -4,17 +4,17 @@
 
 **Blocked by:** 14 — GitHub tracker adapter; 22 — Commit and PR creation
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Poll GitHub PR check status at configurable interval
-- [ ] Required checks determined via `GetMergeRequirements` (GitHub branch protection/rulesets)
-- [ ] Fallback: explicit check list from config when `ci.required_checks.mode: explicit`
-- [ ] All required checks green → transition to DONE
-- [ ] Required check failure → transition to CI_FAILED
-- [ ] Optional check failures do not trigger CI_FAILED
-- [ ] CI_FAILED includes: failing check name, bounded failure details
-- [ ] CI attempts persisted
-- [ ] Pending CI does not block Scheduler from processing other issues
-- [ ] Integration test: all required green → DONE
-- [ ] Integration test: required failure → CI_FAILED with diagnostics
-- [ ] Integration test: optional failure with required green → DONE
+- [x] Poll GitHub PR check status at configurable interval
+- [x] Required checks determined via `GetMergeRequirements` (GitHub branch protection/rulesets)
+- [x] Fallback: explicit check list from config when `ci.required_checks.mode: explicit`
+- [x] All required checks green → transition to DONE
+- [x] Required check failure → transition to CI_FAILED
+- [x] Optional check failures do not trigger CI_FAILED
+- [x] CI_FAILED includes: failing check name, bounded failure details
+- [x] CI attempts persisted
+- [x] Pending CI does not block Scheduler from processing other issues
+- [x] Integration test: all required green → DONE
+- [x] Integration test: required failure → CI_FAILED with diagnostics
+- [x] Integration test: optional failure with required green → DONE

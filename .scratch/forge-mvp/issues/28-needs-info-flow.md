@@ -4,17 +4,17 @@
 
 **Blocked by:** 14 — GitHub tracker adapter; 18 — Single-issue execution engine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] NEEDS_INFO result triggers: configured label added, structured comment posted
-- [ ] Comment includes: question, reason, brief relevant context
-- [ ] Workspace preserved (worktree remains)
-- [ ] Worker slot released (other ready work can proceed)
-- [ ] Needs-info checkpoint persisted (questions, timestamp, comment state)
-- [ ] `forge resume` re-fetches issue comments
-- [ ] New human comments since checkpoint detected
-- [ ] NEEDS_INFO → READY transition on new human input
-- [ ] Resumed Worker receives: original issue context + previous question + new comments only (not full history)
-- [ ] No PR created for NEEDS_INFO issues
-- [ ] Label and comment operations are idempotent
-- [ ] Integration test: agent NEEDS_INFO → label + comment → resume with new input → READY
+- [x] NEEDS_INFO result triggers: configured label added, structured comment posted
+- [x] Comment includes: question, reason, brief relevant context
+- [x] Workspace preserved (worktree remains)
+- [x] Worker slot released (other ready work can proceed)
+- [x] Needs-info checkpoint persisted (questions, timestamp, comment state)
+- [x] `forge resume` re-fetches issue comments
+- [x] New human comments since checkpoint detected
+- [x] NEEDS_INFO → READY transition on new human input
+- [x] Resumed Worker receives: original issue context + previous question + new comments only (not full history)
+- [x] No PR created for NEEDS_INFO issues
+- [x] Label and comment operations are idempotent
+- [x] Integration test: agent NEEDS_INFO → label + comment → resume with new input → READY

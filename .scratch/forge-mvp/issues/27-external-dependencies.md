@@ -4,14 +4,14 @@
 
 **Blocked by:** 14 — GitHub tracker adapter; 26 — Multi-issue scheduling and concurrency
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Dependencies referencing issues outside the execution set are loaded as external nodes
-- [ ] External issues use states: EXTERNAL_PENDING, EXTERNAL_SATISFIED, EXTERNAL_INVALID
-- [ ] Satisfaction checked by verifying associated merged PR exists and merge commit is reachable from applicable base
-- [ ] Closed issues without merged PRs are EXTERNAL_INVALID, not satisfied
-- [ ] Managed dependents remain BLOCKED_DEPENDENCY until external prerequisites are satisfied
-- [ ] External issues are never added to the execution set automatically
-- [ ] `forge resume` re-evaluates external dependency state against current remote refs
-- [ ] Integration test: external dep satisfied → managed dependent unblocked
-- [ ] Integration test: external dep closed without merge → managed dependent stays blocked
+- [x] Dependencies referencing issues outside the execution set are loaded as external nodes
+- [x] External issues use states: EXTERNAL_PENDING, EXTERNAL_SATISFIED, EXTERNAL_INVALID
+- [x] Satisfaction checked by verifying associated merged PR exists and merge commit is reachable from applicable base
+- [x] Closed issues without merged PRs are EXTERNAL_INVALID, not satisfied
+- [x] Managed dependents remain BLOCKED_DEPENDENCY until external prerequisites are satisfied
+- [x] External issues are never added to the execution set automatically
+- [x] `forge resume` re-evaluates external dependency state against current remote refs
+- [x] Integration test: external dep satisfied → managed dependent unblocked
+- [x] Integration test: external dep closed without merge → managed dependent stays blocked

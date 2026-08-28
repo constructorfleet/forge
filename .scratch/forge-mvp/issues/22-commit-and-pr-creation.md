@@ -4,15 +4,15 @@
 
 **Blocked by:** 14 — GitHub tracker adapter; 15 — Workspace manager; 21 — Implementation retry loop
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Inspect workspace for dirty state before committing
-- [ ] Commit with configurable message template (default: issue title + `Refs #<number>`)
-- [ ] Push branch to remote
-- [ ] Create PR with: summary, validation checklist, issue reference (`Closes #<number>`)
-- [ ] PR ID and URL persisted
-- [ ] Issue transitions to CI_PENDING after PR creation
-- [ ] Idempotent: existing PR for branch is recovered, not duplicated
-- [ ] Idempotent: push handles existing remote branch
-- [ ] Commit SHA captured and recorded
-- [ ] Integration test: approved work → commit → push → PR created → CI_PENDING
+- [x] Inspect workspace for dirty state before committing
+- [x] Commit with configurable message template (default: issue title + `Refs #<number>`)
+- [x] Push branch to remote
+- [x] Create PR with: summary, validation checklist, issue reference (`Closes #<number>`)
+- [x] PR ID and URL persisted
+- [x] Issue transitions to CI_PENDING after PR creation
+- [x] Idempotent: existing PR for branch is recovered, not duplicated
+- [x] Idempotent: push handles existing remote branch
+- [x] Commit SHA captured and recorded
+- [x] Integration test: approved work → commit → push → PR created → CI_PENDING

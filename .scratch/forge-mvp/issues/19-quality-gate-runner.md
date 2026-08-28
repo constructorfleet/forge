@@ -4,14 +4,14 @@
 
 **Blocked by:** 12 — Configuration loading and validation; 18 — Single-issue execution engine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Gates execute in configured order
-- [ ] Each gate records: name, command, timing, exit code, stdout, stderr
-- [ ] Passing all gates transitions to REVIEWING (or next pipeline stage)
-- [ ] First gate failure stops subsequent gates by default
-- [ ] Agent feedback includes: failing gate name, command, exit code, bounded relevant output
-- [ ] Output bounded to configured max bytes
-- [ ] Gate results persisted in SQLite
-- [ ] Integration test: fake agent IMPLEMENTED → gates pass → state advances
-- [ ] Integration test: fake agent IMPLEMENTED → gate fails → state reflects failure with diagnostic
+- [x] Gates execute in configured order
+- [x] Each gate records: name, command, timing, exit code, stdout, stderr
+- [x] Passing all gates transitions to REVIEWING (or next pipeline stage)
+- [x] First gate failure stops subsequent gates by default
+- [x] Agent feedback includes: failing gate name, command, exit code, bounded relevant output
+- [x] Output bounded to configured max bytes
+- [x] Gate results persisted in SQLite
+- [x] Integration test: fake agent IMPLEMENTED → gates pass → state advances
+- [x] Integration test: fake agent IMPLEMENTED → gate fails → state reflects failure with diagnostic
