@@ -15,9 +15,10 @@ import (
 // Unexported: this shape never leaves the github package (see CONTEXT.md
 // "Tracker Adapter").
 type ghIssue struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	HTMLURL string `json:"html_url"`
 }
 
 // GetIssue fetches a single Issue by ID (a GitHub issue number, with or
@@ -56,6 +57,29 @@ func (c *Client) GetIssues(ctx context.Context, ids []string) ([]domain.Issue, e
 		issues = append(issues, issue)
 	}
 	return issues, nil
+}
+
+// CreateIssue creates a new Issue on the repository and returns enough
+// identity (tracker.CreatedIssue) to fetch it back via GetIssue.
+func (c *Client) CreateIssue(ctx context.Context, req tracker.IssueRequest) (tracker.CreatedIssue, error) {
+	reqBody := struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}{Title: req.Title, Body: req.Body}
+
+	var resp ghIssue
+	path := fmt.Sprintf("/repos/%s/%s/issues", c.owner, c.repo)
+	if err := c.do(ctx, http.MethodPost, path, reqBody, &resp); err != nil {
+		return tracker.CreatedIssue{}, err
+	}
+	return tracker.CreatedIssue{ID: strconv.Itoa(resp.Number), URL: resp.HTMLURL}, nil
+}
+
+// Capabilities reports the optional behaviors this Client supports.
+// PlanningMirror is false: no planning-mirror projection behavior is built
+// yet (see the ticket 10 doc comment on tracker.Capabilities).
+func (c *Client) Capabilities() tracker.Capabilities {
+	return tracker.Capabilities{PlanningMirror: false}
 }
 
 func (c *Client) normalizeIssue(gh ghIssue) (domain.Issue, error) {

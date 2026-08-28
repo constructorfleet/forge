@@ -51,6 +51,39 @@ type PullRequest struct {
 	URL    string
 }
 
+// IssueRequest carries everything CreateIssue needs to create a new Issue
+// on the tracker.
+type IssueRequest struct {
+	// Title is the Issue title.
+	Title string
+	// Body is the Issue body/description.
+	Body string
+}
+
+// CreatedIssue is the identity CreateIssue returns for a newly created
+// Issue — enough to fetch it back via GetIssue and to link to it for a
+// human reader, without pulling in the full ghIssue/domain.Issue shape a
+// bare create response doesn't populate (e.g. Dependencies).
+type CreatedIssue struct {
+	// ID is the tracker-native Issue identifier, suitable for passing to
+	// GetIssue.
+	ID string
+	// URL is the tracker's web URL for the created Issue.
+	URL string
+}
+
+// Capabilities reports which optional behaviors a Tracker implementation
+// supports, so callers can branch on capability rather than concrete type
+// (see CONTEXT.md "Tracker Adapter"). Capabilities is additive: a zero
+// Capabilities value means no optional behaviors are supported.
+type Capabilities struct {
+	// PlanningMirror reports whether the Tracker projects Planning
+	// Artifacts onto tracker Issues. Always false for MVP — no
+	// planning-mirror projection behavior is built yet; this flag reserves
+	// the surface for when it is.
+	PlanningMirror bool
+}
+
 // PullRequestRequest carries everything CreatePullRequest needs to create,
 // or idempotently recover, a pull request.
 type PullRequestRequest struct {
@@ -112,6 +145,15 @@ type Tracker interface {
 	// req.Head, it is recovered (returned) rather than duplicated —
 	// CONTEXT.md "COMMITTING"/"PR_CREATING" (ticket 22).
 	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
+
+	// CreateIssue creates a new Issue on the tracker and returns enough
+	// identity (CreatedIssue) to fetch it back via GetIssue and to
+	// validate it was created as expected.
+	CreateIssue(ctx context.Context, req IssueRequest) (CreatedIssue, error)
+
+	// Capabilities reports which optional behaviors this Tracker
+	// implementation supports (see the Capabilities doc comment).
+	Capabilities() Capabilities
 }
 
 // RateLimitError is returned by a Tracker implementation when a request is
