@@ -8,11 +8,14 @@ import (
 	"os/signal"
 )
 
-// runExecute implements `forge execute <issue-number>`: the first
-// end-to-end vertical slice (ticket 18). It fetches issueID from the
-// GitHub tracker, drives it through Forge's state machine via
-// internal/engine, and prints the resulting Execution ID and final Issue
-// state.
+// runExecute implements `forge execute <issue-number> [<issue-number> ...]`
+// (ticket 26 extends ticket 18's single-issue vertical slice to multiple
+// Issues). It resolves the Dependency DAG across every requested Issue,
+// then drives each through Forge's state machine via internal/scheduler,
+// running independent Issues concurrently up to execution.max_parallel and
+// holding dependency-blocked Issues until their prerequisites are
+// satisfied (see cmd/forge's completionResolver). It prints each Issue's
+// final state and exits non-zero if any Issue errored.
 func runExecute(args []string) int {
 	fs := flag.NewFlagSet("forge execute", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
@@ -20,11 +23,11 @@ func runExecute(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "forge execute: expected exactly one argument, <issue-number>")
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "forge execute: expected at least one argument, <issue-number> [<issue-number> ...]")
 		return 2
 	}
-	issueID := fs.Arg(0)
+	issueIDs := fs.Args()
 
 	repoRoot, err := os.Getwd()
 	if err != nil {
@@ -48,24 +51,27 @@ func runExecute(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	eng, err := buildEngine(store, cfg, repoRoot)
+	sch, err := buildScheduler(store, cfg, repoRoot, issueIDs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
 	}
 
-	base, err := resolveBaseRevision(repoRoot, cfg.Git.Base)
+	results, err := sch.Run(ctx, issueIDs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
 	}
 
-	result, err := eng.Execute(ctx, issueID, base)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
-		return 1
+	exitCode := 0
+	for _, id := range issueIDs {
+		res := results[id]
+		if res.Err != nil {
+			fmt.Printf("issue %s -> error: %v\n", id, res.Err)
+			exitCode = 1
+			continue
+		}
+		fmt.Printf("issue %s -> %s\n", id, res.State)
 	}
-
-	fmt.Printf("execution %s: issue %s -> %s\n", result.ExecutionID, issueID, result.Issue.State)
-	return 0
+	return exitCode
 }

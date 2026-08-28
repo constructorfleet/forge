@@ -8,11 +8,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/workspace"
@@ -98,6 +101,95 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// one is deferred to a later ticket.
 	eng.Diff = gitDiffProducer{}
 	return eng, nil
+}
+
+// buildScheduler wires a *scheduler.Scheduler (ticket 26) for a `forge
+// execute` invocation over issueIDs: the same tracker and Engine buildEngine
+// would construct for a single Issue, adapted to scheduler.Executor via
+// scheduler.Adapt, plus a completionResolver DependencyResolver and a
+// BaseResolver that always re-resolves cfg.Git.Base's current tip so a
+// dependency-blocked Issue that becomes ready later captures a base
+// containing whatever has landed on it since (CONTEXT.md "Execution":
+// Worker base captured at READY, not at Execution start).
+func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*scheduler.Scheduler, error) {
+	trk, err := buildTracker(cfg, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	eng, err := buildEngine(store, cfg, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	resolver := newCompletionResolver(issueIDs)
+	base := scheduler.BaseResolverFunc(func(context.Context, string) (string, error) {
+		return resolveBaseRevision(repoRoot, cfg.Git.Base)
+	})
+
+	sch := scheduler.New(trk, scheduler.Adapt(eng), resolver, base, cfg.Execution.MaxParallel)
+	sch.OnComplete = resolver.onComplete
+	return sch, nil
+}
+
+// publishReadyStates are the Issue states a Dependency is considered
+// satisfied at, per completionResolver below.
+var publishReadyStates = map[domain.IssueState]bool{
+	domain.StateReviewing:  true,
+	domain.StateCommitting: true,
+	domain.StatePRCreating: true,
+	domain.StateCIPending:  true,
+	domain.StateDone:       true,
+}
+
+// completionResolver is the default scheduler.DependencyResolver `forge
+// execute` uses until ticket 27 wires in a real GitHub-merge-reachability
+// check. Ticket 22 (commit/PR creation) doesn't exist yet either, so there
+// is no real "PR merged" signal to check — completionResolver instead
+// considers a Dependency satisfied once its prerequisite Issue, PROVIDED
+// that prerequisite is itself part of this `forge execute` invocation's
+// requested Issue set, has locally reached a state at or beyond REVIEWING
+// (Quality Gates passed) within this same run. A prerequisite outside the
+// requested set (an External Issue, CONTEXT.md) is reported unsatisfied
+// with a descriptive error rather than left to hang forever, since forge
+// cannot check its real merge status yet either.
+type completionResolver struct {
+	requested map[string]bool
+
+	mu        sync.Mutex
+	completed map[string]domain.IssueState
+}
+
+func newCompletionResolver(issueIDs []string) *completionResolver {
+	requested := make(map[string]bool, len(issueIDs))
+	for _, id := range issueIDs {
+		requested[id] = true
+	}
+	return &completionResolver{requested: requested, completed: map[string]domain.IssueState{}}
+}
+
+// onComplete is wired as the Scheduler's OnComplete hook: it records each
+// dispatched Issue's final state as it finishes, which Satisfied then
+// consults.
+func (r *completionResolver) onComplete(issueID string, state domain.IssueState, err error) {
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.completed[issueID] = state
+}
+
+func (r *completionResolver) Satisfied(_ context.Context, issueID, dependsOnID string) (bool, error) {
+	if !r.requested[dependsOnID] {
+		return false, fmt.Errorf(
+			"forge: issue %s depends on %s, which is outside this execution's requested issue set; "+
+				"external dependency satisfaction is not yet supported", issueID, dependsOnID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, ok := r.completed[dependsOnID]
+	return ok && publishReadyStates[state], nil
 }
 
 // buildTracker constructs the GitHub tracker.Tracker adapter for repoRoot,

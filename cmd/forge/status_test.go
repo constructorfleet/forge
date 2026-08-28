@@ -13,11 +13,15 @@ import (
 	"github.com/Teagan42/forge/internal/storage"
 )
 
-func TestRunExecute_RejectsWrongArgCount(t *testing.T) {
-	for _, args := range [][]string{{}, {"1", "2"}} {
-		if code := runExecute(args); code != 2 {
-			t.Errorf("runExecute(%v) = %d, want 2 (usage error)", args, code)
-		}
+// TestRunExecute_RejectsNoIssueIDs asserts `forge execute` requires at
+// least one Issue ID; ticket 26 lifted the single-argument restriction so
+// `forge execute 345 344 343` is now valid (buildScheduler/scheduler.Run's
+// multi-issue behavior itself is covered end-to-end in
+// internal/scheduler's tests, which don't require a real "origin" remote
+// the way runExecute's buildTracker does).
+func TestRunExecute_RejectsNoIssueIDs(t *testing.T) {
+	if code := runExecute(nil); code != 2 {
+		t.Errorf("runExecute(nil) = %d, want 2 (usage error)", code)
 	}
 }
 
