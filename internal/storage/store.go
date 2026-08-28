@@ -104,6 +104,38 @@ type Store interface {
 	// OccurredAt falls within [from, to], ordered by occurrence time.
 	EventsByTimeRange(ctx context.Context, executionID string, from, to time.Time) ([]Event, error)
 
+	// SaveNeedsInfoCheckpoint persists (inserting or replacing) the
+	// needs-info checkpoint for one Issue within an Execution: the question
+	// asked, why, when, and which of the label/comment side effects have
+	// already run — so the NEEDS_INFO handling in internal/engine stays
+	// idempotent across repeats and `forge resume` can detect new human
+	// input since the checkpoint (see CONTEXT.md's needs-info resume flow,
+	// issue 07).
+	SaveNeedsInfoCheckpoint(ctx context.Context, checkpoint NeedsInfoCheckpoint) error
+
+	// GetNeedsInfoCheckpoint reloads the needs-info checkpoint for one Issue
+	// within an Execution. Returns ErrNotFound if none has been recorded.
+	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (NeedsInfoCheckpoint, error)
+
 	// Close releases the underlying database connection(s).
 	Close() error
+}
+
+// NeedsInfoCheckpoint is the persisted record of an Issue's transition to
+// NEEDS_INFO: the question asked, the reason it arose, when, and the state
+// of the idempotent label/comment side effects. ResumedAt/ResumedContext
+// are populated once `forge resume` detects new human input and moves the
+// Issue back to READY — ResumedContext is the JSON-encoded focused context
+// (original Issue + previous question + only the new comments) the next
+// Worker invocation should receive.
+type NeedsInfoCheckpoint struct {
+	ExecutionID    string
+	IssueID        string
+	Question       string
+	Reason         string
+	LabelAdded     bool
+	CommentPosted  bool
+	CreatedAt      time.Time
+	ResumedAt      *time.Time
+	ResumedContext string
 }

@@ -68,12 +68,10 @@ func openStore(ctx context.Context, dbPath string) (*storage.SQLiteStore, error)
 // interfaces. Engine's core flow never imports these packages directly;
 // only this constructor does.
 func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engine.Engine, error) {
-	owner, repo, err := repoFromOrigin(repoRoot)
+	trk, err := buildTracker(cfg, repoRoot)
 	if err != nil {
 		return nil, err
 	}
-	trk := github.NewClient(nil, "", owner, repo)
-	trk.DependencyOverrides = cfg.Dependencies.Overrides
 
 	wsMgr, err := workspace.NewManager(repoRoot,
 		workspace.WithWorktreeRoot(cfg.Git.WorktreeRoot),
@@ -88,7 +86,26 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		return nil, err
 	}
 
-	return engine.New(store, trk, wsMgr, ag, cfg, repoRoot), nil
+	eng := engine.New(store, trk, wsMgr, ag, cfg, repoRoot)
+	// trk implements tracker.Tracker in full, a superset of both
+	// engine.IssueFetcher (Tracker, above) and engine.NeedsInfoTracker.
+	eng.NeedsInfoTracker = trk
+	return eng, nil
+}
+
+// buildTracker constructs the GitHub tracker.Tracker adapter for repoRoot,
+// resolving the target repository from its "origin" remote. Factored out of
+// buildEngine so `forge resume` (which needs the full tracker.Tracker for
+// GetComments, not just engine.IssueFetcher) can build the same adapter
+// without constructing a whole Engine.
+func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
+	owner, repo, err := repoFromOrigin(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	trk := github.NewClient(nil, "", owner, repo)
+	trk.DependencyOverrides = cfg.Dependencies.Overrides
+	return trk, nil
 }
 
 // buildAgent selects the Agent Adapter per cfg.Agent.Provider. "fake" opts

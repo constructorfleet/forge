@@ -58,6 +58,14 @@ type Engine struct {
 	Agent      agent.Agent
 	Config     config.Config
 
+	// NeedsInfoTracker is the subset of tracker.Tracker the NEEDS_INFO
+	// handling needs (add label, post comment) — see needsinfo.go. It is
+	// optional: nil disables the label/comment side effects (e.g. a test
+	// double that only implements IssueFetcher), so existing callers of New
+	// keep compiling unchanged. cmd/forge wires it to the same tracker
+	// instance as Tracker.
+	NeedsInfoTracker NeedsInfoTracker
+
 	// RepoRoot is the primary checkout's working directory, used to compile
 	// the Repository Context (internal/repocontext) and as the root
 	// Workspaces are created under.
@@ -239,7 +247,7 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	case agent.StatusImplemented:
 		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateValidating)
 	case agent.StatusNeedsInfo:
-		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateNeedsInfo)
+		issue, err = e.handleNeedsInfo(ctx, execution.ID, issueID, workerRef, result)
 	case agent.StatusFailed:
 		issue, err = e.transition(ctx, execution.ID, issueID, domain.StateFailed)
 	default:

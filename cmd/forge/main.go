@@ -21,6 +21,7 @@ Commands:
   init                     Generate .forge.yaml via deterministic repository-policy discovery
   execute <issue-number>   Execute a single Issue with no unmet Dependencies
   status <execution-id>    Show an Execution's persisted state
+  resume <execution-id>    Resume a NEEDS_INFO Issue after new human input
   help                     Show this help text
 
 Run 'forge <command> --help' for command-specific flags.
@@ -51,6 +52,8 @@ func run(args []string) int {
 		return runExecute(rest)
 	case "status":
 		return runStatus(rest)
+	case "resume":
+		return runResume(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "forge: unknown command %q\n\n", cmd)
 		fmt.Fprint(os.Stderr, helpText)
