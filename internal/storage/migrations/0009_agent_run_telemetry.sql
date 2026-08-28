@@ -1,0 +1,4 @@
+ALTER TABLE agent_runs ADD COLUMN backend TEXT NOT NULL DEFAULT '';
+ALTER TABLE agent_runs ADD COLUMN context_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agent_runs ADD COLUMN input_tokens INTEGER;
+ALTER TABLE agent_runs ADD COLUMN output_tokens INTEGER;

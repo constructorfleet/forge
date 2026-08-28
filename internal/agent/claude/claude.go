@@ -142,9 +142,9 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 
 	switch agent.AgentStatus(res.Status) {
 	case agent.StatusImplemented:
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: res.Summary}, nil
+		return agent.AgentResult{Status: agent.StatusImplemented, Summary: res.Summary, Usage: toTokenUsage(res.Usage)}, nil
 	case agent.StatusFailed:
-		return agent.AgentResult{Status: agent.StatusFailed, Summary: res.Summary}, nil
+		return agent.AgentResult{Status: agent.StatusFailed, Summary: res.Summary, Usage: toTokenUsage(res.Usage)}, nil
 	case agent.StatusNeedsInfo:
 		if res.NeedsInfo == nil || strings.TrimSpace(res.NeedsInfo.Question) == "" {
 			return agent.AgentResult{
@@ -162,6 +162,7 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 				Question: res.NeedsInfo.Question,
 				Context:  res.NeedsInfo.Context,
 			},
+			Usage: toTokenUsage(res.Usage),
 		}, nil
 	default:
 		// parseStructuredResult only returns ok=true for recognized
@@ -171,6 +172,16 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 			Status:  agent.StatusFailed,
 			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: unrecognized status %q", res.Status), stdout, stderr),
 		}, nil
+	}
+}
+
+func toTokenUsage(in *usageFields) *agent.TokenUsage {
+	if in == nil {
+		return nil
+	}
+	return &agent.TokenUsage{
+		InputTokens:  in.InputTokens,
+		OutputTokens: in.OutputTokens,
 	}
 }
 

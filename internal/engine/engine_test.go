@@ -157,6 +157,7 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 		"issue.transitioned", // -> PREPARING
 		"workspace.created",
 		"issue.transitioned", // -> IMPLEMENTING
+		"agent.run",
 		"agent.result",
 		"issue.transitioned", // -> VALIDATING
 		"issue.transitioned", // -> REVIEWING

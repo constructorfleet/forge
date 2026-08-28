@@ -549,7 +549,34 @@ func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspac
 		Policy:        agent.WorkflowPolicy{},
 		Feedback:      feedback,
 	}
+	contextBytes, err := agent.ContextSizeBytes(req)
+	if err != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: encode agent request for issue %s telemetry: %w", issueID, err)
+	}
+	started := e.Now()
 	result, err := e.Agent.Execute(ctx, req)
+	finished := e.Now()
+	run := storage.AgentRun{
+		ExecutionID:  executionID,
+		IssueID:      issueID,
+		Backend:      e.Config.Agent.Provider,
+		StartedAt:    started,
+		FinishedAt:   finished,
+		Result:       string(result.Status),
+		ContextBytes: contextBytes,
+	}
+	if run.Result == "" && err != nil {
+		run.Result = "ERROR"
+	}
+	if result.Usage != nil {
+		inputTokens := result.Usage.InputTokens
+		outputTokens := result.Usage.OutputTokens
+		run.InputTokens = &inputTokens
+		run.OutputTokens = &outputTokens
+	}
+	if recordErr := e.Store.RecordAgentRun(ctx, run); recordErr != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: record agent run for issue %s: %w", issueID, recordErr)
+	}
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
 	}

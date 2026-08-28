@@ -58,6 +58,20 @@ type GateRun struct {
 	Passed      bool
 }
 
+// AgentRun is one persisted implementation-agent invocation for an Issue.
+// Review remains a separate first-class record via ReviewRun.
+type AgentRun struct {
+	ExecutionID  string
+	IssueID      string
+	Backend      string
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	Result       string
+	ContextBytes int
+	InputTokens  *int
+	OutputTokens *int
+}
+
 // ReviewFinding is one structured Finding raised during a ReviewRun,
 // mirroring review.Finding but living in this package so storage has no
 // dependency on internal/review — callers (the engine) translate between
@@ -183,6 +197,18 @@ type Store interface {
 	// RecordGateRun persists one executed Quality Gate Result and appends a
 	// "gate.run" Event, transactionally. See CONTEXT.md "Gate Runner".
 	RecordGateRun(ctx context.Context, run GateRun) error
+
+	// RecordAgentRun persists one implementation Agent invocation and
+	// appends a corresponding "agent.run" Event.
+	RecordAgentRun(ctx context.Context, run AgentRun) error
+
+	// AgentRunsByExecution returns every AgentRun recorded for one
+	// Execution, ordered by insertion.
+	AgentRunsByExecution(ctx context.Context, executionID string) ([]AgentRun, error)
+
+	// AgentRunsByIssue returns every AgentRun recorded for one Issue within
+	// an Execution, ordered by insertion.
+	AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]AgentRun, error)
 
 	// GateRunsByIssue returns every GateRun recorded for one Issue within an
 	// Execution, ordered by insertion (i.e. execution order).

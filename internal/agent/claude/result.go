@@ -22,11 +22,17 @@ type structuredResult struct {
 	Status    string           `json:"status"`
 	Summary   string           `json:"summary"`
 	NeedsInfo *needsInfoFields `json:"needs_info,omitempty"`
+	Usage     *usageFields     `json:"usage,omitempty"`
 }
 
 type needsInfoFields struct {
 	Question string `json:"question"`
 	Context  string `json:"context"`
+}
+
+type usageFields struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 // parseStructuredResult scans stdout for fenced code blocks and returns the

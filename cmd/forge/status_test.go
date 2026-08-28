@@ -47,6 +47,19 @@ func TestPrintStatus_IncludesExecutionIssuesAndEvents(t *testing.T) {
 		Issues: []domain.Issue{
 			{ID: "42", State: domain.StateValidating, Scope: domain.ScopeManaged},
 		},
+		Telemetry: engine.TelemetryReport{
+			Summary: engine.TelemetrySummary{
+				IssuesCompleted:   1,
+				AgentInvocations:  2,
+				InputTokens:       123,
+				OutputTokens:      45,
+				GateRetries:       1,
+				ReviewRetries:     2,
+				CIRetries:         3,
+				ContextBytes:      2048,
+				WallClockDuration: 5 * time.Second,
+			},
+		},
 		Events: []storage.Event{
 			{IssueID: "42", Type: "issue.transitioned", Data: `{"from":"IMPLEMENTING","to":"VALIDATING"}`, OccurredAt: time.Unix(0, 0).UTC()},
 		},
@@ -56,7 +69,7 @@ func TestPrintStatus_IncludesExecutionIssuesAndEvents(t *testing.T) {
 	printStatus(&buf, report)
 	out := buf.String()
 
-	for _, want := range []string{"exec-1", "deadbeef", "42", string(domain.StateValidating), "issue.transitioned"} {
+	for _, want := range []string{"exec-1", "deadbeef", "42", string(domain.StateValidating), "issue.transitioned", "agent invocations", "input tokens"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printStatus output missing %q:\n%s", want, out)
 		}

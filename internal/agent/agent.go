@@ -7,6 +7,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
@@ -132,6 +133,13 @@ type NeedsInfoDetail struct {
 	Context string
 }
 
+// TokenUsage is the optional token accounting an Agent backend may expose
+// for one invocation.
+type TokenUsage struct {
+	InputTokens  int
+	OutputTokens int
+}
+
 // AgentResult is the structured outcome of one Agent.Execute call.
 type AgentResult struct {
 	// Status is one of StatusImplemented, StatusNeedsInfo, or StatusFailed.
@@ -143,4 +151,20 @@ type AgentResult struct {
 
 	// NeedsInfo is populated only when Status is StatusNeedsInfo.
 	NeedsInfo *NeedsInfoDetail
+
+	// Usage is populated only when the backend exposes token accounting for
+	// this invocation.
+	Usage *TokenUsage
+}
+
+// ContextSizeBytes returns the byte size of req's normalized execution
+// context as serialized for storage/telemetry. This measures the
+// backend-independent context Forge assembled and handed to the Agent,
+// rather than any backend-specific prompt wrapper layered on afterward.
+func ContextSizeBytes(req AgentRequest) (int, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }

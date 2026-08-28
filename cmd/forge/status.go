@@ -52,10 +52,27 @@ func printStatus(w io.Writer, report engine.StatusReport) {
 	fmt.Fprintf(w, "execution %s\n", report.Execution.ID)
 	fmt.Fprintf(w, "  base:       %s\n", report.Execution.BaseRevision)
 	fmt.Fprintf(w, "  started_at: %s\n", report.Execution.StartedAt.Format("2006-01-02T15:04:05Z07:00"))
+	fmt.Fprintf(w, "telemetry:\n")
+	fmt.Fprintf(w, "  issues completed:  %d\n", report.Telemetry.Summary.IssuesCompleted)
+	fmt.Fprintf(w, "  agent invocations: %d\n", report.Telemetry.Summary.AgentInvocations)
+	fmt.Fprintf(w, "  input tokens:      %d\n", report.Telemetry.Summary.InputTokens)
+	fmt.Fprintf(w, "  output tokens:     %d\n", report.Telemetry.Summary.OutputTokens)
+	fmt.Fprintf(w, "  gate retries:      %d\n", report.Telemetry.Summary.GateRetries)
+	fmt.Fprintf(w, "  review retries:    %d\n", report.Telemetry.Summary.ReviewRetries)
+	fmt.Fprintf(w, "  ci retries:        %d\n", report.Telemetry.Summary.CIRetries)
+	fmt.Fprintf(w, "  context bytes:     %d\n", report.Telemetry.Summary.ContextBytes)
+	fmt.Fprintf(w, "  duration:          %s\n", report.Telemetry.Summary.WallClockDuration)
 
 	fmt.Fprintf(w, "issues (%d):\n", len(report.Issues))
 	for _, issue := range report.Issues {
-		fmt.Fprintf(w, "  %-12s %-10s scope=%s\n", issue.ID, issue.State, issue.Scope)
+		cycle := ""
+		for _, metric := range report.Telemetry.Issues {
+			if metric.IssueID == issue.ID && metric.CycleTime > 0 {
+				cycle = " cycle=" + metric.CycleTime.String()
+				break
+			}
+		}
+		fmt.Fprintf(w, "  %-12s %-10s scope=%s%s\n", issue.ID, issue.State, issue.Scope, cycle)
 	}
 
 	fmt.Fprintf(w, "events (%d):\n", len(report.Events))
