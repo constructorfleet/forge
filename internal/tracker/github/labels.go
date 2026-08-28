@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -21,7 +20,7 @@ func (c *Client) AddLabel(ctx context.Context, id string, label string) error {
 		Labels []string `json:"labels"`
 	}{Labels: []string{label}}
 
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels", c.owner, c.repo, number)
+	path := c.issuePath(number, "/labels")
 	return c.do(ctx, http.MethodPost, path, reqBody, nil)
 }
 
@@ -35,7 +34,7 @@ func (c *Client) RemoveLabel(ctx context.Context, id string, label string) error
 		return err
 	}
 
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s", c.owner, c.repo, number, url.PathEscape(label))
+	path := c.issuePath(number, "/labels/"+url.PathEscape(label))
 	err = c.do(ctx, http.MethodDelete, path, nil, nil)
 
 	var notFound *NotFoundError

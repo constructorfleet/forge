@@ -35,6 +35,27 @@ func TestApplyOverrides_EmptyOverrideListWins(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_HashPrefixedOverrideKeyMatches(t *testing.T) {
+	// A .forge.yaml author may write the override key with a leading '#'
+	// (as issue references are written elsewhere); it must still match the
+	// bare numeric issue ID used internally.
+	got := tracker.ApplyOverrides("42", []string{"1"}, map[string][]string{
+		"#42": {"9"},
+	})
+	if !equalSlices(got, []string{"9"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestApplyOverrides_WhitespaceAroundOverrideKeyIsTrimmed(t *testing.T) {
+	got := tracker.ApplyOverrides("42", []string{"1"}, map[string][]string{
+		" 42 ": {"9"},
+	})
+	if !equalSlices(got, []string{"9"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestApplyOverrides_NilOverridesMapIsNoop(t *testing.T) {
 	got := tracker.ApplyOverrides("42", []string{"1"}, nil)
 	if !equalSlices(got, []string{"1"}) {

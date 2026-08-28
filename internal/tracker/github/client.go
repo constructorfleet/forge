@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -70,18 +71,27 @@ var _ tracker.Tracker = (*Client)(nil)
 // It classifies rate-limit responses into *tracker.RateLimitError so
 // callers can react without depending on GitHub-specific error shapes.
 func (c *Client) do(ctx context.Context, method, path string, reqBody, out interface{}) error {
+	_, err := c.doWithHeaders(ctx, method, c.baseURL+path, reqBody, out)
+	return err
+}
+
+// doWithHeaders is like do but takes a fully-qualified URL (rather than a
+// path relative to c.baseURL) and returns the response headers, so callers
+// that need response metadata GitHub only exposes via headers — such as
+// the Link header used for pagination — can inspect it.
+func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqBody, out interface{}) (http.Header, error) {
 	var bodyReader io.Reader
 	if reqBody != nil {
 		encoded, err := json.Marshal(reqBody)
 		if err != nil {
-			return fmt.Errorf("github: encode request body: %w", err)
+			return nil, fmt.Errorf("github: encode request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
-		return fmt.Errorf("github: build request: %w", err)
+		return nil, fmt.Errorf("github: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if reqBody != nil {
@@ -93,42 +103,50 @@ func (c *Client) do(ctx context.Context, method, path string, reqBody, out inter
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("github: request %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("github: request %s %s: %w", method, fullURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("github: read response %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("github: read response %s %s: %w", method, fullURL, err)
 	}
 
 	if rlErr := rateLimitError(resp, respBody); rlErr != nil {
-		return rlErr
+		return nil, rlErr
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return &NotFoundError{Path: path}
+		return nil, &NotFoundError{Path: fullURL}
 	}
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("github: %s %s: unexpected status %d: %s", method, path, resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("github: %s %s: unexpected status %d: %s", method, fullURL, resp.StatusCode, string(respBody))
 	}
 
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("github: decode response %s %s: %w", method, path, err)
+			return nil, fmt.Errorf("github: decode response %s %s: %w", method, fullURL, err)
 		}
 	}
-	return nil
+	return resp.Header, nil
 }
 
-// rateLimitError classifies a response as a rate-limit rejection: a 403
-// with X-RateLimit-Remaining: 0 (primary limit), or a 429 (secondary
-// limit). It returns nil for any other response.
+// rateLimitError classifies a response as a rate-limit rejection:
+//   - a 403 with X-RateLimit-Remaining: 0 (primary limit exhausted)
+//   - a 429 (secondary/abuse limit)
+//   - a 403 with a Retry-After header (secondary/abuse limit — GitHub
+//     often reports this with non-zero X-RateLimit-Remaining, so it must
+//     be checked independently of the primary-limit case)
+//
+// It returns nil for any other response, including a plain 403 with none
+// of the above signals.
 func rateLimitError(resp *http.Response, body []byte) error {
+	retryAfter := resp.Header.Get("Retry-After")
 	primary := resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0"
 	secondary := resp.StatusCode == http.StatusTooManyRequests
-	if !primary && !secondary {
+	secondaryRetryAfter := resp.StatusCode == http.StatusForbidden && retryAfter != ""
+	if !primary && !secondary && !secondaryRetryAfter {
 		return nil
 	}
 
@@ -138,6 +156,11 @@ func rateLimitError(resp *http.Response, body []byte) error {
 			resetAt = time.Unix(secs, 0)
 		}
 	}
+	if resetAt.IsZero() && retryAfter != "" {
+		if secs, err := strconv.ParseInt(retryAfter, 10, 64); err == nil {
+			resetAt = time.Now().Add(time.Duration(secs) * time.Second)
+		}
+	}
 
 	var decoded struct {
 		Message string `json:"message"`
@@ -145,6 +168,30 @@ func rateLimitError(resp *http.Response, body []byte) error {
 	_ = json.Unmarshal(body, &decoded)
 
 	return &tracker.RateLimitError{ResetAt: resetAt, Message: decoded.Message}
+}
+
+// linkNextRe extracts the URL of the rel="next" entry from a GitHub
+// pagination Link header, e.g.:
+//
+//	<https://api.github.com/...&page=2>; rel="next", <...>; rel="last"
+var linkNextRe = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
+
+// nextPageURL returns the rel="next" URL from a response's Link header, or
+// "" if there is no next page.
+func nextPageURL(headers http.Header) string {
+	m := linkNextRe.FindStringSubmatch(headers.Get("Link"))
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// issuePath builds the "/repos/{owner}/{repo}/issues/{number}{suffix}" path
+// shared by every issue-scoped endpoint (the issue itself, comments,
+// labels), so that prefix is defined once instead of hand-built at each
+// call site.
+func (c *Client) issuePath(number int, suffix string) string {
+	return fmt.Sprintf("/repos/%s/%s/issues/%d%s", c.owner, c.repo, number, suffix)
 }
 
 // NotFoundError is returned when the GitHub API responds 404. It is

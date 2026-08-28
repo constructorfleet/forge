@@ -32,7 +32,7 @@ func (c *Client) GetIssue(ctx context.Context, id string) (domain.Issue, error) 
 	}
 
 	var gh ghIssue
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d", c.owner, c.repo, number)
+	path := c.issuePath(number, "")
 	if err := c.do(ctx, http.MethodGet, path, nil, &gh); err != nil {
 		return domain.Issue{}, err
 	}
@@ -41,6 +41,11 @@ func (c *Client) GetIssue(ctx context.Context, id string) (domain.Issue, error) 
 }
 
 // GetIssues fetches multiple Issues by ID, normalized to domain.Issue.
+//
+// Fetches are sequential rather than concurrent. This is a deliberate
+// choice, not an oversight: it keeps GitHub API rate-limit consumption
+// predictable and DAG-construction ordering deterministic, both of which
+// matter more at MVP scale than the latency of a few extra round trips.
 func (c *Client) GetIssues(ctx context.Context, ids []string) ([]domain.Issue, error) {
 	issues := make([]domain.Issue, 0, len(ids))
 	for _, id := range ids {
@@ -67,9 +72,12 @@ func (c *Client) normalizeIssue(gh ghIssue) (domain.Issue, error) {
 		deps[i] = domain.Dependency{IssueID: issueID, DependsOnID: dependsOn}
 	}
 
+	// Scope (Managed vs External) is execution-set membership, which the
+	// scheduler/DAG assigns (see CONTEXT.md "External Issue"; tickets
+	// 26/27) — not the tracker adapter. Leave it at its zero value here so
+	// there is exactly one writer of the field.
 	return domain.Issue{
 		ID:           issueID,
-		Scope:        domain.ScopeManaged,
 		Dependencies: deps,
 	}, nil
 }

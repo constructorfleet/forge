@@ -53,6 +53,40 @@ func TestClient_RateLimit_429(t *testing.T) {
 	}
 }
 
+func TestClient_RateLimit_403WithRetryAfter(t *testing.T) {
+	// GitHub's secondary/abuse rate limit is often a 403 with a
+	// Retry-After header and non-zero X-RateLimit-Remaining, distinct from
+	// the primary-limit 403+Remaining:0 case.
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "42")
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"You have exceeded a secondary rate limit"}`))
+	})
+
+	_, err := c.GetIssue(context.Background(), "1")
+	var rlErr *tracker.RateLimitError
+	if !errors.As(err, &rlErr) {
+		t.Fatalf("expected *tracker.RateLimitError, got %T: %v", err, err)
+	}
+	if rlErr.ResetAt.IsZero() {
+		t.Fatal("expected ResetAt to be populated from Retry-After")
+	}
+}
+
+func TestClient_PlainForbiddenIsNotTyped(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"insufficient permissions"}`))
+	})
+
+	_, err := c.GetIssue(context.Background(), "1")
+	var rlErr *tracker.RateLimitError
+	if errors.As(err, &rlErr) {
+		t.Fatal("did not expect a RateLimitError for a plain 403 with no rate-limit signals")
+	}
+}
+
 func TestClient_NonRateLimitErrorIsNotTyped(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

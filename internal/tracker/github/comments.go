@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -19,27 +18,36 @@ type ghComment struct {
 	} `json:"user"`
 }
 
-// GetComments fetches the comments on an Issue, oldest first (GitHub's
-// native ordering), normalized to tracker.Comment.
+// GetComments fetches all comments on an Issue, oldest first (GitHub's
+// native ordering), normalized to tracker.Comment. It requests the maximum
+// page size and follows the Link "next" header across every page,
+// accumulating results — otherwise only the first 30 (oldest) comments
+// would be returned and the newest comments, which are most likely to
+// carry current instructions or a needs-info signal (see CONTEXT.md
+// "Needs-info resume flow"), would be silently dropped.
 func (c *Client) GetComments(ctx context.Context, id string) ([]tracker.Comment, error) {
 	number, err := parseIssueID(id)
 	if err != nil {
 		return nil, err
 	}
 
-	var ghComments []ghComment
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", c.owner, c.repo, number)
-	if err := c.do(ctx, http.MethodGet, path, nil, &ghComments); err != nil {
-		return nil, err
-	}
+	url := c.baseURL + c.issuePath(number, "/comments") + "?per_page=100"
 
-	comments := make([]tracker.Comment, len(ghComments))
-	for i, gc := range ghComments {
-		comments[i] = tracker.Comment{
-			Author:    gc.User.Login,
-			Body:      gc.Body,
-			CreatedAt: gc.CreatedAt,
+	var comments []tracker.Comment
+	for url != "" {
+		var page []ghComment
+		headers, err := c.doWithHeaders(ctx, http.MethodGet, url, nil, &page)
+		if err != nil {
+			return nil, err
 		}
+		for _, gc := range page {
+			comments = append(comments, tracker.Comment{
+				Author:    gc.User.Login,
+				Body:      gc.Body,
+				CreatedAt: gc.CreatedAt,
+			})
+		}
+		url = nextPageURL(headers)
 	}
 	return comments, nil
 }
@@ -55,6 +63,6 @@ func (c *Client) AddComment(ctx context.Context, id string, body string) error {
 		Body string `json:"body"`
 	}{Body: body}
 
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments", c.owner, c.repo, number)
+	path := c.issuePath(number, "/comments")
 	return c.do(ctx, http.MethodPost, path, reqBody, nil)
 }

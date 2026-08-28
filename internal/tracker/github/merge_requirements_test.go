@@ -47,6 +47,19 @@ func TestGetMergeRequirements_FallsBackToRulesetsWhenNoProtection(t *testing.T) 
 	}
 }
 
+func TestGetMergeRequirements_PreservesSlashesInBranchName(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/widgets/branches/feature/foo/protection" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"required_status_checks":{"contexts":["build"]}}`))
+	})
+
+	if _, err := c.GetMergeRequirements(context.Background(), "feature/foo"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestGetMergeRequirements_EmptyWhenNeitherConfigured(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -40,7 +42,7 @@ type ghRulesetRule struct {
 // branch simply has no required checks.
 func (c *Client) GetMergeRequirements(ctx context.Context, branch string) (tracker.MergeRequirements, error) {
 	var protection ghBranchProtection
-	protPath := fmt.Sprintf("/repos/%s/%s/branches/%s/protection", c.owner, c.repo, branch)
+	protPath := fmt.Sprintf("/repos/%s/%s/branches/%s/protection", c.owner, c.repo, escapeBranchPath(branch))
 	err := c.do(ctx, http.MethodGet, protPath, nil, &protection)
 
 	var notFound *NotFoundError
@@ -63,7 +65,7 @@ func (c *Client) GetMergeRequirements(ctx context.Context, branch string) (track
 
 func (c *Client) getRulesetMergeRequirements(ctx context.Context, branch string) (tracker.MergeRequirements, error) {
 	var rules []ghRulesetRule
-	rulesPath := fmt.Sprintf("/repos/%s/%s/rules/branches/%s", c.owner, c.repo, branch)
+	rulesPath := fmt.Sprintf("/repos/%s/%s/rules/branches/%s", c.owner, c.repo, escapeBranchPath(branch))
 	err := c.do(ctx, http.MethodGet, rulesPath, nil, &rules)
 
 	var notFound *NotFoundError
@@ -84,6 +86,18 @@ func (c *Client) getRulesetMergeRequirements(ctx context.Context, branch string)
 	default:
 		return tracker.MergeRequirements{}, err
 	}
+}
+
+// escapeBranchPath percent-escapes a branch name for use as a URL path
+// segment, preserving literal '/' — GitHub's branch endpoints expect a
+// branch name like "feature/foo" to appear as literal segments, not
+// percent-encoded — while still escaping any other reserved characters.
+func escapeBranchPath(branch string) string {
+	parts := strings.Split(branch, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }
 
 func dedupe(in []string) []string {

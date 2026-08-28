@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/Teagan42/forge/internal/domain"
 )
 
 func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
@@ -27,6 +29,23 @@ func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
 	}
 	if issue.Dependencies[0].IssueID != "42" || issue.Dependencies[0].DependsOnID != "1" {
 		t.Fatalf("unexpected dependency: %+v", issue.Dependencies[0])
+	}
+}
+
+func TestGetIssue_DoesNotAssignScope(t *testing.T) {
+	// Managed-vs-External is execution-set membership, which the
+	// scheduler/DAG owns (tickets 26/27) — not the tracker adapter. A
+	// directly-fetched Issue must not be mislabeled Managed here.
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"number":1,"body":"## Dependencies: None"}`))
+	})
+
+	issue, err := c.GetIssue(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issue.Scope != domain.IssueScope("") {
+		t.Fatalf("expected zero-value Scope, got %q", issue.Scope)
 	}
 }
 

@@ -90,6 +90,40 @@ func TestParseDependencyBlock_RejectsMalformedBullet(t *testing.T) {
 	}
 }
 
+// Near-miss headers must fail closed: a human-written variant that isn't
+// exactly "## Dependencies" or "## Dependencies: None" must error rather
+// than silently be treated as "no Dependencies block present", since that
+// would let a Worker launch before its real prerequisite merges.
+func TestParseDependencyBlock_RejectsNearMissHeader_TrailingColon(t *testing.T) {
+	body := "## Dependencies:\n- #123\n"
+
+	_, err := tracker.ParseDependencyBlock(body)
+	if err == nil {
+		t.Fatal("expected an error for near-miss header with trailing colon, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("error message %q does not describe invalid syntax", err.Error())
+	}
+}
+
+func TestParseDependencyBlock_RejectsNearMissHeader_TrailingParenthetical(t *testing.T) {
+	body := "## Dependencies (blocked by)\n- #123\n"
+
+	_, err := tracker.ParseDependencyBlock(body)
+	if err == nil {
+		t.Fatal("expected an error for near-miss header with trailing text, got nil")
+	}
+}
+
+func TestParseDependencyBlock_RejectsNearMissHeader_TrailingDash(t *testing.T) {
+	body := "## Dependencies \xe2\x80\x94\n- #123\n"
+
+	_, err := tracker.ParseDependencyBlock(body)
+	if err == nil {
+		t.Fatal("expected an error for near-miss header with trailing em dash, got nil")
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

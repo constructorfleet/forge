@@ -17,13 +17,14 @@ import (
 // syntax below is accepted; freeform text is rejected rather than guessed
 // at via NLP, so Dependency parsing stays deterministic.
 var (
-	reHeaderNone    = regexp.MustCompile(`(?i)^##\s+Dependencies:\s*None\s*$`)
-	reHeader        = regexp.MustCompile(`(?i)^##\s+Dependencies\s*$`)
-	reAnyHeading    = regexp.MustCompile(`^#`)
-	reLabel         = regexp.MustCompile(`(?i)^Depends on:\s*$`)
-	reInlineDepends = regexp.MustCompile(`(?i)^Depends on:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$`)
-	reBullet        = regexp.MustCompile(`^-\s*#(\d+)\s*$`)
-	reIssueRef      = regexp.MustCompile(`#(\d+)`)
+	reHeaderNone     = regexp.MustCompile(`(?i)^##\s+Dependencies:\s*None\s*$`)
+	reHeader         = regexp.MustCompile(`(?i)^##\s+Dependencies\s*$`)
+	reNearMissHeader = regexp.MustCompile(`(?i)^##\s+Dependencies\b`)
+	reAnyHeading     = regexp.MustCompile(`^#`)
+	reLabel          = regexp.MustCompile(`(?i)^Depends on:\s*$`)
+	reInlineDepends  = regexp.MustCompile(`(?i)^Depends on:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$`)
+	reBullet         = regexp.MustCompile(`^-\s*#(\d+)\s*$`)
+	reIssueRef       = regexp.MustCompile(`#(\d+)`)
 )
 
 // ParseDependencyBlock extracts the list of prerequisite Issue IDs from the
@@ -44,10 +45,21 @@ func ParseDependencyBlock(body string) ([]string, error) {
 	for i, line := range lines {
 		trimmed := strings.TrimRight(line, "\r")
 
-		if reHeaderNone.MatchString(strings.TrimSpace(trimmed)) {
+		normalized := strings.TrimSpace(trimmed)
+		if reHeaderNone.MatchString(normalized) {
 			return []string{}, nil
 		}
-		if !reHeader.MatchString(strings.TrimSpace(trimmed)) {
+		if !reHeader.MatchString(normalized) {
+			// A near-miss heading (e.g. "## Dependencies:", "##
+			// Dependencies (blocked by)") must fail closed rather than be
+			// silently treated as "no Dependencies block present" — that
+			// would let an Issue schedule as if it had no prerequisites.
+			if reNearMissHeader.MatchString(normalized) {
+				return nil, fmt.Errorf(
+					"tracker: invalid %q syntax: %q (expected exactly \"## Dependencies\" or \"## Dependencies: None\")",
+					"## Dependencies", normalized,
+				)
+			}
 			continue
 		}
 
