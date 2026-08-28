@@ -50,10 +50,10 @@ type ghTimelineEvent struct {
 	} `json:"source"`
 }
 
-// ghPullRequest is the subset of GitHub's pull-request JSON shape
+// ghMergedPullRequest is the subset of GitHub's pull-request JSON shape
 // CheckExternal needs: whether it merged, and if so the merge commit to
 // check reachability of.
-type ghPullRequest struct {
+type ghMergedPullRequest struct {
 	MergedAt       *string `json:"merged_at"`
 	MergeCommitSHA string  `json:"merge_commit_sha"`
 }
@@ -150,7 +150,7 @@ func (c *Client) findMergedPRCommit(ctx context.Context, number int) (sha string
 			continue
 		}
 
-		var pr ghPullRequest
+		var pr ghMergedPullRequest
 		prPath := fmt.Sprintf("/repos/%s/%s/pulls/%d", c.owner, c.repo, src.Number)
 		if err := c.do(ctx, http.MethodGet, prPath, nil, &pr); err != nil {
 			return "", false, fmt.Errorf("fetch pull request #%d: %w", src.Number, err)
