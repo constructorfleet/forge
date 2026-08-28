@@ -142,7 +142,7 @@ func Default() Config {
 		Tracker: TrackerConfig{Type: "github"},
 		Git: GitConfig{
 			Base:           "origin/main",
-			BranchTemplate: "agent/{issue}",
+			BranchTemplate: "forge/{execution}/{issue}",
 			WorktreeRoot:   ".forge/worktrees",
 		},
 		Execution: ExecutionConfig{MaxParallel: 4},

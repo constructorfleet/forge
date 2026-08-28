@@ -3,9 +3,10 @@
 // worktree, but callers should speak in terms of Workspace, not worktree.
 //
 // The Manager never modifies the primary checkout: every operation it
-// performs is either `git worktree add`, `git worktree remove`, or a branch
-// creation scoped to the worktree being created — the repository's current
-// branch and working tree are left exactly as found.
+// performs is either `git worktree add`, `git worktree remove`, a branch
+// creation/deletion scoped to the worktree being managed, or a read-only
+// inspection — the repository's current branch and working tree are left
+// exactly as found.
 package workspace
 
 import (
@@ -16,10 +17,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
+
+// ErrNotFound is returned by Validate when no Workspace has been created
+// for the given executionID/issueID.
+var ErrNotFound = errors.New("workspace: not found")
+
+// validIDPattern restricts executionID and issueID to characters that can
+// never be interpreted as a path-traversal or path-separator component,
+// since both are joined directly into filesystem paths and git branch
+// names.
+var validIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateID rejects an executionID or issueID that is empty, contains
+// characters outside validIDPattern, or could otherwise be used to escape
+// the worktree root (e.g. "." or ".." or anything containing "..").
+func validateID(kind, id string) error {
+	if id == "" {
+		return fmt.Errorf("workspace: %s must not be empty", kind)
+	}
+	if !validIDPattern.MatchString(id) {
+		return fmt.Errorf(
+			"workspace: %s %q contains invalid characters; only [A-Za-z0-9._-] are allowed", kind, id)
+	}
+	if id == "." || id == ".." || strings.Contains(id, "..") {
+		return fmt.Errorf("workspace: %s %q is not a valid identifier", kind, id)
+	}
+	return nil
+}
+
+func validateIDs(executionID, issueID string) error {
+	if err := validateID("executionID", executionID); err != nil {
+		return err
+	}
+	if err := validateID("issueID", issueID); err != nil {
+		return err
+	}
+	return nil
+}
 
 // CommandRunner executes a git subcommand with args, rooted at dir, and
 // returns its captured stdout/stderr. Manager depends on this interface
@@ -63,6 +103,15 @@ type Manager struct {
 	branchTemplate string
 
 	runner CommandRunner
+
+	// mu serializes every mutating sequence of git worktree/branch
+	// operations against this repository. `git worktree add/remove` and
+	// branch creation/deletion are not safe to run concurrently against
+	// one repository (index.lock / .git/worktrees contention), and Create
+	// and Cleanup are check-then-act (lookup, then mutate) so callers
+	// creating/cleaning up distinct Workspaces concurrently would
+	// otherwise race.
+	mu sync.Mutex
 }
 
 // Option configures a Manager returned by NewManager.
@@ -75,7 +124,9 @@ func WithWorktreeRoot(root string) Option {
 }
 
 // WithBranchTemplate overrides the default branch name template
-// ("forge/{execution}/{issue}").
+// ("forge/{execution}/{issue}"). The template must contain the
+// {execution} placeholder: without it, two Executions touching the same
+// Issue would collide on one branch name, breaking Workspace isolation.
 func WithBranchTemplate(tmpl string) Option {
 	return func(m *Manager) { m.branchTemplate = tmpl }
 }
@@ -94,7 +145,11 @@ func WithGitBinary(bin string) Option {
 // NewManager returns a Manager whose primary checkout is rooted at
 // repoRoot. repoRoot must be the working directory of a Git repository (or
 // worktree of one); it is never modified by Manager operations.
-func NewManager(repoRoot string, opts ...Option) *Manager {
+//
+// NewManager rejects a branchTemplate (default or overridden via
+// WithBranchTemplate) that lacks the {execution} placeholder, since that
+// would let two Executions collide on one branch name.
+func NewManager(repoRoot string, opts ...Option) (*Manager, error) {
 	m := &Manager{
 		repoRoot:       repoRoot,
 		worktreeRoot:   ".forge/worktrees",
@@ -104,7 +159,24 @@ func NewManager(repoRoot string, opts ...Option) *Manager {
 	for _, opt := range opts {
 		opt(m)
 	}
-	return m
+	if !strings.Contains(m.branchTemplate, "{execution}") {
+		return nil, fmt.Errorf(
+			"workspace: branch template %q must contain the {execution} placeholder", m.branchTemplate)
+	}
+
+	// Resolve repoRoot to its canonical form up front (e.g. macOS's
+	// /var -> /private/var symlink) so every path Manager builds from it
+	// already matches what `git worktree list` reports git's own paths as
+	// canonical. Without this, comparing a worktree path we just computed
+	// against git's reported path can spuriously mismatch, and worse, that
+	// mismatch is only masked when the target directory still exists
+	// (samePath's own symlink-resolution fallback can't resolve a path
+	// that's already been removed).
+	if resolved, err := filepath.EvalSymlinks(m.repoRoot); err == nil {
+		m.repoRoot = resolved
+	}
+
+	return m, nil
 }
 
 // path returns the absolute Workspace directory for executionID/issueID.
@@ -125,16 +197,24 @@ func (m *Manager) branch(executionID, issueID string) string {
 	return name
 }
 
+// wrapGitErr formats a failed git invocation into an actionable error
+// identifying the command and its stderr (falling back to stdout if
+// stderr was empty). It is the single source of truth for that error
+// shape, shared by every call site that talks to git directly.
+func wrapGitErr(args []string, stdout, stderr string, err error) error {
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = strings.TrimSpace(stdout)
+	}
+	return fmt.Errorf("workspace: git %s: %w: %s", strings.Join(args, " "), err, msg)
+}
+
 // runGit runs a git subcommand rooted at dir and wraps any failure into an
 // actionable error identifying the command and the git stderr output.
 func (m *Manager) runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	stdout, stderr, err := m.runner.Run(ctx, dir, args...)
 	if err != nil {
-		msg := strings.TrimSpace(stderr)
-		if msg == "" {
-			msg = strings.TrimSpace(stdout)
-		}
-		return stdout, fmt.Errorf("workspace: git %s: %w: %s", strings.Join(args, " "), err, msg)
+		return stdout, wrapGitErr(args, stdout, stderr, err)
 	}
 	return stdout, nil
 }
@@ -148,8 +228,17 @@ func (m *Manager) runGit(ctx context.Context, dir string, args ...string) (strin
 //
 // Create is idempotent: calling it again for the same executionID/issueID
 // returns the existing Workspace without error, regardless of base (the
-// existing worktree's branch is not moved).
+// existing worktree's branch is not moved). To pick up a new base, callers
+// must Cleanup the Workspace first — Cleanup deletes the branch along with
+// the worktree, so a subsequent Create is free to recreate it from base.
 func (m *Manager) Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error) {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return domain.Workspace{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	path := m.path(executionID, issueID)
 	branchName := m.branch(executionID, issueID)
 
@@ -168,11 +257,17 @@ func (m *Manager) Create(ctx context.Context, executionID, issueID, base string)
 		return domain.Workspace{}, err
 	}
 
+	// "--" terminates option parsing so a base/branch value that happens
+	// to start with "-" is never misread as a git worktree add flag.
 	var addArgs []string
 	if branchExists {
-		addArgs = []string{"worktree", "add", path, branchName}
+		// Recovery path: the branch survived (e.g. the worktree directory
+		// vanished without going through Cleanup) but no worktree is
+		// currently registered for it. Reuse the branch as-is; base is
+		// intentionally ignored here since the branch already has commits.
+		addArgs = []string{"worktree", "add", "--", path, branchName}
 	} else {
-		addArgs = []string{"worktree", "add", "-b", branchName, path, base}
+		addArgs = []string{"worktree", "add", "-b", branchName, "--", path, base}
 	}
 	if _, err := m.runGit(ctx, m.repoRoot, addArgs...); err != nil {
 		return domain.Workspace{}, err
@@ -184,7 +279,8 @@ func (m *Manager) Create(ctx context.Context, executionID, issueID, base string)
 // branchExists reports whether branchName already exists in the primary
 // repository.
 func (m *Manager) branchExists(ctx context.Context, branchName string) (bool, error) {
-	_, stderr, err := m.runner.Run(ctx, m.repoRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branchName)
+	args := []string{"rev-parse", "--verify", "--quiet", "refs/heads/" + branchName}
+	stdout, stderr, err := m.runner.Run(ctx, m.repoRoot, args...)
 	if err == nil {
 		return true, nil
 	}
@@ -195,7 +291,7 @@ func (m *Manager) branchExists(ctx context.Context, branchName string) (bool, er
 		// reporting.
 		return false, nil
 	}
-	return false, fmt.Errorf("workspace: git rev-parse --verify %s: %w: %s", branchName, err, strings.TrimSpace(stderr))
+	return false, wrapGitErr(args, stdout, stderr, err)
 }
 
 // worktreeEntry is one parsed entry from `git worktree list --porcelain`.
@@ -257,46 +353,79 @@ func samePath(a, b string) bool {
 	return ca == cb
 }
 
-// Validate reports whether the Workspace for executionID/issueID exists and
-// is a healthy Git worktree: registered with the primary repository and
-// present on disk. ok is false (with a nil error) when no such Workspace
-// has been created. A non-nil error indicates the Workspace is registered
-// but unhealthy (e.g. its directory was removed out-of-band) or that
-// inspection itself failed.
-func (m *Manager) Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, bool, error) {
+// Validate inspects the Workspace for executionID/issueID: registered with
+// the primary repository and present on disk.
+//
+// It returns ErrNotFound (checkable with errors.Is) when no such Workspace
+// has been created. Any other non-nil error means the Workspace is
+// registered but unhealthy (e.g. its directory was removed out-of-band) or
+// that inspection itself failed. On success it returns the Workspace.
+func (m *Manager) Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error) {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return domain.Workspace{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	path := m.path(executionID, issueID)
 
 	entry, ok, err := m.lookupWorktree(ctx, path)
 	if err != nil {
-		return domain.Workspace{}, false, err
+		return domain.Workspace{}, err
 	}
 	if !ok {
-		return domain.Workspace{}, false, nil
+		return domain.Workspace{}, ErrNotFound
 	}
 
 	info, statErr := os.Stat(path)
-	if statErr != nil || !info.IsDir() {
-		return domain.Workspace{}, false, fmt.Errorf(
+	if statErr != nil {
+		return domain.Workspace{}, fmt.Errorf(
 			"workspace: registered worktree %s missing its directory: %w", path, statErr)
 	}
+	if !info.IsDir() {
+		return domain.Workspace{}, fmt.Errorf(
+			"workspace: registered worktree %s exists but is not a directory", path)
+	}
 
-	return domain.Workspace{IssueID: issueID, Path: path, Branch: entry.branch}, true, nil
+	return domain.Workspace{IssueID: issueID, Path: path, Branch: entry.branch}, nil
 }
 
-// Cleanup removes the Workspace for executionID/issueID: both its directory
-// and its `git worktree` registration. Cleaning up a Workspace that does
-// not exist is not an error.
+// Cleanup removes the Workspace for executionID/issueID: its directory, its
+// `git worktree` registration, and its branch. Cleaning up a Workspace that
+// does not exist is not an error (any leftover directory at its path is
+// still removed).
+//
+// Deleting the branch matters for correctness, not just tidiness: Create's
+// idempotent-reuse path takes an existing branch as-is and ignores base, so
+// an orphaned branch left behind by Cleanup would cause a later Create call
+// with a new base to silently discard it.
 func (m *Manager) Cleanup(ctx context.Context, executionID, issueID string) error {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	path := m.path(executionID, issueID)
 
-	_, ok, err := m.lookupWorktree(ctx, path)
+	entry, ok, err := m.lookupWorktree(ctx, path)
 	if err != nil {
 		return err
 	}
-	if ok {
-		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", path); err != nil {
-			return err
+
+	if !ok {
+		// Nothing registered with git; still clear out any leftover
+		// directory so a later Create isn't confused by stale contents.
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("workspace: remove directory %s: %w", path, err)
 		}
+		return nil
+	}
+
+	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
+		return err
 	}
 
 	// Belt-and-suspenders: `git worktree remove` deletes the directory
@@ -309,5 +438,12 @@ func (m *Manager) Cleanup(ctx context.Context, executionID, issueID string) erro
 	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
 		return err
 	}
+
+	if entry.branch != "" {
+		if _, err := m.runGit(ctx, m.repoRoot, "branch", "-D", "--", entry.branch); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

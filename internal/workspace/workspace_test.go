@@ -2,10 +2,12 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -40,16 +42,35 @@ func newTempRepo(t *testing.T) (root, initialSHA string) {
 	return root, sha
 }
 
+// newManager is the test-side helper for NewManager, failing the test on a
+// construction error (e.g. an invalid branch template) so call sites that
+// don't care about that error stay concise.
+func newManager(t *testing.T, repoRoot string, opts ...Option) *Manager {
+	t.Helper()
+	mgr, err := NewManager(repoRoot, opts...)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	return mgr
+}
+
 func TestCreate_WorktreeAtExpectedPathAndBranch(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	wantPath := filepath.Join(root, ".forge", "worktrees", "exec1", "issue-42")
+	// Manager resolves repoRoot's canonical form (e.g. macOS's /var ->
+	// /private/var symlink) so its paths match what git itself reports;
+	// resolve root the same way before comparing.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", root, err)
+	}
+	wantPath := filepath.Join(resolvedRoot, ".forge", "worktrees", "exec1", "issue-42")
 	if ws.Path != wantPath {
 		t.Errorf("Path = %q, want %q", ws.Path, wantPath)
 	}
@@ -77,7 +98,7 @@ func TestCreate_HonorsPerWorkerBase(t *testing.T) {
 	runGit(t, root, "commit", "-q", "-m", "second")
 	newerSHA := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
 
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	// Worker A captured base at the older commit.
 	wsA, err := mgr.Create(context.Background(), "exec1", "issue-a", base)
@@ -102,7 +123,7 @@ func TestCreate_HonorsPerWorkerBase(t *testing.T) {
 
 func TestCreate_IdempotentReCreation(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	ws1, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
 	if err != nil {
@@ -121,7 +142,7 @@ func TestCreate_IdempotentReCreation(t *testing.T) {
 
 func TestCreate_PrimaryCheckoutUntouched(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	// Track every tracked file's content before Create; the worktree root
 	// itself (an untracked directory holding the new worktrees) is
@@ -151,9 +172,64 @@ func TestCreate_PrimaryCheckoutUntouched(t *testing.T) {
 	}
 }
 
+func TestCreate_RejectsPathTraversalIDs(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	cases := []struct {
+		name        string
+		executionID string
+		issueID     string
+	}{
+		{"execution traversal", "../../etc", "issue-42"},
+		{"issue traversal", "exec1", "../../etc"},
+		{"execution dotdot only", "..", "issue-42"},
+		{"issue dotdot only", "exec1", ".."},
+		{"execution empty", "", "issue-42"},
+		{"issue empty", "exec1", ""},
+		{"execution path separator", "exec/1", "issue-42"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := mgr.Create(context.Background(), tc.executionID, tc.issueID, base)
+			if err == nil {
+				t.Fatalf("Create(%q, %q) should have been rejected", tc.executionID, tc.issueID)
+			}
+		})
+	}
+
+	// Confirm no traversal attempt created anything above the intended
+	// worktree root.
+	worktreeRoot := filepath.Join(root, ".forge", "worktrees")
+	if _, err := os.Stat(worktreeRoot); err == nil {
+		entries, readErr := os.ReadDir(worktreeRoot)
+		if readErr == nil && len(entries) != 0 {
+			t.Errorf("worktree root %s should be empty after rejected Create calls, has: %v", worktreeRoot, entries)
+		}
+	}
+}
+
+func TestCleanup_RejectsPathTraversalIDs(t *testing.T) {
+	root, _ := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if err := mgr.Cleanup(context.Background(), "../../etc", "issue-42"); err == nil {
+		t.Fatal("Cleanup with a path-traversal executionID should be rejected")
+	}
+}
+
+func TestValidate_RejectsPathTraversalIDs(t *testing.T) {
+	root, _ := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if _, err := mgr.Validate(context.Background(), "exec1", ".."); err == nil {
+		t.Fatal("Validate with a path-traversal issueID should be rejected")
+	}
+}
+
 func TestCleanup_RemovesDirAndWorktreeEntry(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
 	if err != nil {
@@ -174,30 +250,81 @@ func TestCleanup_RemovesDirAndWorktreeEntry(t *testing.T) {
 	}
 }
 
-func TestCleanup_MissingWorktreeIsNotAnError(t *testing.T) {
-	root, _ := newTempRepo(t)
-	mgr := NewManager(root)
-
-	if err := mgr.Cleanup(context.Background(), "exec1", "never-created"); err != nil {
-		t.Errorf("Cleanup of nonexistent workspace should be a no-op, got: %v", err)
-	}
-}
-
-func TestValidate_ExistingWorktree(t *testing.T) {
+func TestCleanup_DeletesBranch(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, ok, err := mgr.Validate(context.Background(), "exec1", "issue-42")
+	if err := mgr.Cleanup(context.Background(), "exec1", "issue-42"); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+
+	branches := runGit(t, root, "branch", "--list", ws.Branch)
+	if strings.TrimSpace(branches) != "" {
+		t.Errorf("branch %s still exists after Cleanup: %q", ws.Branch, branches)
+	}
+}
+
+func TestCleanup_MissingWorktreeIsNotAnError(t *testing.T) {
+	root, _ := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if err := mgr.Cleanup(context.Background(), "exec1", "never-created"); err != nil {
+		t.Errorf("Cleanup of nonexistent workspace should be a no-op, got: %v", err)
+	}
+}
+
+func TestCreate_AfterCleanup_HonorsNewBase(t *testing.T) {
+	root, base := newTempRepo(t)
+
+	if err := os.WriteFile(filepath.Join(root, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatalf("write second file: %v", err)
+	}
+	runGit(t, root, "add", "second.txt")
+	runGit(t, root, "commit", "-q", "-m", "second")
+	newerSHA := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	mgr := newManager(t, root)
+
+	ws1, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	head1 := strings.TrimSpace(runGit(t, ws1.Path, "rev-parse", "HEAD"))
+	if head1 != base {
+		t.Fatalf("first Create HEAD = %s, want %s", head1, base)
+	}
+
+	if err := mgr.Cleanup(context.Background(), "exec1", "issue-42"); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+
+	ws2, err := mgr.Create(context.Background(), "exec1", "issue-42", newerSHA)
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+	head2 := strings.TrimSpace(runGit(t, ws2.Path, "rev-parse", "HEAD"))
+	if head2 != newerSHA {
+		t.Errorf("second Create HEAD = %s, want new base %s (branch was reused/stale instead of recreated)", head2, newerSHA)
+	}
+}
+
+func TestValidate_ExistingWorktree(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := mgr.Validate(context.Background(), "exec1", "issue-42")
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
-	}
-	if !ok {
-		t.Fatal("Validate: ok = false, want true for existing workspace")
 	}
 	if got.Path != ws.Path || got.Branch != ws.Branch {
 		t.Errorf("Validate Workspace = %+v, want %+v", got, ws)
@@ -206,20 +333,17 @@ func TestValidate_ExistingWorktree(t *testing.T) {
 
 func TestValidate_MissingWorktree(t *testing.T) {
 	root, _ := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
-	_, ok, err := mgr.Validate(context.Background(), "exec1", "never-created")
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if ok {
-		t.Fatal("Validate: ok = true, want false for nonexistent workspace")
+	_, err := mgr.Validate(context.Background(), "exec1", "never-created")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Validate err = %v, want ErrNotFound", err)
 	}
 }
 
 func TestValidate_DirRemovedButWorktreeRegistered(t *testing.T) {
 	root, base := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
 	if err != nil {
@@ -230,15 +354,18 @@ func TestValidate_DirRemovedButWorktreeRegistered(t *testing.T) {
 		t.Fatalf("remove dir: %v", err)
 	}
 
-	_, ok, err := mgr.Validate(context.Background(), "exec1", "issue-42")
-	if err == nil && ok {
+	_, err = mgr.Validate(context.Background(), "exec1", "issue-42")
+	if err == nil {
 		t.Fatal("Validate should not report a healthy worktree when its directory is missing")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatal("Validate should distinguish an unhealthy (registered) worktree from ErrNotFound")
 	}
 }
 
 func TestCreate_ActionableErrorOnBadBase(t *testing.T) {
 	root, _ := newTempRepo(t)
-	mgr := NewManager(root)
+	mgr := newManager(t, root)
 
 	_, err := mgr.Create(context.Background(), "exec1", "issue-42", "not-a-real-ref")
 	if err == nil {
@@ -256,7 +383,7 @@ func TestCreate_ActionableErrorWrapsStderr(t *testing.T) {
 	// Point the manager at a directory that is not a Git repository at all,
 	// to force a git failure with stderr content to wrap.
 	notARepo := t.TempDir()
-	mgr := NewManager(notARepo)
+	mgr := newManager(t, notARepo)
 
 	_, err := mgr.Create(context.Background(), "exec1", "issue-42", "HEAD")
 	if err == nil {
@@ -264,5 +391,46 @@ func TestCreate_ActionableErrorWrapsStderr(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "not a git repository") {
 		t.Errorf("error %q should include wrapped git stderr", err.Error())
+	}
+}
+
+func TestNewManager_RejectsBranchTemplateMissingExecutionPlaceholder(t *testing.T) {
+	root, _ := newTempRepo(t)
+
+	_, err := NewManager(root, WithBranchTemplate("agent/{issue}"))
+	if err == nil {
+		t.Fatal("NewManager should reject a branch template lacking {execution}")
+	}
+}
+
+func TestCreate_ConcurrentDistinctIssuesAllSucceed(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			issueID := "issue-" + string(rune('a'+i))
+			_, err := mgr.Create(context.Background(), "exec1", issueID, base)
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("Create issue %d: %v", i, err)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		issueID := "issue-" + string(rune('a'+i))
+		if _, err := mgr.Validate(context.Background(), "exec1", issueID); err != nil {
+			t.Errorf("Validate issue %d after concurrent Create: %v", i, err)
+		}
 	}
 }

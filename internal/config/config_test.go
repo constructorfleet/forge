@@ -32,8 +32,8 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Git.Base != "origin/main" {
 		t.Errorf("Git.Base = %q, want origin/main", cfg.Git.Base)
 	}
-	if cfg.Git.BranchTemplate != "agent/{issue}" {
-		t.Errorf("Git.BranchTemplate = %q, want agent/{issue}", cfg.Git.BranchTemplate)
+	if cfg.Git.BranchTemplate != "forge/{execution}/{issue}" {
+		t.Errorf("Git.BranchTemplate = %q, want forge/{execution}/{issue}", cfg.Git.BranchTemplate)
 	}
 	if cfg.Git.WorktreeRoot != ".forge/worktrees" {
 		t.Errorf("Git.WorktreeRoot = %q, want .forge/worktrees", cfg.Git.WorktreeRoot)
@@ -90,7 +90,7 @@ tracker:
   type: github
 git:
   base: origin/main
-  branch_template: agent/{issue}
+  branch_template: agent/{execution}/{issue}
   worktree_root: .forge/worktrees
 execution:
   max_parallel: 8
@@ -201,8 +201,8 @@ git:
 	if cfg.Git.Base != "upstream/main" {
 		t.Errorf("Git.Base = %q, want upstream/main", cfg.Git.Base)
 	}
-	if cfg.Git.BranchTemplate != "agent/{issue}" {
-		t.Errorf("Git.BranchTemplate = %q, want default agent/{issue}", cfg.Git.BranchTemplate)
+	if cfg.Git.BranchTemplate != "forge/{execution}/{issue}" {
+		t.Errorf("Git.BranchTemplate = %q, want default forge/{execution}/{issue}", cfg.Git.BranchTemplate)
 	}
 	if cfg.Git.WorktreeRoot != ".forge/worktrees" {
 		t.Errorf("Git.WorktreeRoot = %q, want default .forge/worktrees", cfg.Git.WorktreeRoot)
@@ -347,6 +347,21 @@ func TestLoad_BranchTemplateMissingPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "git.branch_template") {
 		t.Errorf("Load() error = %v, want it to identify git.branch_template", err)
+	}
+}
+
+func TestLoad_BranchTemplateMissingExecutionPlaceholder(t *testing.T) {
+	path := writeTemp(t, "git:\n  branch_template: agent/{issue}\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "git.branch_template") {
+		t.Errorf("Load() error = %v, want it to identify git.branch_template", err)
+	}
+	if !strings.Contains(err.Error(), "{execution}") {
+		t.Errorf("Load() error = %v, want it to mention the {execution} placeholder", err)
 	}
 }
 

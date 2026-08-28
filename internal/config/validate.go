@@ -47,8 +47,16 @@ func validate(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.Git.BranchTemplate) == "" {
 		errs = append(errs, fieldErr("git.branch_template", cfg.Git.BranchTemplate, "must not be empty"))
-	} else if !strings.Contains(cfg.Git.BranchTemplate, "{issue}") {
-		errs = append(errs, fieldErr("git.branch_template", cfg.Git.BranchTemplate, "must contain the {issue} placeholder"))
+	} else {
+		if !strings.Contains(cfg.Git.BranchTemplate, "{issue}") {
+			errs = append(errs, fieldErr("git.branch_template", cfg.Git.BranchTemplate, "must contain the {issue} placeholder"))
+		}
+		if !strings.Contains(cfg.Git.BranchTemplate, "{execution}") {
+			// Without {execution}, two Executions touching the same Issue
+			// would collide on one branch name, breaking Workspace
+			// isolation (see internal/workspace).
+			errs = append(errs, fieldErr("git.branch_template", cfg.Git.BranchTemplate, "must contain the {execution} placeholder"))
+		}
 	}
 	if strings.TrimSpace(cfg.Git.WorktreeRoot) == "" {
 		errs = append(errs, fieldErr("git.worktree_root", cfg.Git.WorktreeRoot, "must not be empty"))
