@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +20,31 @@ import (
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/workspace"
 )
+
+// fakeCommandRunner is a deterministic gate.CommandRunner double for engine
+// tests: outcomes are programmed per command string, so exercising the
+// engine's gate wiring never shells out to a real tool.
+type fakeCommandRunner struct {
+	outcomes map[string]fakeGateOutcome
+	calls    []string
+}
+
+type fakeGateOutcome struct {
+	exitCode int
+	stdout   string
+	stderr   string
+}
+
+func (f *fakeCommandRunner) Run(_ context.Context, _, command string, stdout, stderr io.Writer) (int, error) {
+	f.calls = append(f.calls, command)
+	oc, ok := f.outcomes[command]
+	if !ok {
+		return 0, nil
+	}
+	_, _ = io.WriteString(stdout, oc.stdout)
+	_, _ = io.WriteString(stderr, oc.stderr)
+	return oc.exitCode, nil
+}
 
 // stubTracker is a minimal engine.IssueFetcher double.
 type stubTracker struct {
@@ -108,7 +135,7 @@ func newTestEngine(t *testing.T, issues map[string]domain.Issue) testEngine {
 	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake, ws: ws}
 }
 
-func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.T) {
+func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"42": {ID: "42"},
 	})
@@ -119,8 +146,11 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateValidating {
-		t.Fatalf("final state = %s, want VALIDATING", result.Issue.State)
+	// config.Default() configures no Quality Gates, so the Gate Runner has
+	// nothing to run and trivially "passes" straight through to REVIEWING
+	// (ticket 20's resting state).
+	if result.Issue.State != domain.StateReviewing {
+		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
 	}
 
 	// Full state is inspectable via the persisted store afterward (the
@@ -132,8 +162,8 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 	if state.Execution.BaseRevision != te.base {
 		t.Errorf("Execution.BaseRevision = %s, want %s", state.Execution.BaseRevision, te.base)
 	}
-	if len(state.Issues) != 1 || state.Issues[0].State != domain.StateValidating {
-		t.Fatalf("persisted issues = %+v, want one Issue in VALIDATING", state.Issues)
+	if len(state.Issues) != 1 || state.Issues[0].State != domain.StateReviewing {
+		t.Fatalf("persisted issues = %+v, want one Issue in REVIEWING", state.Issues)
 	}
 
 	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
@@ -150,6 +180,7 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 		"issue.transitioned", // -> IMPLEMENTING
 		"agent.result",
 		"issue.transitioned", // -> VALIDATING
+		"issue.transitioned", // -> REVIEWING
 	}
 	if len(events) != len(wantSequence) {
 		t.Fatalf("got %d events, want %d: %+v", len(events), len(wantSequence), events)
@@ -169,8 +200,8 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 	if err := json.Unmarshal([]byte(events[len(events)-1].Data), &lastTransition); err != nil {
 		t.Fatalf("unmarshal last transition event: %v", err)
 	}
-	if lastTransition.From != string(domain.StateImplementing) || lastTransition.To != string(domain.StateValidating) {
-		t.Errorf("last transition = %+v, want IMPLEMENTING -> VALIDATING", lastTransition)
+	if lastTransition.From != string(domain.StateValidating) || lastTransition.To != string(domain.StateReviewing) {
+		t.Errorf("last transition = %+v, want VALIDATING -> REVIEWING", lastTransition)
 	}
 
 	// The Agent was invoked with the compiled Repository Context and the
@@ -193,6 +224,120 @@ func TestExecute_HappyPath_ReachesValidatingWithPersistedTransitions(t *testing.
 	// The happy path never orphans the Workspace, so Cleanup is not called.
 	if te.ws.CleanupCalled() {
 		t.Error("Cleanup was called on the happy path, want it left in place")
+	}
+}
+
+// TestExecute_QualityGatesPass_AdvancesToReviewing is ticket 19's
+// integration test: a fake Agent reports IMPLEMENTED, every configured
+// Quality Gate passes, and the Issue advances to REVIEWING.
+func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"20": {ID: "20"},
+	})
+	te.fake.ProgramResult("20", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Quality.Gates = []config.QualityGate{
+		{Name: "test", Command: "make test"},
+		{Name: "lint", Command: "make lint"},
+	}
+	runner := &fakeCommandRunner{outcomes: map[string]fakeGateOutcome{
+		"make test": {exitCode: 0, stdout: "tests ok"},
+		"make lint": {exitCode: 0, stdout: "lint ok"},
+	}}
+	te.eng.Gates = runner
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "20", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateReviewing {
+		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	}
+	if want := []string{"make test", "make lint"}; len(runner.calls) != len(want) {
+		t.Fatalf("got %d gate calls, want %d: %v", len(runner.calls), len(want), runner.calls)
+	}
+
+	runs, err := te.store.GateRunsByIssue(ctx, result.ExecutionID, "20")
+	if err != nil {
+		t.Fatalf("GateRunsByIssue: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d persisted gate runs, want 2: %+v", len(runs), runs)
+	}
+	for i, name := range []string{"test", "lint"} {
+		if runs[i].Name != name || !runs[i].Passed {
+			t.Errorf("runs[%d] = %+v, want Name %s and Passed true", i, runs[i], name)
+		}
+	}
+}
+
+// TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic is ticket 19's
+// other integration test: a fake Agent reports IMPLEMENTED, one configured
+// Quality Gate fails, subsequent gates are skipped, and the Issue ends in
+// FAILED with bounded diagnostic feedback persisted (as a "gate.failed"
+// Event and via the gate_runs row).
+func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"21": {ID: "21"},
+	})
+	te.fake.ProgramResult("21", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Quality.Gates = []config.QualityGate{
+		{Name: "test", Command: "make test"},
+		{Name: "lint", Command: "make lint"},
+	}
+	runner := &fakeCommandRunner{outcomes: map[string]fakeGateOutcome{
+		"make test": {exitCode: 1, stdout: "1 test failed", stderr: "assertion error in foo_test.go"},
+	}}
+	te.eng.Gates = runner
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "21", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	}
+	if !result.Issue.State.IsTerminal() {
+		t.Error("FAILED should be terminal")
+	}
+
+	// The second gate (lint) must not have run: first failure stops
+	// subsequent gates by default.
+	if len(runner.calls) != 1 {
+		t.Fatalf("got %d gate calls, want 1 (lint should not have run): %v", len(runner.calls), runner.calls)
+	}
+
+	runs, err := te.store.GateRunsByIssue(ctx, result.ExecutionID, "21")
+	if err != nil {
+		t.Fatalf("GateRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Name != "test" || runs[0].Passed {
+		t.Fatalf("persisted gate runs = %+v, want one failing 'test' run", runs)
+	}
+	if runs[0].ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", runs[0].ExitCode)
+	}
+
+	// Bounded diagnostic feedback is persisted as a "gate.failed" Event,
+	// naming the failing gate, its command, exit code, and output.
+	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	var gateFailed *storage.Event
+	for i := range events {
+		if events[i].Type == "gate.failed" {
+			gateFailed = &events[i]
+		}
+	}
+	if gateFailed == nil {
+		t.Fatalf("no gate.failed event found among %+v", events)
+	}
+	for _, want := range []string{"test", "make test", "1 test failed", "assertion error"} {
+		if !strings.Contains(gateFailed.Data, want) {
+			t.Errorf("gate.failed event data = %s, want it to contain %q", gateFailed.Data, want)
+		}
 	}
 }
 
@@ -323,8 +468,8 @@ func TestLoadStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 	if report.Execution.ID != result.ExecutionID {
 		t.Errorf("report.Execution.ID = %s, want %s", report.Execution.ID, result.ExecutionID)
 	}
-	if len(report.Issues) != 1 || report.Issues[0].State != domain.StateValidating {
-		t.Fatalf("report.Issues = %+v, want one Issue in VALIDATING", report.Issues)
+	if len(report.Issues) != 1 || report.Issues[0].State != domain.StateReviewing {
+		t.Fatalf("report.Issues = %+v, want one Issue in REVIEWING", report.Issues)
 	}
 	if len(report.Events) == 0 {
 		t.Error("report.Events is empty, want the full transition/event log")

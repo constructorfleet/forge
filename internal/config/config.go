@@ -101,6 +101,14 @@ type AgentConfig struct {
 	Provider string `yaml:"provider"`
 }
 
+// AgentFeedbackConfig bounds the captured command output (e.g. Quality
+// Gate stdout/stderr) that is included in diagnostic Feedback routed back
+// to the Agent. See CONTEXT.md "Gate Runner" and IDEATION.md §23 "Output
+// bounding".
+type AgentFeedbackConfig struct {
+	MaxOutputBytes int `yaml:"max_output_bytes"`
+}
+
 // DependenciesConfig configures the escape-hatch Dependency Source. The
 // canonical source is the issue body's `## Dependencies` block; entries here
 // override it. See CONTEXT.md "Dependency Source" and ADR 0003. Keys and
@@ -118,18 +126,19 @@ type DependenciesConfig struct {
 // configured here are exactly what an Issue's RetryBudget is constructed
 // from.
 type Config struct {
-	Version      int                `yaml:"version"`
-	Tracker      TrackerConfig      `yaml:"tracker"`
-	Git          GitConfig          `yaml:"git"`
-	Execution    ExecutionConfig    `yaml:"execution"`
-	Retry        domain.RetryLimits `yaml:"retry"`
-	Workflow     WorkflowConfig     `yaml:"workflow"`
-	Quality      QualityConfig      `yaml:"quality"`
-	PullRequests PullRequestsConfig `yaml:"pull_requests"`
-	CI           CIConfig           `yaml:"ci"`
-	Blocked      BlockedConfig      `yaml:"blocked"`
-	Agent        AgentConfig        `yaml:"agent"`
-	Dependencies DependenciesConfig `yaml:"dependencies"`
+	Version       int                 `yaml:"version"`
+	Tracker       TrackerConfig       `yaml:"tracker"`
+	Git           GitConfig           `yaml:"git"`
+	Execution     ExecutionConfig     `yaml:"execution"`
+	Retry         domain.RetryLimits  `yaml:"retry"`
+	Workflow      WorkflowConfig      `yaml:"workflow"`
+	Quality       QualityConfig       `yaml:"quality"`
+	PullRequests  PullRequestsConfig  `yaml:"pull_requests"`
+	CI            CIConfig            `yaml:"ci"`
+	Blocked       BlockedConfig       `yaml:"blocked"`
+	Agent         AgentConfig         `yaml:"agent"`
+	Dependencies  DependenciesConfig  `yaml:"dependencies"`
+	AgentFeedback AgentFeedbackConfig `yaml:"agent_feedback"`
 }
 
 // Default returns the fully-defaulted Config used when no .forge.yaml is
@@ -155,8 +164,9 @@ func Default() Config {
 		CI: CIConfig{
 			MergeRequirements: MergeRequirementsConfig{Mode: MergeRequirementsGitHub},
 		},
-		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
-		Agent:   AgentConfig{Provider: "claude-code"},
+		Blocked:       BlockedConfig{Label: "needs-info", Comment: true},
+		Agent:         AgentConfig{Provider: "claude-code"},
+		AgentFeedback: AgentFeedbackConfig{MaxOutputBytes: 20000},
 	}
 }
 

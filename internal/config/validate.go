@@ -108,6 +108,10 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("agent.provider", cfg.Agent.Provider, "must not be empty"))
 	}
 
+	if cfg.AgentFeedback.MaxOutputBytes < 1 {
+		errs = append(errs, fieldErr("agent_feedback.max_output_bytes", fmt.Sprint(cfg.AgentFeedback.MaxOutputBytes), "must be >= 1"))
+	}
+
 	for issueID, deps := range cfg.Dependencies.Overrides {
 		if strings.TrimSpace(issueID) == "" {
 			errs = append(errs, fieldErr("dependencies.overrides", "", "issue ID key must not be empty"))

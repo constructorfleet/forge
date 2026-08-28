@@ -40,6 +40,24 @@ type Event struct {
 	OccurredAt  time.Time
 }
 
+// GateRun is one executed Quality Gate's persisted result, scoped to an
+// Execution and Issue (CONTEXT.md "Gate Runner"). It mirrors
+// internal/gate.Result but lives in this package so storage has no
+// dependency on internal/gate — callers (the engine) translate between the
+// two.
+type GateRun struct {
+	ExecutionID string
+	IssueID     string
+	Name        string
+	Command     string
+	StartedAt   time.Time
+	FinishedAt  time.Time
+	ExitCode    int
+	Stdout      string
+	Stderr      string
+	Passed      bool
+}
+
 // ExecutionState is an Execution reloaded together with every Issue
 // currently recorded against it — the "full state" round-trip the
 // acceptance criteria require.
@@ -91,6 +109,14 @@ type Store interface {
 	// AppendEvent records a standalone Event (for occurrences that are not
 	// Issue state transitions, e.g. execution-level events).
 	AppendEvent(ctx context.Context, event Event) error
+
+	// RecordGateRun persists one executed Quality Gate Result and appends a
+	// "gate.run" Event, transactionally. See CONTEXT.md "Gate Runner".
+	RecordGateRun(ctx context.Context, run GateRun) error
+
+	// GateRunsByIssue returns every GateRun recorded for one Issue within an
+	// Execution, ordered by insertion (i.e. execution order).
+	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]GateRun, error)
 
 	// EventsByExecution returns every Event recorded for an Execution,
 	// ordered by occurrence time.

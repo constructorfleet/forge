@@ -66,6 +66,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if len(cfg.Dependencies.Overrides) != 0 {
 		t.Errorf("Dependencies.Overrides = %+v, want empty", cfg.Dependencies.Overrides)
 	}
+	if cfg.AgentFeedback.MaxOutputBytes != 20000 {
+		t.Errorf("AgentFeedback.MaxOutputBytes = %d, want 20000", cfg.AgentFeedback.MaxOutputBytes)
+	}
 
 	// Default() must itself be a valid config.
 	if err := validate(cfg); err != nil {
@@ -126,6 +129,8 @@ dependencies:
     "123":
       - "100"
       - "101"
+agent_feedback:
+  max_output_bytes: 5000
 `)
 
 	cfg, err := Load(path)
@@ -154,6 +159,9 @@ dependencies:
 	}
 	if deps, ok := cfg.Dependencies.Overrides["123"]; !ok || !slices.Equal(deps, []string{"100", "101"}) {
 		t.Errorf("Dependencies.Overrides[123] = %v", deps)
+	}
+	if cfg.AgentFeedback.MaxOutputBytes != 5000 {
+		t.Errorf("AgentFeedback.MaxOutputBytes = %d, want 5000", cfg.AgentFeedback.MaxOutputBytes)
 	}
 }
 
@@ -374,6 +382,18 @@ func TestLoad_EmptyQualityGateFields(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "quality.gates[0].name") {
 		t.Errorf("Load() error = %v, want it to identify quality.gates[0].name", err)
+	}
+}
+
+func TestLoad_NonPositiveMaxOutputBytes(t *testing.T) {
+	path := writeTemp(t, "agent_feedback:\n  max_output_bytes: 0\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent_feedback.max_output_bytes") {
+		t.Errorf("Load() error = %v, want it to identify agent_feedback.max_output_bytes", err)
 	}
 }
 
