@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/gate"
 )
@@ -56,6 +57,32 @@ func TestExecCommandRunner_RunsInWorkDir(t *testing.T) {
 	}
 	if got := stdout.String(); got != "here\n" {
 		t.Errorf("stdout = %q, want %q", got, "here\n")
+	}
+}
+
+// TestExecCommandRunner_DoesNotHangOnSurvivingGrandchild reproduces the
+// scenario a bare exec.CommandContext SIGKILL is vulnerable to: the direct
+// `sh` process exits, but a backgrounded grandchild it spawned inherits
+// the stdout pipe's write end and keeps it open. Because stdout/stderr are
+// pipe-backed io.Writers (not *os.File), cmd.Run() would otherwise block
+// until that grandchild exits or closes the pipe — regardless of the
+// parent's own exit — since it waits for the internal io-copy goroutines
+// to see EOF. Run must bound this wait (see cmd.WaitDelay in exec.go) so a
+// single gate command can never hang the whole orchestration run.
+func TestExecCommandRunner_DoesNotHangOnSurvivingGrandchild(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := gate.ExecCommandRunner{}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = r.Run(context.Background(), t.TempDir(), "(sleep 5 &) ; exit 0", &stdout, &stderr)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("Run did not return within 4s; a surviving grandchild holding the output pipe open is blocking it")
 	}
 }
 

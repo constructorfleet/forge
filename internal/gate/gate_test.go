@@ -3,42 +3,16 @@ package gate_test
 import (
 	"context"
 	"errors"
-	"io"
 	"testing"
 	"time"
 
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/gate"
+	"github.com/Teagan42/forge/internal/gate/gatetest"
 )
 
-// fakeCommandRunner is a deterministic gate.CommandRunner double: outcomes
-// are programmed per command string, so tests never shell out to a real
-// tool.
-type fakeCommandRunner struct {
-	outcomes map[string]fakeOutcome
-	calls    []string
-}
-
-type fakeOutcome struct {
-	exitCode int
-	stdout   string
-	stderr   string
-	err      error
-}
-
-func (f *fakeCommandRunner) Run(_ context.Context, _, command string, stdout, stderr io.Writer) (int, error) {
-	f.calls = append(f.calls, command)
-	oc, ok := f.outcomes[command]
-	if !ok {
-		return 0, nil
-	}
-	_, _ = io.WriteString(stdout, oc.stdout)
-	_, _ = io.WriteString(stderr, oc.stderr)
-	return oc.exitCode, oc.err
-}
-
 func TestRun_ExecutesGatesInConfiguredOrder(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{}}
+	fake := gatetest.NewFakeCommandRunner()
 	r := gate.NewRunner(fake)
 
 	gates := []config.QualityGate{
@@ -52,12 +26,13 @@ func TestRun_ExecutesGatesInConfiguredOrder(t *testing.T) {
 		t.Fatalf("got %d results, want 3", len(results))
 	}
 	wantOrder := []string{"make test", "make lint", "make build"}
-	if len(fake.calls) != 3 {
-		t.Fatalf("got %d calls, want 3", len(fake.calls))
+	calls := fake.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("got %d calls, want 3", len(calls))
 	}
 	for i, want := range wantOrder {
-		if fake.calls[i] != want {
-			t.Errorf("call %d = %q, want %q", i, fake.calls[i], want)
+		if calls[i] != want {
+			t.Errorf("call %d = %q, want %q", i, calls[i], want)
 		}
 		if results[i].Name != gates[i].Name || results[i].Command != gates[i].Command {
 			t.Errorf("results[%d] = %+v, want Name/Command %s/%s", i, results[i], gates[i].Name, gates[i].Command)
@@ -66,9 +41,8 @@ func TestRun_ExecutesGatesInConfiguredOrder(t *testing.T) {
 }
 
 func TestRun_RecordsNameCommandTimingExitCodeStdoutStderr(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make lint": {exitCode: 1, stdout: "some output", stderr: "some problem"},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make lint", 1, "some output", "some problem")
 	r := gate.NewRunner(fake)
 	r.Now = stepClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Second)
 
@@ -101,9 +75,8 @@ func TestRun_RecordsNameCommandTimingExitCodeStdoutStderr(t *testing.T) {
 }
 
 func TestRun_PassingGateHasZeroExitAndPassedTrue(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {exitCode: 0, stdout: "ok"},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make test", 0, "ok", "")
 	r := gate.NewRunner(fake)
 
 	results := r.Run(context.Background(), "/work", []config.QualityGate{
@@ -116,9 +89,8 @@ func TestRun_PassingGateHasZeroExitAndPassedTrue(t *testing.T) {
 }
 
 func TestRun_FirstFailureStopsSubsequentGatesByDefault(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {exitCode: 1},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make test", 1, "", "")
 	r := gate.NewRunner(fake)
 
 	gates := []config.QualityGate{
@@ -130,15 +102,14 @@ func TestRun_FirstFailureStopsSubsequentGatesByDefault(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("got %d results, want 1 (stop after first failure)", len(results))
 	}
-	if len(fake.calls) != 1 {
-		t.Fatalf("got %d calls, want 1 (lint should not have run)", len(fake.calls))
+	if calls := fake.Calls(); len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1 (lint should not have run)", len(calls))
 	}
 }
 
 func TestRun_ContinueOnFailureRunsAllGates(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {exitCode: 1},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make test", 1, "", "")
 	r := gate.NewRunner(fake)
 
 	gates := []config.QualityGate{
@@ -150,15 +121,14 @@ func TestRun_ContinueOnFailureRunsAllGates(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
-	if len(fake.calls) != 2 {
-		t.Fatalf("got %d calls, want 2", len(fake.calls))
+	if calls := fake.Calls(); len(calls) != 2 {
+		t.Fatalf("got %d calls, want 2", len(calls))
 	}
 }
 
 func TestRun_OutputBoundedToMaxBytes(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {exitCode: 1, stdout: "0123456789", stderr: "abcdefghij"},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make test", 1, "0123456789", "abcdefghij")
 	r := gate.NewRunner(fake)
 
 	results := r.Run(context.Background(), "/work", []config.QualityGate{
@@ -178,9 +148,8 @@ func TestRun_OutputBoundedToMaxBytes(t *testing.T) {
 }
 
 func TestRun_ZeroMaxOutputBytesIsUnbounded(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {exitCode: 0, stdout: "0123456789"},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramResult("make test", 0, "0123456789", "")
 	r := gate.NewRunner(fake)
 
 	results := r.Run(context.Background(), "/work", []config.QualityGate{
@@ -193,9 +162,8 @@ func TestRun_ZeroMaxOutputBytesIsUnbounded(t *testing.T) {
 }
 
 func TestRun_CommandRunnerErrorRecordedAsFailure(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{
-		"make test": {err: errors.New("exec: \"make\": executable file not found in $PATH")},
-	}}
+	fake := gatetest.NewFakeCommandRunner()
+	fake.ProgramError("make test", errors.New("exec: \"make\": executable file not found in $PATH"))
 	r := gate.NewRunner(fake)
 
 	results := r.Run(context.Background(), "/work", []config.QualityGate{
@@ -212,7 +180,7 @@ func TestRun_CommandRunnerErrorRecordedAsFailure(t *testing.T) {
 }
 
 func TestRun_NoGatesReturnsEmptyResults(t *testing.T) {
-	fake := &fakeCommandRunner{outcomes: map[string]fakeOutcome{}}
+	fake := gatetest.NewFakeCommandRunner()
 	r := gate.NewRunner(fake)
 
 	results := r.Run(context.Background(), "/work", nil, gate.Options{})

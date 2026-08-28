@@ -5,7 +5,20 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"time"
 )
+
+// waitDelay bounds how long Run waits, after the `sh` process itself has
+// exited, for the io-copy goroutines feeding stdout/stderr to see EOF. It
+// exists because cmd.Stdout/cmd.Stderr here are arbitrary io.Writers (not
+// *os.File): exec.Cmd services them via an OS pipe plus a background copy
+// goroutine, and Cmd.Wait ordinarily blocks until that goroutine sees EOF —
+// which a backgrounded grandchild that inherited the write end of the pipe
+// can indefinitely prevent, even though the direct child (and the command
+// it ran) is long gone. Without a bound, one gate command with a stray
+// background process could hang the whole orchestration run. See
+// https://pkg.go.dev/os/exec#Cmd.WaitDelay.
+const waitDelay = 2 * time.Second
 
 // ExecCommandRunner is the production CommandRunner: it runs a gate's
 // command as a real subprocess via `sh -c`, inside workDir. Tests inject a
@@ -24,6 +37,7 @@ func (ExecCommandRunner) Run(ctx context.Context, workDir, command string, stdou
 	cmd.Dir = workDir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.WaitDelay = waitDelay
 
 	err := cmd.Run()
 	if err == nil {

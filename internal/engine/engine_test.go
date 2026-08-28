@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,35 +15,11 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/gate/gatetest"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/workspace"
 )
-
-// fakeCommandRunner is a deterministic gate.CommandRunner double for engine
-// tests: outcomes are programmed per command string, so exercising the
-// engine's gate wiring never shells out to a real tool.
-type fakeCommandRunner struct {
-	outcomes map[string]fakeGateOutcome
-	calls    []string
-}
-
-type fakeGateOutcome struct {
-	exitCode int
-	stdout   string
-	stderr   string
-}
-
-func (f *fakeCommandRunner) Run(_ context.Context, _, command string, stdout, stderr io.Writer) (int, error) {
-	f.calls = append(f.calls, command)
-	oc, ok := f.outcomes[command]
-	if !ok {
-		return 0, nil
-	}
-	_, _ = io.WriteString(stdout, oc.stdout)
-	_, _ = io.WriteString(stderr, oc.stderr)
-	return oc.exitCode, nil
-}
 
 // stubTracker is a minimal engine.IssueFetcher double.
 type stubTracker struct {
@@ -239,10 +214,9 @@ func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
 		{Name: "test", Command: "make test"},
 		{Name: "lint", Command: "make lint"},
 	}
-	runner := &fakeCommandRunner{outcomes: map[string]fakeGateOutcome{
-		"make test": {exitCode: 0, stdout: "tests ok"},
-		"make lint": {exitCode: 0, stdout: "lint ok"},
-	}}
+	runner := gatetest.NewFakeCommandRunner()
+	runner.ProgramResult("make test", 0, "tests ok", "")
+	runner.ProgramResult("make lint", 0, "lint ok", "")
 	te.eng.Gates = runner
 
 	ctx := context.Background()
@@ -253,8 +227,8 @@ func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
 	if result.Issue.State != domain.StateReviewing {
 		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
 	}
-	if want := []string{"make test", "make lint"}; len(runner.calls) != len(want) {
-		t.Fatalf("got %d gate calls, want %d: %v", len(runner.calls), len(want), runner.calls)
+	if calls, want := runner.Calls(), []string{"make test", "make lint"}; len(calls) != len(want) {
+		t.Fatalf("got %d gate calls, want %d: %v", len(calls), len(want), calls)
 	}
 
 	runs, err := te.store.GateRunsByIssue(ctx, result.ExecutionID, "20")
@@ -274,8 +248,9 @@ func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
 // TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic is ticket 19's
 // other integration test: a fake Agent reports IMPLEMENTED, one configured
 // Quality Gate fails, subsequent gates are skipped, and the Issue ends in
-// FAILED with bounded diagnostic feedback persisted (as a "gate.failed"
-// Event and via the gate_runs row).
+// FAILED with the diagnostic persisted — the full bounded stdout/stderr via
+// the gate_runs row (Store.GateRunsByIssue), and a lean "gate.failed" Event
+// (name/command/exit_code only, not a duplicate of the captured output).
 func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"21": {ID: "21"},
@@ -285,9 +260,8 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 		{Name: "test", Command: "make test"},
 		{Name: "lint", Command: "make lint"},
 	}
-	runner := &fakeCommandRunner{outcomes: map[string]fakeGateOutcome{
-		"make test": {exitCode: 1, stdout: "1 test failed", stderr: "assertion error in foo_test.go"},
-	}}
+	runner := gatetest.NewFakeCommandRunner()
+	runner.ProgramResult("make test", 1, "1 test failed", "assertion error in foo_test.go")
 	te.eng.Gates = runner
 
 	ctx := context.Background()
@@ -304,8 +278,8 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 
 	// The second gate (lint) must not have run: first failure stops
 	// subsequent gates by default.
-	if len(runner.calls) != 1 {
-		t.Fatalf("got %d gate calls, want 1 (lint should not have run): %v", len(runner.calls), runner.calls)
+	if calls := runner.Calls(); len(calls) != 1 {
+		t.Fatalf("got %d gate calls, want 1 (lint should not have run): %v", len(calls), calls)
 	}
 
 	runs, err := te.store.GateRunsByIssue(ctx, result.ExecutionID, "21")
@@ -318,9 +292,12 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 	if runs[0].ExitCode != 1 {
 		t.Errorf("ExitCode = %d, want 1", runs[0].ExitCode)
 	}
+	if runs[0].Stdout != "1 test failed" || runs[0].Stderr != "assertion error in foo_test.go" {
+		t.Errorf("persisted GateRun Stdout/Stderr = %q/%q, want the full captured output", runs[0].Stdout, runs[0].Stderr)
+	}
 
-	// Bounded diagnostic feedback is persisted as a "gate.failed" Event,
-	// naming the failing gate, its command, exit code, and output.
+	// The "gate.failed" Event stays lean — name, command, exit code — since
+	// the full output already lives in the gate_runs row asserted above.
 	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
 	if err != nil {
 		t.Fatalf("EventsByExecution: %v", err)
@@ -334,10 +311,13 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 	if gateFailed == nil {
 		t.Fatalf("no gate.failed event found among %+v", events)
 	}
-	for _, want := range []string{"test", "make test", "1 test failed", "assertion error"} {
+	for _, want := range []string{"test", "make test"} {
 		if !strings.Contains(gateFailed.Data, want) {
 			t.Errorf("gate.failed event data = %s, want it to contain %q", gateFailed.Data, want)
 		}
+	}
+	if strings.Contains(gateFailed.Data, "1 test failed") || strings.Contains(gateFailed.Data, "assertion error") {
+		t.Errorf("gate.failed event data = %s, want it to NOT duplicate the captured gate output", gateFailed.Data)
 	}
 }
 

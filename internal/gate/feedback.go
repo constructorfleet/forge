@@ -9,8 +9,9 @@ import (
 
 // BuildFeedback turns a failing gate Result into bounded agent.Feedback
 // (CONTEXT.md "Gate Runner"), shaped per IDEATION.md §22's example: gate
-// name, command, exit code, and the (already bounded, see boundedWriter)
-// relevant output. Callers should only pass a Result with Passed == false.
+// name, command, exit code, and the (already bounded, see
+// internal/textcap.TailWriter) relevant output. Callers should only pass a
+// Result with Passed == false.
 func BuildFeedback(res Result) agent.Feedback {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Quality gate failed:\nGate: %s\nCommand: %s\nExit code: %d\n", res.Name, res.Command, res.ExitCode)

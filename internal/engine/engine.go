@@ -278,17 +278,19 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 
 // runQualityGates runs the Issue's configured Quality Gates (ticket 19,
 // internal/gate) for an Issue already in VALIDATING, persisting each
-// Result via Store.RecordGateRun. All gates passing transitions the Issue
-// to REVIEWING (ticket 20's resting state — no review logic runs here);
-// the first failure (Options{} defaults to stop-on-first-fail) records
-// bounded diagnostic Feedback as a "gate.failed" Event and transitions the
-// Issue to FAILED. Routing that failure back to IMPLEMENTING with the
-// Feedback attached, under a retry budget, is ticket 21's concern — this
-// is deliberately a single-pass gate check.
+// Result via Store.RecordGateRun (the full, bounded stdout/stderr live
+// there). All gates passing transitions the Issue to REVIEWING (ticket
+// 20's resting state — no review logic runs here); the first failure
+// (Options{} defaults to stop-on-first-fail) records a lean "gate.failed"
+// diagnostic Event (name/command/exit_code — the Event log stays an audit
+// trail, not a duplicate copy of gate_runs) and transitions the Issue to
+// FAILED. Building agent.Feedback (gate.BuildFeedback) from the failing
+// GateRun and routing it back to IMPLEMENTING under a retry budget is
+// ticket 21's concern — this is deliberately a single-pass gate check.
 func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (domain.Issue, error) {
 	runner := gate.NewRunner(e.Gates)
 	results := runner.Run(ctx, workspacePath, e.Config.Quality.Gates, gate.Options{
-		MaxOutputBytes: e.Config.AgentFeedback.MaxOutputBytes,
+		MaxOutputBytes: e.Config.Quality.MaxOutputBytes,
 	})
 
 	var failed *gate.Result
@@ -317,12 +319,15 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 		return e.transition(ctx, executionID, issueID, domain.StateReviewing)
 	}
 
-	feedback := gate.BuildFeedback(*failed)
+	// The "gate.failed" Event stays lean (name/command/exit_code, matching
+	// "gate.run") rather than duplicating the failing gate's full captured
+	// output, which already lives in the persisted GateRun row. Ticket 21's
+	// retry loop rebuilds agent.Feedback (via gate.BuildFeedback) fresh from
+	// that row rather than from this Event.
 	if err := e.appendEvent(ctx, executionID, issueID, "gate.failed", map[string]string{
 		"name":      failed.Name,
 		"command":   failed.Command,
 		"exit_code": fmt.Sprint(failed.ExitCode),
-		"feedback":  feedback.Message,
 	}); err != nil {
 		return domain.Issue{}, err
 	}

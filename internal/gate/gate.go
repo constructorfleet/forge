@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/textcap"
 )
 
 // CommandRunner executes one Quality Gate's command inside workDir,
 // streaming its stdout/stderr to the given writers as the command runs —
-// so output can be bounded at the source (see boundedWriter) rather than
-// truncated after the fact. It returns the process's exit code; err is
+// so output can be bounded at the source (see internal/textcap.TailWriter)
+// rather than truncated after the fact. It returns the process's exit
+// code; err is
 // reserved for a failure to even run the command (e.g. the shell itself
 // could not start), which Runner treats as a failing gate rather than
 // aborting the whole run.
@@ -93,8 +95,8 @@ func (r *Runner) Run(ctx context.Context, workDir string, gates []config.Quality
 // legitimate gate failure is: via Feedback, not a crashed orchestration
 // run.
 func (r *Runner) runOne(ctx context.Context, workDir string, g config.QualityGate, opts Options) Result {
-	stdout := newBoundedWriter(opts.MaxOutputBytes)
-	stderr := newBoundedWriter(opts.MaxOutputBytes)
+	stdout := textcap.NewTailWriter(opts.MaxOutputBytes)
+	stderr := textcap.NewTailWriter(opts.MaxOutputBytes)
 
 	started := r.Now()
 	exitCode, err := r.Command.Run(ctx, workDir, g.Command, stdout, stderr)

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/textcap"
 )
 
 var _ agent.Agent = (*Adapter)(nil)
@@ -241,11 +242,12 @@ func (a *Adapter) defaultRunner() Runner {
 		cmd.Env = env
 		cmd.Stdin = strings.NewReader(stdin)
 
-		// Bounded, tail-preserving writers: an unbounded bytes.Buffer here
-		// would let a runaway subprocess force Forge to hold arbitrarily
-		// large output in memory (see maxCapturedOutputLen).
-		stdout := newTailLimitWriter(maxCapturedOutputLen)
-		stderr := newTailLimitWriter(maxCapturedOutputLen)
+		// Bounded, tail-preserving writers (internal/textcap, shared with
+		// internal/gate): an unbounded bytes.Buffer here would let a
+		// runaway subprocess force Forge to hold arbitrarily large output
+		// in memory (see maxCapturedOutputLen).
+		stdout := textcap.NewTailWriter(maxCapturedOutputLen)
+		stderr := textcap.NewTailWriter(maxCapturedOutputLen)
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 
