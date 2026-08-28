@@ -1067,3 +1067,83 @@ func TestRun_RealEngine_DependentIssueStartsFromMergedBase(t *testing.T) {
 		t.Errorf("issue 21 BaseRevision = %s, want %s", base21, wantBase21)
 	}
 }
+
+func TestRun_RealEngine_MultiIssueExecutionSharesOneExecutionID(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{
+		"20": {ID: "20"},
+		"21": {ID: "21"},
+	}}
+	wsMgr, err := workspace.NewManager(repoRoot)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	fake := agent.NewFakeAgent()
+	fake.ProgramResult("20", agent.AgentResult{Status: agent.StatusImplemented})
+	fake.ProgramResult("21", agent.AgentResult{Status: agent.StatusImplemented})
+
+	eng := engine.New(store, trk, wsMgr, fake, config.Default(), repoRoot)
+	eng.NewExecutionID = func() string { return "exec-shared" }
+
+	sch := scheduler.New(trk, scheduler.Adapt(eng), alwaysSatisfied, scheduler.FixedBase(base), 2)
+	sch.PollInterval = time.Millisecond
+
+	results, err := sch.Run(context.Background(), []string{"20", "21"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, id := range []string{"20", "21"} {
+		if got := results[id].ExecutionID; got != "exec-shared" {
+			t.Fatalf("results[%s].ExecutionID = %q, want shared execution", id, got)
+		}
+	}
+
+	state, err := store.LoadExecution(context.Background(), "exec-shared")
+	if err != nil {
+		t.Fatalf("LoadExecution: %v", err)
+	}
+	if len(state.Issues) != 2 {
+		t.Fatalf("persisted issues = %+v, want both issues in one execution", state.Issues)
+	}
+}
+
+func TestRun_RealEngine_ResetsSharedExecutionBetweenRuns(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{
+		"20": {ID: "20"},
+		"21": {ID: "21"},
+	}}
+	wsMgr, err := workspace.NewManager(repoRoot)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	fake := agent.NewFakeAgent()
+	fake.ProgramResult("20", agent.AgentResult{Status: agent.StatusImplemented})
+	fake.ProgramResult("21", agent.AgentResult{Status: agent.StatusImplemented})
+
+	eng := engine.New(store, trk, wsMgr, fake, config.Default(), repoRoot)
+	var ids []string
+	eng.NewExecutionID = func() string {
+		id := fmt.Sprintf("exec-%d", len(ids)+1)
+		ids = append(ids, id)
+		return id
+	}
+
+	sch := scheduler.New(trk, scheduler.Adapt(eng), alwaysSatisfied, scheduler.FixedBase(base), 1)
+	sch.PollInterval = time.Millisecond
+
+	first, err := sch.Run(context.Background(), []string{"20"})
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	second, err := sch.Run(context.Background(), []string{"21"})
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if first["20"].ExecutionID == second["21"].ExecutionID {
+		t.Fatalf("execution reused across runs: %q", first["20"].ExecutionID)
+	}
+}

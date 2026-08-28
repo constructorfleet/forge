@@ -197,6 +197,22 @@ type ExecuteResult struct {
 	Issue       domain.Issue
 }
 
+// StartExecution persists a new Execution rooted at baseRevision and
+// returns it. Single-issue Execute uses this directly; multi-issue
+// scheduling can call it once, then dispatch multiple Issues through
+// ExecuteInExecution.
+func (e *Engine) StartExecution(ctx context.Context, baseRevision string) (domain.Execution, error) {
+	execution := domain.Execution{
+		ID:           e.NewExecutionID(),
+		BaseRevision: baseRevision,
+		StartedAt:    e.Now(),
+	}
+	if err := e.Store.CreateExecution(ctx, execution); err != nil {
+		return domain.Execution{}, fmt.Errorf("engine: create execution: %w", err)
+	}
+	return execution, nil
+}
+
 // Execute fetches issueID from Tracker — assumed to have no unmet
 // Dependencies — and drives it through:
 //
@@ -241,15 +257,18 @@ type ExecuteResult struct {
 // state and best-effort removes the now-orphaned Workspace before returning
 // — see failOut.
 func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (ExecuteResult, error) {
-	execution := domain.Execution{
-		ID:           e.NewExecutionID(),
-		BaseRevision: baseRevision,
-		StartedAt:    e.Now(),
+	execution, err := e.StartExecution(ctx, baseRevision)
+	if err != nil {
+		return ExecuteResult{}, err
 	}
-	if err := e.Store.CreateExecution(ctx, execution); err != nil {
-		return ExecuteResult{}, fmt.Errorf("engine: create execution: %w", err)
-	}
+	return e.ExecuteInExecution(ctx, execution, issueID, baseRevision)
+}
 
+// ExecuteInExecution drives one Issue through the execution pipeline inside
+// an already-created Execution. workerBase is the per-Worker base captured
+// at READY; it may differ from execution.BaseRevision for dependency-
+// blocked Issues that become ready later in a shared multi-Issue run.
+func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (ExecuteResult, error) {
 	issue, err := e.Tracker.GetIssue(ctx, issueID)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: fetch issue %s: %w", issueID, err)
@@ -277,7 +296,7 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 
 	// Repository Context is compiled exactly once per Execution (CONTEXT.md
 	// "Repository Context") and handed to every Worker unchanged.
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, baseRevision)
+	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
@@ -291,7 +310,6 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	// newer base once its prerequisites merge. Ticket 18 only handles a
 	// single Issue with no Dependencies, so its Worker base is always the
 	// Execution's starting base.
-	workerBase := baseRevision
 	if err := e.appendEvent(ctx, execution.ID, issueID, "worker.base_captured", map[string]string{
 		"base": workerBase,
 	}); err != nil {
@@ -388,7 +406,12 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return domain.Issue{}, fmt.Errorf("engine: validate workspace for issue %s: %w", issueID, err)
 	}
 
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, state.Execution.BaseRevision)
+	workerBase, err := e.workerBase(ctx, state.Execution, issueID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+
+	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
@@ -409,11 +432,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return issue, nil
 	}
 
-	// Today each managed Issue still runs in its own Execution (see ADR
-	// 0010), so the Execution base revision is also this Worker's captured
-	// review base. If/when Forge gains one shared Execution across many
-	// Issues, Worker base capture will need to be persisted separately.
-	issue, err = e.runRepairLoop(ctx, executionID, issueID, state.Execution.BaseRevision, ws.Path, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, ws.Path, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}

@@ -76,6 +76,14 @@ type Executor interface {
 	Execute(ctx context.Context, issueID, baseRevision string) (ExecuteOutcome, error)
 }
 
+// RunLifecycleExecutor is an optional Executor extension for per-Run
+// setup/teardown, such as allocating one shared Execution before any Issue
+// dispatches and discarding that state when Run returns.
+type RunLifecycleExecutor interface {
+	StartRun(ctx context.Context, executionBase string) error
+	FinishRun()
+}
+
 // DependencyResolver reports whether the Dependency of issueID on
 // dependsOnID is satisfied (CONTEXT.md "Dependency": the prerequisite's PR
 // merged into the applicable base — not local completion, not green CI).
@@ -270,6 +278,16 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 	dag, err := tracker.BuildDAG(issues)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: dependency graph: %w", err)
+	}
+	if lifecycle, ok := s.Executor.(RunLifecycleExecutor); ok {
+		executionBase, err := s.Base.CurrentBase(ctx, issueIDs[0])
+		if err != nil {
+			return nil, fmt.Errorf("scheduler: resolve execution base: %w", err)
+		}
+		if err := lifecycle.StartRun(ctx, executionBase); err != nil {
+			return nil, fmt.Errorf("scheduler: start run: %w", err)
+		}
+		defer lifecycle.FinishRun()
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/gate"
+	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
 )
@@ -576,5 +578,68 @@ func TestRepairCIFailure_CIBudgetExhaustion_RoutesToFailed(t *testing.T) {
 	}
 	if issue.RetryBudget.CIFailures() != 0 {
 		t.Fatalf("CIFailures() = %d, want 0 (ceiling already exhausted before recording)", issue.RetryBudget.CIFailures())
+	}
+}
+
+func TestRepairCIFailure_UsesCapturedWorkerBaseInsteadOfExecutionBase(t *testing.T) {
+	te := approvedTestEngine(t, "48", domain.Issue{ID: "48", Title: "repair uses worker base"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	te.eng.Publisher = pub
+	te.eng.PRTracker = newFakePRTracker()
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	te.eng.Gates = &flakyRunner{failUntil: 0}
+
+	ctx := context.Background()
+	gittest.RunGit(t, te.eng.RepoRoot, "commit", "--allow-empty", "-q", "-m", "worker base")
+	workerBase := strings.TrimSpace(gittest.RunGit(t, te.eng.RepoRoot, "rev-parse", "HEAD"))
+	sharedExec := domain.Execution{
+		ID:           "exec-shared-48",
+		BaseRevision: te.base,
+		StartedAt:    te.eng.Now(),
+	}
+	if err := te.store.CreateExecution(ctx, sharedExec); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+
+	initial, err := te.eng.ExecuteInExecution(ctx, sharedExec, "48", workerBase)
+	if err != nil {
+		t.Fatalf("ExecuteInExecution: %v", err)
+	}
+	if initial.Issue.State != domain.StateCIPending {
+		t.Fatalf("initial state = %s, want CI_PENDING", initial.Issue.State)
+	}
+
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "48",
+		Status:      storage.CIRunStatusFailed,
+		CheckName:   "build",
+		Details:     "boom",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "48", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	te.fake.ProgramResult("48", agent.AgentResult{Status: agent.StatusImplemented, Summary: "ci repaired"})
+
+	repaired, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "48")
+	if err != nil {
+		t.Fatalf("RepairCIFailure: %v", err)
+	}
+	if repaired.State != domain.StateCIPending {
+		t.Fatalf("repaired state = %s, want CI_PENDING", repaired.State)
+	}
+
+	invocations := te.fake.Invocations()
+	if len(invocations) != 2 {
+		t.Fatalf("got %d agent invocations, want 2", len(invocations))
+	}
+	if invocations[1].Repository.BaseRevision != workerBase {
+		t.Fatalf("repair BaseRevision = %q, want captured worker base", invocations[1].Repository.BaseRevision)
 	}
 }

@@ -207,6 +207,62 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 	}
 }
 
+func TestExecuteInExecution_UsesExistingExecutionWithoutMintingAnother(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"84": {ID: "84"},
+	})
+	te.fake.ProgramResult("84", agent.AgentResult{Status: agent.StatusImplemented, Summary: "done"})
+
+	ctx := context.Background()
+	execution := domain.Execution{
+		ID:           "exec-shared",
+		BaseRevision: te.base,
+		StartedAt:    time.Unix(1710000000, 0).UTC(),
+	}
+	if err := te.store.CreateExecution(ctx, execution); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+
+	result, err := te.eng.ExecuteInExecution(ctx, execution, "84", te.base)
+	if err != nil {
+		t.Fatalf("ExecuteInExecution: %v", err)
+	}
+	if result.ExecutionID != execution.ID {
+		t.Fatalf("ExecutionID = %s, want %s", result.ExecutionID, execution.ID)
+	}
+
+	state, err := te.store.LoadExecution(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("LoadExecution: %v", err)
+	}
+	if len(state.Issues) != 1 || state.Issues[0].ID != "84" {
+		t.Fatalf("persisted issues = %+v, want one shared-execution issue", state.Issues)
+	}
+
+	events, err := te.store.EventsByIssue(ctx, execution.ID, "84")
+	if err != nil {
+		t.Fatalf("EventsByIssue: %v", err)
+	}
+	var sawCapturedBase bool
+	for _, event := range events {
+		if event.Type != "worker.base_captured" {
+			continue
+		}
+		var payload struct {
+			Base string `json:"base"`
+		}
+		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+			t.Fatalf("decode worker.base_captured: %v", err)
+		}
+		if payload.Base == te.base {
+			sawCapturedBase = true
+		}
+	}
+	if !sawCapturedBase {
+		t.Fatal("worker.base_captured event missing shared worker base")
+	}
+}
+
 // TestExecute_QualityGatesPass_AdvancesToReviewing is ticket 19's
 // integration test: a fake Agent reports IMPLEMENTED, every configured
 // Quality Gate passes, and the Issue advances to REVIEWING.
