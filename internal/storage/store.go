@@ -21,6 +21,13 @@ var ErrNotFound = errors.New("storage: not found")
 // unique constraint, not by a read-then-write race-prone check.
 var ErrAlreadyClaimed = errors.New("storage: issue already claimed")
 
+// ErrConcurrentModification is returned by TransitionIssue when the Issue's
+// persisted state no longer matches the state read at the start of the
+// transaction — i.e. something else changed it in between. Guards against
+// races that a single-connection SQLite pool mostly rules out today but a
+// future multi-connection or Postgres implementation would not.
+var ErrConcurrentModification = errors.New("storage: issue state changed concurrently")
+
 // Event is a timestamped record of a state transition or other notable
 // occurrence, scoped to an Execution and optionally an Issue. Events form
 // the append-only audit log described in CONTEXT.md.

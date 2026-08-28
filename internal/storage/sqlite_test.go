@@ -53,8 +53,13 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 		"ci_runs", "events", "schema_migrations",
 	}
 	for _, table := range tables {
-		if err := storage.TableExists(ctx, store, table); err != nil {
+		exists, err := store.TableExists(ctx, table)
+		if err != nil {
 			t.Errorf("table %s: %v", table, err)
+			continue
+		}
+		if !exists {
+			t.Errorf("table %s: does not exist", table)
 		}
 	}
 }
@@ -220,6 +225,28 @@ func TestClaimIssuePreventsDuplicateClaims(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != "issue.claimed" {
 		t.Fatalf("expected exactly 1 claim event, got %+v", events)
+	}
+}
+
+func TestClaimIssueRejectsNonexistentIssue(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.CreateExecution(ctx, domain.Execution{ID: "exec-1", BaseRevision: "base", StartedAt: time.Now()}); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+
+	// No CreateIssue call: issue-ghost was never persisted.
+	err := store.ClaimIssue(ctx, "exec-1", "issue-ghost", "worker-a")
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+
+	events, err := store.EventsByIssue(ctx, "exec-1", "issue-ghost")
+	if err != nil {
+		t.Fatalf("EventsByIssue: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no events for a rejected claim, got %+v", events)
 	}
 }
 
