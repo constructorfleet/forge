@@ -132,6 +132,15 @@ type AgentConfig struct {
 	// to PermissionModeBypassPermissions, matching the Workspace isolation
 	// boundary (CONTEXT.md "Workspace") the Agent already runs inside.
 	PermissionMode AgentPermissionMode `yaml:"permission_mode"`
+
+	// Timeout bounds one Agent invocation (issue 33, "Agent runs need a
+	// timeout") so a wedged subprocess (observed: `claude -p` stalled at 0%
+	// CPU for 14+ minutes) cannot block a Worker, and the whole `forge
+	// execute` process, forever. It is a liveness timeout: the deadline
+	// resets on every line of subprocess output, so a long-but-progressing
+	// run is never killed by it — only a genuine stall trips it. Must be
+	// positive; see Default for the shipped value.
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // AgentPermissionMode selects the Claude Code CLI's `--permission-mode`
@@ -219,6 +228,14 @@ type Config struct {
 // {title}/{issue} placeholder rendering.
 const defaultCommitMessageTemplate = "{title}\n\nRefs #{issue}"
 
+// defaultAgentTimeout is AgentConfig.Timeout's default: generous enough for
+// a genuinely long-running (but progressing) agent turn, since Timeout is a
+// liveness bound reset by every line of output rather than a flat cap on
+// total run length, while still bounding how long a truly wedged subprocess
+// (issue 33 was discovered from one stalled 14+ minutes with no output) can
+// block a Worker before Forge kills it.
+const defaultAgentTimeout = 20 * time.Minute
+
 // Default returns the fully-defaulted Config used when no .forge.yaml is
 // present — the zero-config case. It is also the single source of truth for
 // every deterministic default: Load starts from this literal and lets YAML
@@ -250,7 +267,11 @@ func Default() Config {
 			MaxOutputBytes:    4000,
 		},
 		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
-		Agent:   AgentConfig{Provider: "claude-code", PermissionMode: PermissionModeBypassPermissions},
+		Agent: AgentConfig{
+			Provider:       "claude-code",
+			PermissionMode: PermissionModeBypassPermissions,
+			Timeout:        defaultAgentTimeout,
+		},
 		StatusReflection: StatusReflectionConfig{
 			Enabled:         false,
 			InProgressLabel: "in-progress",
