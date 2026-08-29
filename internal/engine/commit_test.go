@@ -343,3 +343,73 @@ func TestExecute_PRCreationError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 		t.Error("Cleanup was not called after a PR creation error, want the orphaned Workspace removed")
 	}
 }
+
+// TestExecute_EmptyDiff_GuardedBeforePRCreation is this ticket's main
+// integration test for the empty-diff pre-PR guard: the Agent reports
+// StatusImplemented and Review approves, but the diff against the worker
+// base is empty (e.g. the Agent's changes net out to nothing). The Issue is
+// still committed/pushed (Publisher.Commit's own no-op-on-nothing-to-commit
+// behavior covers idempotent retries), but runCommitAndPR must stop right
+// before creating a pull request: the Issue lands in FAILED with a
+// diagnostic Event, and PRTracker.CreatePullRequest is never called.
+func TestExecute_EmptyDiff_GuardedBeforePRCreation(t *testing.T) {
+	te := approvedTestEngine(t, "45", domain.Issue{ID: "45", Title: "no-op change"})
+	te.eng.Diff = &stubDiff{diff: ""}
+	pub := &fakePublisher{commitSHA: "sha-45"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+
+	result, err := te.eng.Execute(context.Background(), "45", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	}
+	if prTracker.callCount() != 0 {
+		t.Errorf("got %d CreatePullRequest calls, want 0: the empty-diff guard must trip before PR creation", prTracker.callCount())
+	}
+	if pub.pushCallCount() != 1 {
+		t.Errorf("got %d push calls, want 1: the guard runs after commit/push, not before", pub.pushCallCount())
+	}
+
+	events, err := te.store.EventsByExecution(context.Background(), result.ExecutionID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	var sawGuard bool
+	for _, e := range events {
+		if e.Type == "pr.empty_diff_guard" {
+			sawGuard = true
+		}
+	}
+	if !sawGuard {
+		t.Error("no pr.empty_diff_guard event found")
+	}
+}
+
+// TestExecute_NonEmptyDiff_PRCreatedNormally guards against the guard being
+// overzealous: a non-empty diff must still flow through to PR creation
+// exactly as before this ticket.
+func TestExecute_NonEmptyDiff_PRCreatedNormally(t *testing.T) {
+	te := approvedTestEngine(t, "45b", domain.Issue{ID: "45b", Title: "real change"})
+	te.eng.Diff = &stubDiff{diff: "diff --git a/foo b/foo\n+bar"}
+	pub := &fakePublisher{commitSHA: "sha-45b"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+
+	result, err := te.eng.Execute(context.Background(), "45b", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateCIPending {
+		t.Fatalf("final state = %s, want CI_PENDING", result.Issue.State)
+	}
+	if prTracker.callCount() != 1 {
+		t.Errorf("got %d CreatePullRequest calls, want 1", prTracker.callCount())
+	}
+}

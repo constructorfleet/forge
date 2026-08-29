@@ -227,17 +227,27 @@ func New(trk IssueFetcher, exec Executor, resolver DependencyResolver, base Base
 // for every code path, including the error ones, so callers always have
 // whatever was learned before returning.
 //
-// Run stops itself in three situations, in addition to the everything-
-// -dispatched-and-finished happy path:
+// Run stops itself early in only one situation, in addition to the
+// everything-dispatched-and-finished happy path:
 //
 //  1. A cycle in the Dependency DAG: detected up front, nothing is
 //     dispatched at all.
+//
+// Two further situations affect only the specific Issue(s) involved, never
+// the whole Run — sibling Issues that are already in flight or still ready
+// keep proceeding independently:
+//
 //  2. DependencyResolver.Satisfied errors for some still-undispatched
 //     Issue (e.g. a Dependency outside the requested set, which
-//     cmd/forge's resolver treats as unsupported rather than hanging): Run
-//     cancels its internal context, waits for every already-dispatched
-//     Issue to finish, and returns their results alongside the error —
-//     no goroutine is abandoned.
+//     cmd/forge's resolver treats as unsupported rather than hanging, or a
+//     transient infra error from a real resolver): that Issue alone is
+//     recorded with the error as its Result — exactly like a base-
+//     resolution or Executor.Execute failure already isolates to one
+//     Issue in runWorker — and the dispatch loop continues with every
+//     other Issue. Run's own internal context is never cancelled for this;
+//     Executor.Execute is genuinely never called for the failed Issue, and
+//     any Issue depending on it becomes unsatisfiable via the no-progress
+//     case below rather than the whole Run aborting.
 //  3. No progress is possible: an iteration where nothing new was
 //     dispatched and nothing is currently in flight means no future
 //     event can ever change that (there is nothing left running to
@@ -465,9 +475,22 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		for _, id := range ready {
 			dep, err := s.firstUnsatisfied(ctx, id, dag.DependsOn(id))
 			if err != nil {
-				cancel()
-				wg.Wait()
-				return snapshotResults(), fmt.Errorf("scheduler: check dependencies for issue %s: %w", id, err)
+				// An infra error checking this Issue's Dependencies (e.g. a
+				// transient GitHub API failure) is this Issue's problem, not
+				// its siblings': it is recorded as this Issue's own Result
+				// and the loop moves on, exactly like a base-resolution or
+				// Executor.Execute error already does in runWorker below.
+				// Cancelling the whole Run here would kill every other
+				// in-flight or still-ready Issue over a failure that has
+				// nothing to do with them.
+				err = fmt.Errorf("scheduler: check dependencies for issue %s: %w", id, err)
+				mu.Lock()
+				dispatched[id] = true
+				mu.Unlock()
+				dispatchedThisRound = true
+				recordResult(id, ExecuteOutcome{}, err, true)
+				recordErr(err)
+				continue
 			}
 			if dep != "" {
 				mu.Lock()

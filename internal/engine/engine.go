@@ -410,7 +410,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 		}
 		if issue.State == domain.StateCommitting {
-			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, ws, issue)
+			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, workerBase, ws, issue)
 			if err != nil {
 				return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
 			}
@@ -480,7 +480,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	if issue.State != domain.StateCommitting {
 		return issue, nil
 	}
-	return e.runCommitAndPR(ctx, executionID, issueID, ws, issue)
+	return e.runCommitAndPR(ctx, executionID, issueID, workerBase, ws, issue)
 }
 
 // workerRef derives the Worker identity used both to claim an Issue

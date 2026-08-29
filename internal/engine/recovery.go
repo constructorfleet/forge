@@ -139,7 +139,7 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 		return domain.Issue{}, err
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -171,7 +171,7 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 		return domain.Issue{}, err
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -217,7 +217,7 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 		return e.resumeFromImplementing(ctx, exec, issue, workerBase)
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -270,7 +270,7 @@ func (e *Engine) resumeFromCommitting(ctx context.Context, exec domain.Execution
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, ws, issue)
+	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
