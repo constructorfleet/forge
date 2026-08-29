@@ -3,9 +3,42 @@ package claude
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
+
+// resultJSONSchema is the JSON Schema for structuredResult, passed to the
+// Claude Code CLI via `--json-schema` (issue 20/ticket 32) so the CLI
+// itself enforces the {status, summary, needs_info, usage} envelope shape
+// on the model's final answer, instead of Forge inferring it from a fenced
+// ```json block after the fact. It mirrors structuredResult's fields
+// exactly, so schema-constrained output decodes with the same struct that
+// backs the tolerant fenced-block fallback below.
+const resultJSONSchema = `{` +
+	`"type":"object",` +
+	`"properties":{` +
+	`"status":{"type":"string","enum":["IMPLEMENTED","NEEDS_INFO","FAILED"]},` +
+	`"summary":{"type":"string"},` +
+	`"needs_info":{` +
+	`"type":"object",` +
+	`"properties":{` +
+	`"question":{"type":"string"},` +
+	`"context":{"type":"string"}` +
+	`},` +
+	`"required":["question"]` +
+	`},` +
+	`"usage":{` +
+	`"type":"object",` +
+	`"properties":{` +
+	`"input_tokens":{"type":"integer"},` +
+	`"output_tokens":{"type":"integer"}` +
+	`}` +
+	`}` +
+	`},` +
+	`"required":["status","summary"],` +
+	`"additionalProperties":false` +
+	`}`
 
 // fencedJSONBlock matches fenced code blocks (optionally tagged "json") so
 // parseStructuredResult can pull the outcome Claude Code was instructed to
@@ -53,6 +86,11 @@ type usageFields struct {
 // status. Claude Code may emit other fenced blocks (code, examples) earlier
 // in its output; only the final well-formed status block is authoritative,
 // matching resultContract's instruction to emit it last.
+//
+// Since issue 20/ticket 32, Execute tries parseSchemaResult first: this
+// tolerant, fenced-block-scanning parser (originally ticket 27's) is now
+// only a fallback for output that didn't go through `--json-schema`
+// enforcement (e.g. an older CLI, or a text-mode path).
 func parseStructuredResult(stdout string) (structuredResult, bool) {
 	matches := fencedJSONBlock.FindAllStringSubmatch(stdout, -1)
 	for i := len(matches) - 1; i >= 0; i-- {
@@ -72,6 +110,31 @@ func parseStructuredResult(stdout string) (structuredResult, bool) {
 		case agent.StatusImplemented, agent.StatusNeedsInfo, agent.StatusFailed:
 			return res, true
 		}
+	}
+	return structuredResult{}, false
+}
+
+// parseSchemaResult decodes raw directly as a structuredResult, with none
+// of parseStructuredResult's fenced-block extraction or trailing-comma
+// repair: when the CLI was invoked with `--json-schema` (resultJSONSchema),
+// it already guarantees the model's final answer is a single JSON object
+// conforming to that schema, so this path only needs to distinguish
+// well-formed output from empty/corrupt output — it is not a tolerant
+// parser. ok is false for empty input, invalid JSON, or an unrecognized
+// status, in which case Execute falls back to parseStructuredResult for
+// compatibility with any text-mode/non-schema path.
+func parseSchemaResult(raw string) (structuredResult, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return structuredResult{}, false
+	}
+	res, ok := unmarshalStructuredResult(raw)
+	if !ok {
+		return structuredResult{}, false
+	}
+	switch agent.AgentStatus(res.Status) {
+	case agent.StatusImplemented, agent.StatusNeedsInfo, agent.StatusFailed:
+		return res, true
 	}
 	return structuredResult{}, false
 }

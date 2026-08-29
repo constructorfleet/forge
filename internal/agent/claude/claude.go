@@ -75,6 +75,16 @@ const defaultPermissionMode = "bypassPermissions"
 // along the way.
 var streamingArgs = []string{"--output-format", "stream-json", "--verbose"}
 
+// jsonSchemaArgs requests CLI-side enforcement of the result envelope shape
+// (issue 20/ticket 32, supported as of Claude Code 2.1.222): the CLI
+// validates the model's final answer against resultJSONSchema before ever
+// printing it, so Execute can decode the terminal result text directly
+// (parseSchemaResult) instead of parsing a fenced ```json block out of
+// free-form output after the fact. This composes with streamingArgs: with
+// `--output-format stream-json`, the schema-conforming text is delivered as
+// the `result` field of the terminal "result" line (see streamLine).
+var jsonSchemaArgs = []string{"--json-schema", resultJSONSchema}
+
 // allowedEnvVars is the fixed base allowlist of environment variables
 // passed to the Claude Code subprocess. The Agent's environment is
 // sanitized rather than inherited wholesale so secrets present in Forge's
@@ -160,6 +170,7 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	}
 	args := []string{claudePrintFlag, "--permission-mode", permissionMode}
 	args = append(args, streamingArgs...)
+	args = append(args, jsonSchemaArgs...)
 
 	// Parse the stream-json output incrementally, as each line arrives, so
 	// transcript events (and their real per-event timestamps) are captured
@@ -204,7 +215,29 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		}, nil
 	}
 
-	res, ok := parseStructuredResult(finalText)
+	// A CLI-level error result (a non-conforming request, permission-request
+	// the unattended run couldn't satisfy, etc.) is diagnosed distinctly
+	// from "the output didn't decode", since in that case there was never a
+	// result to decode in the first place.
+	if isErr, subtype := parser.resultError(); isErr {
+		msg := fmt.Sprintf("claude adapter: CLI reported an error result (exit code %d)", exitCode)
+		if subtype != "" {
+			msg = fmt.Sprintf("claude adapter: CLI reported an error result (subtype %q, exit code %d)", subtype, exitCode)
+		}
+		return agent.AgentResult{
+			Status:  agent.StatusFailed,
+			Summary: diagnosticSummary(msg, finalText, stderr),
+		}, nil
+	}
+
+	// parseSchemaResult decodes the `--json-schema`-conforming result
+	// directly; parseStructuredResult (ticket 27's tolerant fenced-block
+	// scanner) is only a fallback, for output that didn't go through schema
+	// enforcement.
+	res, ok := parseSchemaResult(finalText)
+	if !ok {
+		res, ok = parseStructuredResult(finalText)
+	}
 	if !ok {
 		return agent.AgentResult{
 			Status: agent.StatusFailed,
