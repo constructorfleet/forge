@@ -110,7 +110,7 @@ func ValidateSpecDeterministic(
 		}
 	}
 
-	if spec.DerivedFrom == nil || len(spec.DerivedFrom) == 0 {
+	if len(spec.DerivedFrom) == 0 {
 		return errors.New("specification missing derived_from provenance")
 	}
 
