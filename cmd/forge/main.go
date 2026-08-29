@@ -71,8 +71,8 @@ func run(args []string) int {
 	case "plan":
 		return runPlan(rest)
 	case "approve":
-		if len(rest) > 0 && rest[0] == "tickets" {
-			return runApproveTickets(rest[1:])
+		if len(rest) >= 2 && rest[1] == "tickets" {
+			return runApproveTickets(rest)
 		}
 		return runApprove(rest)
 	default:
@@ -324,6 +324,11 @@ func runApproveTickets(args []string) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(os.Stdout, approveTicketsUsage)
 		return 0
+	}
+
+	if len(args) < 2 || args[1] != "tickets" {
+		fmt.Fprintf(os.Stderr, "forge approve: expected 'tickets' as second argument\n\n%s", approveTicketsUsage)
+		return 1
 	}
 
 	featureID := args[0]
