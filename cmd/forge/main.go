@@ -349,6 +349,16 @@ func (f *fileArtifactLoader) LoadGoal(ctx context.Context, featureID string) (*p
 	return planning.Parse(data)
 }
 
+func (f *fileArtifactLoader) SaveGoal(ctx context.Context, featureID string, goal *planning.Artifact) error {
+	dir := filepath.Join(".forge", "features", featureID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "goal.md")
+	data := planning.Render(goal)
+	return os.WriteFile(path, data, 0o644)
+}
+
 func (f *fileArtifactLoader) LoadDecisions(ctx context.Context, featureID string) (map[string]*planning.Artifact, error) {
 	dir := filepath.Join(".forge", "features", featureID, "decisions")
 	entries, err := os.ReadDir(dir)
