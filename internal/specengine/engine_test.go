@@ -324,10 +324,8 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 
 	// Create an approved spec
 	spec := &planning.Artifact{
-		Kind:             planning.KindSpec,
-		Revision:         "spec-rev",
-		State:            "approved",
-		ApprovedRevision: "spec-rev",
+		Kind:  planning.KindSpec,
+		State: "approved",
 		Sections: []planning.Section{
 			{Heading: "Context", Body: "A widget builder using SQLite"},
 			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable\nREQ-002: Widget must be testable"},
@@ -339,6 +337,8 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 			{Kind: "repository", ID: "repository", Revision: "repo-rev"},
 		},
 	}
+	spec.Revision = planning.ComputeRevision(spec)
+	spec.ApprovedRevision = spec.Revision
 
 	loader := &fakeLoaderForTest{
 		goal:      goal,
@@ -430,8 +430,8 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 	for _, d := range loader.ticketPlan.DerivedFrom {
 		if d.Kind == planning.KindSpec && d.ID == "spec" {
 			specFound = true
-			if d.Revision != "spec-rev" {
-				t.Errorf("derived_from spec revision = %s, want spec-rev", d.Revision)
+			if d.Revision != spec.Revision {
+				t.Errorf("derived_from spec revision = %s, want %s", d.Revision, spec.Revision)
 			}
 		}
 		if d.Kind == "repository" && d.ID == "repository" {

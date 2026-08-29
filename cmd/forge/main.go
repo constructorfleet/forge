@@ -13,11 +13,8 @@ import (
 	"path/filepath"
 
 	"github.com/Teagan42/forge/internal/initdiscovery"
-	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planning"
-	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/replan"
-	"github.com/Teagan42/forge/internal/specengine"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/ticketplan"
 )
@@ -143,112 +140,6 @@ func runInit(args []string) error {
 		fmt.Fprintf(os.Stdout, "  note: %s: %s\n", n.Field, n.Message)
 	}
 	return nil
-}
-
-const planUsage = `Usage: forge plan <feature-id> [--until wayfinding|spec|tickets]
-
-Run the planning compiler pipeline for a Feature.
-
-  --until   Stop after the named stage (default: tickets)
-            wayfinding  - resolve Decisions only
-            spec        - generate and validate Specification
-            tickets     - generate and validate TicketPlan (default)
-`
-
-func runPlan(args []string) int {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprint(os.Stdout, planUsage)
-		return 0
-	}
-
-	var featureID string
-	untilStage := "tickets"
-	var positional []string
-	for _, a := range args {
-		switch a {
-		case "--help", "-h":
-			fmt.Fprint(os.Stdout, planUsage)
-			return 0
-		case "--until":
-		default:
-			positional = append(positional, a)
-		}
-	}
-
-	for i, a := range positional {
-		if a == "--until" && i+1 < len(positional) {
-			untilStage = positional[i+1]
-			continue
-		}
-		if a == "--until" {
-			fmt.Fprintf(os.Stderr, "--until requires a stage argument\n\n%s", planUsage)
-			return 1
-		}
-		if featureID == "" {
-			featureID = a
-		} else {
-			fmt.Fprintf(os.Stderr, "too many arguments: %v\n\n%s", positional, planUsage)
-			return 1
-		}
-	}
-
-	if featureID == "" {
-		fmt.Fprintf(os.Stderr, "feature-id is required\n\n%s", planUsage)
-		return 1
-	}
-
-	ctx := context.Background()
-
-	dsn := filepath.Join(".forge", "forge.db")
-	store, err := storage.Open(dsn)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "storage.Open: %v\n", err)
-		return 1
-	}
-	defer store.Close()
-
-	if err := store.Migrate(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Migrate: %v\n", err)
-		return 1
-	}
-
-	_ = planengine.New(store)
-
-	backend := planningagent.NewFakeBackend()
-
-	specEngine := specengine.NewSpecEngine(backend)
-	// Replanning writes a new spec/ticket plan *around* work that already
-	// shipped (ticket 22, acceptance item 3): completed Issues enter the
-	// PlanningContext as implemented facts carrying the old ticket plan
-	// revision they were built under, and are never rolled back. On a
-	// Feature's first plan this is simply empty.
-	facts, err := replan.GatherImplementedFacts(ctx, store, featureID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge plan: gather implemented facts: %v\n", err)
-		return 1
-	}
-	specEngine.ImplementedFacts = facts
-
-	if untilStage == "spec" || untilStage == "tickets" {
-		if err := specEngine.GenerateSpec(ctx, featureID, &fileArtifactLoader{featureID: featureID}); err != nil {
-			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
-			return 1
-		}
-		fmt.Fprintf(os.Stdout, "spec.md generated for feature %s\n", featureID)
-		if untilStage == "spec" {
-			return 0
-		}
-	}
-
-	if untilStage == "tickets" {
-		if err := specEngine.GenerateTicketPlan(ctx, featureID, &fileArtifactLoader{featureID: featureID}); err != nil {
-			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
-			return 1
-		}
-		fmt.Fprintf(os.Stdout, "ticket-plan.md generated for feature %s\n", featureID)
-	}
-
-	return 0
 }
 
 const approveUsage = `Usage: forge approve <feature-id> spec

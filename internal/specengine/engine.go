@@ -290,7 +290,7 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 	if specArtifact.Kind != planning.KindSpec {
 		return fmt.Errorf("specengine: artifact is not a specification")
 	}
-	if specArtifact.State != "approved" && specArtifact.ApprovedRevision == "" {
+	if !planning.Approved(specArtifact) {
 		return fmt.Errorf("specengine: specification is not approved")
 	}
 
