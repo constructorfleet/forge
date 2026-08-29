@@ -11,6 +11,7 @@ import (
 	"github.com/Teagan42/forge/internal/specgeneration"
 	"github.com/Teagan42/forge/internal/specreview"
 	"github.com/Teagan42/forge/internal/ticketplan"
+	"github.com/Teagan42/forge/internal/ticketplanreview"
 )
 
 type SpecEngine struct {
@@ -318,8 +319,9 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 
 	// Build ticket plan artifact
 	tpArtifact := &planning.Artifact{
-		Kind:     planning.KindTicketPlan,
-		Sections: make([]planning.Section, 0, len(tpResult.Tickets)),
+		Kind:      planning.KindTicketPlan,
+		Sections:  make([]planning.Section, 0, len(tpResult.Tickets)),
+		Estimates: make(map[string]planning.TicketEstimate),
 	}
 
 	for _, t := range tpResult.Tickets {
@@ -343,6 +345,10 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 			Heading: fmt.Sprintf("Ticket: %s", t.Key),
 			Body:    body,
 		})
+		// Add estimate to metadata if present
+		if t.Estimate != nil {
+			tpArtifact.Estimates[t.Key] = *t.Estimate
+		}
 	}
 
 	// DerivedFrom: spec + repository
@@ -358,12 +364,170 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 		return fmt.Errorf("specengine: ticket plan deterministic validation failed: %w", err)
 	}
 
-	// Save ticket plan
-	if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
-		return fmt.Errorf("specengine: save ticket plan: %w", err)
+	// Run TicketPlanReview with bounded repair loop
+	if err := e.runTicketPlanReviewAndRepair(ctx, featureID, loader, tpArtifact, specArtifact, specReqIDs, goalArtifact.Revision, pc.ContextRevision, pc, decisions); err != nil {
+		return fmt.Errorf("specengine: ticket plan review and repair failed: %w", err)
 	}
 
 	return nil
+}
+
+func (e *SpecEngine) runTicketPlanReviewAndRepair(
+	ctx context.Context,
+	featureID string,
+	loader ArtifactLoader,
+	tpArtifact *planning.Artifact,
+	specArtifact *planning.Artifact,
+	specReqIDs []string,
+	goalRev string,
+	repoRev string,
+	pc planningagent.PlanningContext,
+	decisions map[string]*planning.Artifact,
+) error {
+	budget := &ReviewRepairBudget{limit: e.ReviewRetryLimit}
+
+	// Render ticket plan for review
+	ticketPlanRendered := renderTicketPlanForReview(tpArtifact)
+
+	for {
+		// Compile planning context with current ticket plan for review
+		artifacts := []planningagent.NamedArtifact{
+			{ID: "goal", Artifact: &planning.Artifact{Kind: planning.KindGoal, Revision: goalRev, Sections: []planning.Section{{Heading: "Goal", Body: ""}}}},
+		}
+		for id, dec := range decisions {
+			artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
+		}
+		artifacts = append(artifacts, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
+		reviewPC, err := planningagent.Compile(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil)
+		if err != nil {
+			return fmt.Errorf("specengine: compile planning context for ticket plan review: %w", err)
+		}
+
+		reviewResult, err := ticketplanreview.Review(ctx, e.Backend, reviewPC, ticketPlanRendered, specReqIDs, specArtifact.Revision)
+		if err != nil {
+			return fmt.Errorf("specengine: ticket plan review failed: %w", err)
+		}
+
+		if reviewResult.Verdict == ticketplanreview.VerdictApproved {
+			// Ticket plan approved by automated review, save and return
+			if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
+				return fmt.Errorf("specengine: save ticket plan: %w", err)
+			}
+			return nil
+		}
+
+		// CHANGES_REQUIRED - enter bounded repair loop
+		if budget.Exhausted() {
+			return fmt.Errorf("specengine: ticket plan review repair budget exhausted after %d attempts", e.ReviewRetryLimit)
+		}
+
+		if err := budget.Record(); err != nil {
+			return err
+		}
+
+		// Build focused feedback from findings for repair
+		feedback := buildTicketPlanRepairFeedback(reviewResult.Findings)
+
+		// Re-generate ticket plan with findings as additional context
+		humanInputs := map[string]string{
+			"review_findings":   feedback,
+			"prior_ticket_plan": ticketPlanRendered,
+		}
+
+		artifactsForRepair := []planningagent.NamedArtifact{
+			{ID: "goal", Artifact: &planning.Artifact{Kind: planning.KindGoal, Revision: goalRev, Sections: []planning.Section{{Heading: "Goal", Body: ""}}}},
+		}
+		for id, dec := range decisions {
+			artifactsForRepair = append(artifactsForRepair, planningagent.NamedArtifact{ID: id, Artifact: dec})
+		}
+		artifactsForRepair = append(artifactsForRepair, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
+		repairPC, err := planningagent.Compile(agent.RepositoryContext{BaseRevision: "base"}, artifactsForRepair, humanInputs)
+		if err != nil {
+			return fmt.Errorf("specengine: compile planning context for ticket plan repair: %w", err)
+		}
+
+		tpResult, err := ticketplan.Generate(ctx, e.Backend, repairPC)
+		if err != nil {
+			return fmt.Errorf("specengine: generate ticket plan repair: %w", err)
+		}
+
+		// Build new ticket plan artifact from repair result
+		newTPArtifact := &planning.Artifact{
+			Kind:      planning.KindTicketPlan,
+			Sections:  make([]planning.Section, 0, len(tpResult.Tickets)),
+			Estimates: make(map[string]planning.TicketEstimate),
+		}
+
+		for _, t := range tpResult.Tickets {
+			body := fmt.Sprintf("### Objective\n%s\n\n### Requirements\n", t.Objective)
+			for _, req := range t.Requirements {
+				body += fmt.Sprintf("%s\n", req)
+			}
+			body += "\n### Acceptance Criteria\n"
+			for _, ac := range t.AcceptanceCriteria {
+				body += fmt.Sprintf("- %s\n", ac)
+			}
+			body += "\n### Dependencies\n"
+			if len(t.Dependencies) == 0 {
+				body += "None"
+			} else {
+				for _, dep := range t.Dependencies {
+					body += fmt.Sprintf("%s\n", dep)
+				}
+			}
+			newTPArtifact.Sections = append(newTPArtifact.Sections, planning.Section{
+				Heading: fmt.Sprintf("Ticket: %s", t.Key),
+				Body:    body,
+			})
+			// Add estimate to metadata if present
+			if t.Estimate != nil {
+				newTPArtifact.Estimates[t.Key] = *t.Estimate
+			}
+		}
+
+		// DerivedFrom: spec + repository (same as original)
+		newTPArtifact.DerivedFrom = []planning.DerivedFromEntry{
+			{Kind: planning.KindSpec, ID: "spec", Revision: specArtifact.Revision},
+			{Kind: "repository", ID: "repository", Revision: repoRev},
+		}
+
+		newTPArtifact.Revision = planning.ComputeRevision(newTPArtifact)
+
+		// Re-run deterministic validation on repaired ticket plan
+		if err := ticketplan.ValidateTicketPlanDeterministic(newTPArtifact, specReqIDs, specArtifact.Revision, repoRev); err != nil {
+			return fmt.Errorf("specengine: deterministic validation failed after ticket plan repair: %w", err)
+		}
+
+		// Loop continues with new ticket plan for next review iteration
+		tpArtifact = newTPArtifact
+		ticketPlanRendered = renderTicketPlanForReview(tpArtifact)
+	}
+}
+
+func buildTicketPlanRepairFeedback(findings []ticketplanreview.Finding) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	var fb string
+	for _, f := range findings {
+		ref := ""
+		if f.TicketKey != "" {
+			ref += " [" + f.TicketKey + "]"
+		}
+		if f.Requirement != "" {
+			ref += " [" + f.Requirement + "]"
+		}
+		fb += fmt.Sprintf("[%s]%s %s\n", f.Severity, ref, f.Message)
+	}
+	return fb
+}
+
+func renderTicketPlanForReview(tpArtifact *planning.Artifact) string {
+	var out string
+	for _, s := range tpArtifact.Sections {
+		out += fmt.Sprintf("## %s\n%s\n\n", s.Heading, s.Body)
+	}
+	return out
 }
 
 type fakeLoader struct {

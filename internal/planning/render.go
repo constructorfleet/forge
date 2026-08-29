@@ -22,6 +22,11 @@ func Render(a *Artifact) []byte {
 		derived[i] = derivedYAML{Kind: string(d.Kind), ID: d.ID, Revision: d.Revision}
 	}
 
+	estimates := make(map[string]TicketEstimate)
+	for k, v := range a.Estimates {
+		estimates[k] = TicketEstimate{Size: v.Size, Risk: v.Risk}
+	}
+
 	meta := metaBlock{
 		Revision:         a.Revision,
 		State:            a.State,
@@ -30,6 +35,7 @@ func Render(a *Artifact) []byte {
 		ApprovedAt:       a.ApprovedAt,
 		Kind:             string(a.Kind),
 		DerivedFrom:      derived,
+		Estimates:        estimates,
 	}
 
 	yamlBytes, err := yaml.Marshal(&meta)

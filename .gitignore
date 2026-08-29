@@ -6,3 +6,4 @@
 /dist/
 # Local
 .DS_Store
+.forge/

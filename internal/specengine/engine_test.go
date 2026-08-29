@@ -365,6 +365,11 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 			}
 		]
 	}`+"\n```\n")
+	backend.ProgramResult("ticket-plan-review", "```json\n"+`{
+		"verdict": "APPROVED",
+		"summary": "Ticket plan is well-structured with clear boundaries and full coverage",
+		"findings": []
+	}`+"\n```\n")
 
 	engine := specengine.NewSpecEngine(backend)
 	err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader)
