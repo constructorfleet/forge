@@ -239,6 +239,19 @@ type LSPConfig struct {
 	// seam's own three-state selection policy; this map only overrides
 	// that default when an operator needs to force a specific choice.
 	Providers map[string]LSPProviderPreference `yaml:"providers"`
+
+	// ReadinessTimeout bounds how long the Forge-managed gopls driver
+	// (internal/semantic/gopls) blocks waiting for a spawned language
+	// server's initialize/initialized handshake to complete before
+	// degrading that server to inert rather than surfacing an error to
+	// callers. See issue #123.
+	ReadinessTimeout time.Duration `yaml:"readiness_timeout"`
+
+	// RestartLimit bounds how many times the Forge-managed gopls driver
+	// restarts a language server subprocess that crashed after a
+	// successful handshake before giving up and going permanently inert.
+	// See issue #123.
+	RestartLimit int `yaml:"restart_limit"`
 }
 
 // LSPServerConfig is one Forge-managed language server definition.
@@ -339,6 +352,18 @@ const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}
 // block a Worker before Forge kills it.
 const defaultAgentTimeout = 20 * time.Minute
 
+// defaultLSPReadinessTimeout is LSPConfig.ReadinessTimeout's default: long
+// enough for a cold gopls (package load + type-check on first request) to
+// complete its initialize/initialized handshake on a typical repository,
+// while still bounding how long a wedged or misconfigured server blocks
+// before the driver degrades it to inert (issue #123).
+const defaultLSPReadinessTimeout = 30 * time.Second
+
+// defaultLSPRestartLimit is LSPConfig.RestartLimit's default: one retry
+// tolerates a single transient crash without masking a persistently broken
+// server behind repeated restart attempts.
+const defaultLSPRestartLimit = 1
+
 // Default returns the fully-defaulted Config used when no .forge.yaml is
 // present — the zero-config case. It is also the single source of truth for
 // every deterministic default: Load starts from this literal and lets YAML
@@ -381,6 +406,10 @@ func Default() Config {
 			InReviewLabel:   "in-review",
 			FailedLabel:     "failed",
 			Comment:         false,
+		},
+		LSP: LSPConfig{
+			ReadinessTimeout: defaultLSPReadinessTimeout,
+			RestartLimit:     defaultLSPRestartLimit,
 		},
 	}
 }
