@@ -149,6 +149,11 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	if cfg.PullRequests.WatchCI {
 		sup := ci.New(store, trk, cfg, eng.BaseBranch)
 		sup.StatusTracker = trk
+		// trk implements tracker.Tracker in full, a superset of
+		// ci.NeedsInfoTracker: Wait routes an unresolvable merge conflict or
+		// ambiguous PR review feedback to NEEDS_INFO (issue 109) using the
+		// same label/comment side effects eng.NeedsInfoTracker uses above.
+		sup.NeedsInfoTracker = trk
 		eng.CIWaiter = sup
 	}
 	return eng, nil
@@ -206,6 +211,7 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 	if cfg.PullRequests.WatchCI {
 		sup := ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
 		sup.StatusTracker = trk
+		sup.NeedsInfoTracker = trk
 		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}

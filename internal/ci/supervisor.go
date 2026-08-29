@@ -41,6 +41,27 @@ type Supervisor struct {
 	// tracker side effect a no-op, matching every other optional seam in
 	// this codebase (see engine.Engine.StatusTracker).
 	StatusTracker statusreflect.Tracker
+
+	// NeedsInfoTracker is the subset of tracker.Tracker Wait uses to add
+	// the configured Config.Blocked.Label and post a structured comment
+	// when it routes an unresolvable merge conflict or ambiguous review
+	// feedback to NEEDS_INFO (issue 109). Optional like StatusTracker: nil
+	// (or an unset Config.Blocked.Label) leaves the label/comment side
+	// effects a no-op — Wait still transitions the Issue either way, same
+	// as engine.Engine's handleNeedsInfo does for the IMPLEMENTING-side
+	// NEEDS_INFO path.
+	NeedsInfoTracker NeedsInfoTracker
+}
+
+// NeedsInfoTracker is the subset of tracker.Tracker Wait needs when routing
+// an unresolvable merge conflict or ambiguous review feedback to
+// NEEDS_INFO. Structurally identical to engine.NeedsInfoTracker; duplicated
+// narrowly here so internal/ci does not import internal/engine (Engine
+// itself depends on internal/ci via the CIWaiter interface, so the reverse
+// import would cycle).
+type NeedsInfoTracker interface {
+	AddLabel(ctx context.Context, id string, label string) error
+	AddComment(ctx context.Context, id string, body string) (tracker.Comment, error)
 }
 
 func New(store storage.Store, trk Tracker, cfg config.Config, baseBranch string) *Supervisor {
@@ -81,6 +102,19 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 	pr := prs[len(prs)-1]
 
 	for {
+		// Mergeability and review feedback are checked ahead of required
+		// checks each poll (issue 109, "Merge Conflicts" / "Review
+		// Rectification"): both are optional Tracker capabilities (see
+		// tracker.MergeStatusGetter/ReviewsGetter), so a Tracker that
+		// doesn't implement them (including every existing test double)
+		// leaves this exactly the pre-issue-109 check-only behavior.
+		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr.Number); handled || err != nil {
+			return state, err
+		}
+		if handled, state, err := s.pollReviews(ctx, executionID, issueID, pr.Number); handled || err != nil {
+			return state, err
+		}
+
 		checks, err := s.Tracker.GetPullRequestChecks(ctx, pr.Number)
 		if err != nil {
 			return "", fmt.Errorf("ci: poll checks for issue %s: %w", issueID, err)

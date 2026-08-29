@@ -177,14 +177,40 @@ const (
 	CIRunStatusFailed  CIRunStatus = "FAILED"
 )
 
-// CIRun is one persisted CI supervision attempt for an Issue in CI_PENDING.
+// CIRunKind discriminates what triggered a CIRun. The zero value ("")
+// means a required-check evaluation (CIRunKindCheck) — every CIRun
+// recorded before issue 109's PR-supervision work, and the default for
+// callers that never set it, so existing persisted rows and call sites
+// keep behaving exactly as before.
+type CIRunKind string
+
+const (
+	// CIRunKindCheck is the zero value: a required-check (CI) evaluation,
+	// the pre-existing behavior for every CIRun recorded before issue
+	// 109's PR-supervision work and for every call site that never sets
+	// Kind explicitly.
+	CIRunKindCheck CIRunKind = ""
+	// CIRunKindReview is an actionable pull-request review requesting
+	// changes.
+	CIRunKindReview CIRunKind = "review"
+	// CIRunKindConflict is a detected merge conflict between the pull
+	// request's branch and its base.
+	CIRunKindConflict CIRunKind = "conflict"
+)
+
+// CIRun is one persisted PR supervision attempt for an Issue in CI_PENDING
+// (CONTEXT.md "CI Supervisor"; issue 109 extends this beyond required
+// checks to actionable PR reviews and merge conflicts — see Kind).
 type CIRun struct {
 	ExecutionID string
 	IssueID     string
 	Status      CIRunStatus
-	CheckName   string
-	Details     string
-	CheckedAt   time.Time
+	// Kind discriminates what this run evaluated. Empty is treated as
+	// CIRunKindCheck (see CIRunKind's doc comment).
+	Kind      CIRunKind
+	CheckName string
+	Details   string
+	CheckedAt time.Time
 }
 
 // ExecutionState is an Execution reloaded together with every Issue

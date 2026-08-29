@@ -17,9 +17,9 @@ func (s *SQLiteStore) RecordCIRun(ctx context.Context, run CIRun) error {
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO ci_runs (execution_id, issue_id, status, check_name, details, checked_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		run.ExecutionID, run.IssueID, string(run.Status), run.CheckName, run.Details, run.CheckedAt.UTC(),
+		INSERT INTO ci_runs (execution_id, issue_id, status, kind, check_name, details, checked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		run.ExecutionID, run.IssueID, string(run.Status), string(run.Kind), run.CheckName, run.Details, run.CheckedAt.UTC(),
 	)
 	if err != nil {
 		switch {
@@ -41,10 +41,12 @@ func (s *SQLiteStore) RecordCIRun(ctx context.Context, run CIRun) error {
 func appendCIRunEvent(ctx context.Context, tx *sql.Tx, run CIRun) error {
 	data, err := json.Marshal(struct {
 		Status    string `json:"status"`
+		Kind      string `json:"kind,omitempty"`
 		CheckName string `json:"check_name,omitempty"`
 		Details   string `json:"details,omitempty"`
 	}{
 		Status:    string(run.Status),
+		Kind:      string(run.Kind),
 		CheckName: run.CheckName,
 		Details:   run.Details,
 	})
@@ -64,7 +66,7 @@ func appendCIRunEvent(ctx context.Context, tx *sql.Tx, run CIRun) error {
 // Issue within an Execution, ordered by insertion.
 func (s *SQLiteStore) CIRunsByIssue(ctx context.Context, executionID, issueID string) ([]CIRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, status, check_name, details, checked_at
+		SELECT execution_id, issue_id, status, kind, check_name, details, checked_at
 		FROM ci_runs
 		WHERE execution_id = ? AND issue_id = ?
 		ORDER BY id`,
@@ -78,11 +80,12 @@ func (s *SQLiteStore) CIRunsByIssue(ctx context.Context, executionID, issueID st
 	var runs []CIRun
 	for rows.Next() {
 		var run CIRun
-		var status string
-		if err := rows.Scan(&run.ExecutionID, &run.IssueID, &status, &run.CheckName, &run.Details, &run.CheckedAt); err != nil {
+		var status, kind string
+		if err := rows.Scan(&run.ExecutionID, &run.IssueID, &status, &kind, &run.CheckName, &run.Details, &run.CheckedAt); err != nil {
 			return nil, fmt.Errorf("storage: scan ci run: %w", err)
 		}
 		run.Status = CIRunStatus(status)
+		run.Kind = CIRunKind(kind)
 		run.CheckedAt = run.CheckedAt.UTC()
 		runs = append(runs, run)
 	}

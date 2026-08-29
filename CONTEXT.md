@@ -66,7 +66,13 @@ A deterministic command required to pass before publication. Gates are configure
 The component that executes Quality Gates in order, captures results, and produces bounded failure feedback for the Agent.
 
 **CI Supervisor**:
-The component that monitors pull-request checks after publication. CI failures are routed back to the Worker with bounded diagnostics. Required checks are determined by the tracker's native merge requirements (GitHub branch protection/rulesets), not duplicated in Forge config.
+The component that monitors a pull request after publication until it reaches a resting state — a required check failing, an actionable review requesting changes, a merge conflict, or every required check passing. Required checks are determined by the tracker's native merge requirements (GitHub branch protection/rulesets), not duplicated in Forge config. PR creation is not successful completion: the Issue stays in CI_PENDING under supervision until the pull request is healthy, blocked on something requiring human input, or its repair budget is exhausted.
+
+**Review Rectification**:
+The CI Supervisor's classification of pull-request review feedback (a tracker-native review, distinct from the pre-commit **Review** above, which is Forge's own Agent invocation before a PR exists). A single reviewer's non-empty CHANGES_REQUESTED review is actionable — routed back to the Worker with bounded diagnostics (the reviewer and their comment) exactly like a failed required check. More than one reviewer simultaneously requesting changes is ambiguous and routes the Issue to NEEDS_INFO instead, since reconciling conflicting instructions is a human judgment call, not something a repair agent should improvise. Approvals, plain comments, and a bare CHANGES_REQUESTED with no stated reason carry nothing actionable and leave the Issue polling.
+
+**Merge Conflicts**:
+The CI Supervisor detects when a pull request can no longer be merged into its base branch. Forge attempts no automatic conflict resolution; every detected conflict routes the Issue to NEEDS_INFO with a structured comment describing the conflict, rather than guessing at a resolution.
 
 **Merge Requirements**:
 The set of conditions the target branch requires before a PR can merge. Queried from the Tracker Adapter, not configured in Forge. Optional check failures do not trigger CI repair.
@@ -77,7 +83,7 @@ A fresh Agent invocation that evaluates implementation quality after Quality Gat
 _Avoid_: Self-review, continuation review
 
 **Retry Budget**:
-Separate counters for gate failures, review rejections, and CI failures. Each has its own configurable ceiling. Every repair — whether from gate failure, review rejection, or CI failure — must rerun the full Quality Gate set before proceeding.
+Separate counters for gate failures, review rejections, and CI failures. Each has its own configurable ceiling. Every repair — whether from gate failure, review rejection, or CI failure — must rerun the full Quality Gate set before proceeding. The CI counter (`retry.ci`) is the post-PR repair budget: it bounds both a failed required check and an actionable review-requesting-changes repair, since both re-enter the same repair loop from CI_FAILED. It does not bound NEEDS_INFO detours (an unresolvable merge conflict, or ambiguous review feedback) — those require human input, not another repair attempt, so they are never retried against this budget.
 
 ### Issue tracker
 

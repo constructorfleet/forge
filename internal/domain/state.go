@@ -89,10 +89,20 @@ var transitions = map[IssueState][]IssueState{
 	StateReviewing:         {StateImplementing, StateCommitting, StateFailed},
 	StateCommitting:        {StatePRCreating, StateNeedsReplan, StateFailed},
 	StatePRCreating:        {StateCIPending},
-	StateCIPending:         {StateCIFailed, StateDone},
-	StateCIFailed:          {StateImplementing, StateFailed},
-	StateNeedsInfo:         {StateReady},
-	StateNeedsReplan:       {StateReady},
+	// CIPending -> NeedsInfo (issue 109, "PR supervision"): the CI
+	// Supervisor's poll loop (internal/ci.Supervisor.Wait) also inspects
+	// pull-request mergeability and review feedback alongside required
+	// checks. A detected merge conflict, or review feedback ambiguous
+	// enough that automated repair would be guessing at intent, is routed
+	// to NEEDS_INFO — the same human-input resting state IMPLEMENTING
+	// uses, and the same NEEDS_INFO -> READY resume flow (see
+	// engine.Resume) — rather than to CI_FAILED, which is reserved for
+	// failures the existing repair loop can act on unsupervised (a failed
+	// check, or a single reviewer's actionable CHANGES_REQUESTED review).
+	StateCIPending:   {StateCIFailed, StateDone, StateNeedsInfo},
+	StateCIFailed:    {StateImplementing, StateFailed},
+	StateNeedsInfo:   {StateReady},
+	StateNeedsReplan: {StateReady},
 }
 
 // ValidateTransition reports whether moving an Issue from `from` to `to` is
