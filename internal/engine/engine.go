@@ -714,20 +714,35 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		}
 	}
 
-	recorder := agent.NewTranscriptRecorder()
 	req := agent.AgentRequest{
 		WorkspacePath: workspacePath,
 		Issue:         issue,
 		Repository:    repoCtx,
 		Policy:        agent.WorkflowPolicy{},
 		Feedback:      feedback,
-		Transcript:    recorder,
 	}
 	contextBytes, err := agent.ContextSizeBytes(req)
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: encode agent request for issue %s telemetry: %w", issueID, err)
 	}
 	started := e.Now()
+
+	// StartAgentRun inserts the row up front (issue 36) so the transcript
+	// sink below has an agent_run_id to persist against from the very
+	// first event, rather than only after Execute returns — see
+	// persistingTranscriptSink.
+	agentRunID, startErr := e.Store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID:  executionID,
+		IssueID:      issueID,
+		Backend:      e.Config.Agent.Provider,
+		StartedAt:    started,
+		ContextBytes: contextBytes,
+	})
+	if startErr != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
+	}
+	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, e.Now)
+
 	result, err := e.Agent.Execute(ctx, req)
 	finished := e.Now()
 	run := storage.AgentRun{
@@ -748,15 +763,14 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		run.InputTokens = &inputTokens
 		run.OutputTokens = &outputTokens
 	}
-	agentRunID, recordErr := e.Store.RecordAgentRun(ctx, run)
-	if recordErr != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: record agent run for issue %s: %w", issueID, recordErr)
+	// Transcript events were already persisted incrementally as the Agent
+	// emitted them (issue 36); FinalizeAgentRun only needs to record the
+	// run's terminal result/tokens. A run whose process is killed before
+	// Execute returns leaves the row at AgentRunResultRunning — a durable
+	// "interrupted" marker — rather than losing the row entirely.
+	if finalizeErr := e.Store.FinalizeAgentRun(ctx, agentRunID, run); finalizeErr != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: finalize agent run for issue %s: %w", issueID, finalizeErr)
 	}
-	// Transcript persistence is best-effort per ticket 28: a storage
-	// failure here is a durability gap for this attempt's transcript, not
-	// a reason to fail the Issue — the AgentRun and its {status, summary}
-	// envelope are already durably recorded above regardless.
-	_ = e.Store.RecordTranscriptEvents(ctx, executionID, issueID, agentRunID, toStorageTranscriptEvents(recorder.Events()))
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
 	}
@@ -797,11 +811,65 @@ func toStorageTranscriptEvents(events []agent.TranscriptEvent) []storage.Transcr
 			ToolName:   event.ToolName,
 			ToolInput:  event.ToolInput,
 			ToolOutput: event.ToolOutput,
+			ToolCallID: event.ToolCallID,
 			OccurredAt: event.Timestamp,
 		}
 	}
 	return out
 }
+
+// maxTranscriptEvents bounds how many TranscriptEvents a
+// persistingTranscriptSink retains and persists for one AgentRun (issue
+// 36): a long-running or chatty Agent must not force Forge to hold or
+// persist an unbounded transcript. Exceeding the cap evicts the oldest
+// retained event and surfaces a single TranscriptEventTruncation marker
+// (agent.TranscriptRecorder.Events) so a reader sees explicitly that the
+// window is the most recent N events, not the run's full history.
+const maxTranscriptEvents = 500
+
+// transcriptStore is the subset of storage.Store a persistingTranscriptSink
+// needs to flush events, narrowed for testability.
+type transcriptStore interface {
+	ReplaceTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []storage.TranscriptEvent) error
+}
+
+// persistingTranscriptSink is an agent.TranscriptSink that persists the
+// transcript to storage incrementally, as each event is Emitted, instead of
+// batching everything into a single write after Execute returns (issue 36):
+// a killed/timed-out run's transcript then survives, up to the event
+// immediately before the kill, rather than being lost with the rest of an
+// in-memory-only buffer. Wraps a bounded agent.TranscriptRecorder, so the
+// persisted transcript is always the same bounded, truncation-marked window
+// the recorder would return on its own.
+type persistingTranscriptSink struct {
+	ctx                  context.Context
+	store                transcriptStore
+	executionID, issueID string
+	agentRunID           int64
+	recorder             *agent.TranscriptRecorder
+}
+
+func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, now func() time.Time) *persistingTranscriptSink {
+	return &persistingTranscriptSink{
+		ctx:         ctx,
+		store:       store,
+		executionID: executionID,
+		issueID:     issueID,
+		agentRunID:  agentRunID,
+		recorder:    agent.NewBoundedTranscriptRecorder(maxTranscriptEvents, now),
+	}
+}
+
+// Emit implements agent.TranscriptSink. Persistence is best-effort per
+// ticket 28's contract: a storage failure here is a durability gap for this
+// attempt's transcript, not a reason to fail the Issue or the Agent
+// invocation in progress.
+func (s *persistingTranscriptSink) Emit(event agent.TranscriptEvent) {
+	s.recorder.Emit(event)
+	_ = s.store.ReplaceTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(s.recorder.Events()))
+}
+
+var _ agent.TranscriptSink = (*persistingTranscriptSink)(nil)
 
 // runQualityGates runs the Issue's configured Quality Gates (ticket 19,
 // internal/gate) for an Issue already in VALIDATING, persisting each

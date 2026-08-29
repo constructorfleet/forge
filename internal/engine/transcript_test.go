@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
@@ -23,8 +24,8 @@ type transcriptEmittingAgent struct {
 func (a *transcriptEmittingAgent) Execute(_ context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
 	if req.Transcript != nil {
 		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "Looking at the issue."})
-		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolCall, Role: "assistant", ToolName: "Bash", ToolInput: `{"command":"go build ./..."}`})
-		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolResult, Role: "user", ToolName: "tool-1", ToolOutput: "build ok"})
+		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolCall, Role: "assistant", ToolName: "Bash", ToolCallID: "tool-1", ToolInput: `{"command":"go build ./..."}`})
+		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolResult, Role: "user", ToolName: "Bash", ToolCallID: "tool-1", ToolOutput: "build ok"})
 	}
 	return a.result, nil
 }
@@ -82,6 +83,9 @@ func TestExecute_PersistsAgentTranscriptEvents(t *testing.T) {
 			t.Fatalf("transcript[%d].Seq = %d, want %d", i, event.Seq, i)
 		}
 	}
+	if transcript[1].ToolCallID != "tool-1" || transcript[2].ToolCallID != "tool-1" {
+		t.Fatalf("transcript[1].ToolCallID = %q, transcript[2].ToolCallID = %q, want both tool-1 (call/result pairing survives persistence)", transcript[1].ToolCallID, transcript[2].ToolCallID)
+	}
 }
 
 // TestExecute_TranscriptPersistenceFailureDoesNotFailTheRun is ticket 28's
@@ -109,5 +113,90 @@ func TestExecute_TranscriptPersistenceFailureDoesNotFailTheRun(t *testing.T) {
 	}
 	if len(transcript) != 0 {
 		t.Fatalf("got %d transcript events for an Agent that emits none, want 0", len(transcript))
+	}
+}
+
+// cancelableTranscriptAgent emits a scripted sequence of events, signals
+// emitted once they've been sent to the sink, then blocks on ctx.Done() —
+// standing in for an Agent whose subprocess is killed mid-run (issue 36:
+// the case that motivated this ticket, a real timed-out run whose
+// transcript was mostly lost to end-of-run batch persistence).
+type cancelableTranscriptAgent struct {
+	emitted chan struct{}
+}
+
+func (a *cancelableTranscriptAgent) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+	req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "starting work"})
+	req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolCall, Role: "assistant", ToolName: "Bash", ToolCallID: "tool-1", ToolInput: `{"command":"go build ./..."}`})
+	close(a.emitted)
+	<-ctx.Done()
+	return agent.AgentResult{}, ctx.Err()
+}
+
+var _ agent.Agent = (*cancelableTranscriptAgent)(nil)
+
+// TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation is issue
+// 36's core durability requirement: transcript events are persisted
+// incrementally as the Agent emits them, so a killed/timed-out run's
+// transcript survives up to the moment of the kill rather than being lost
+// with an end-of-run batch write that never gets to run. This asserts the
+// events are already durable in storage before the run is even cancelled —
+// not merely recoverable afterward because Execute happened to return.
+func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{"42": {ID: "42"}}}
+	mgr, err := workspace.NewManager(repoRoot)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	fake := &cancelableTranscriptAgent{emitted: make(chan struct{})}
+	eng := engine.New(store, trk, &spyWorkspaces{mgr: mgr}, fake, config.Default(), repoRoot)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	execution, err := eng.StartExecution(ctx, base)
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, execErr := eng.ExecuteInExecution(ctx, execution, "42", base)
+		done <- execErr
+	}()
+
+	select {
+	case <-fake.emitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the agent to emit its scripted events")
+	}
+
+	transcript, err := engine.LoadTranscript(context.Background(), store, execution.ID, "42")
+	if err != nil {
+		t.Fatalf("LoadTranscript (pre-cancellation): %v", err)
+	}
+	if len(transcript) != 2 {
+		t.Fatalf("got %d transcript events before cancellation, want 2 (persisted incrementally, not batched at run end): %+v", len(transcript), transcript)
+	}
+	if transcript[0].Text != "starting work" {
+		t.Fatalf("transcript[0] = %+v, want the first emitted message", transcript[0])
+	}
+	if transcript[1].ToolName != "Bash" || transcript[1].ToolCallID != "tool-1" {
+		t.Fatalf("transcript[1] = %+v, want the emitted tool call", transcript[1])
+	}
+
+	cancel()
+	if execErr := <-done; execErr == nil {
+		t.Fatalf("ExecuteInExecution err = nil, want non-nil (the run was cancelled mid-stream)")
+	}
+
+	final, err := engine.LoadTranscript(context.Background(), store, execution.ID, "42")
+	if err != nil {
+		t.Fatalf("LoadTranscript (post-cancellation): %v", err)
+	}
+	if len(final) != 2 {
+		t.Fatalf("got %d transcript events after cancellation, want 2 — the last recorded event must be the one immediately before the wedge, not lost", len(final))
 	}
 }

@@ -35,24 +35,27 @@ func TestParseStreamTranscript_EmitsEventsAndReturnsFinalText(t *testing.T) {
 	}
 
 	events := recorder.Events()
-	if len(events) != 4 {
-		t.Fatalf("got %d events, want 4 (2 messages, 1 tool call, 1 tool result): %+v", len(events), events)
+	if len(events) != 5 {
+		t.Fatalf("got %d events, want 5 (system init, 2 messages, 1 tool call, 1 tool result): %+v", len(events), events)
 	}
 
-	if events[0].Type != agent.TranscriptEventMessage || events[0].Text != "Let me check the build." {
-		t.Fatalf("events[0] = %+v, want the first assistant message", events[0])
+	if events[0].Type != agent.TranscriptEventMessage || events[0].Role != "system" {
+		t.Fatalf("events[0] = %+v, want the system/init summary", events[0])
 	}
-	if events[1].Type != agent.TranscriptEventToolCall || events[1].ToolName != "Bash" {
-		t.Fatalf("events[1] = %+v, want a Bash tool call", events[1])
+	if events[1].Type != agent.TranscriptEventMessage || events[1].Text != "Let me check the build." {
+		t.Fatalf("events[1] = %+v, want the first assistant message", events[1])
 	}
-	if !strings.Contains(events[1].ToolInput, "go build") {
-		t.Fatalf("events[1].ToolInput = %q, want the tool input captured", events[1].ToolInput)
+	if events[2].Type != agent.TranscriptEventToolCall || events[2].ToolName != "Bash" {
+		t.Fatalf("events[2] = %+v, want a Bash tool call", events[2])
 	}
-	if events[2].Type != agent.TranscriptEventToolResult || events[2].ToolOutput != "build ok" {
-		t.Fatalf("events[2] = %+v, want the tool result", events[2])
+	if !strings.Contains(events[2].ToolInput, "go build") {
+		t.Fatalf("events[2].ToolInput = %q, want the tool input captured", events[2].ToolInput)
 	}
-	if events[3].Type != agent.TranscriptEventMessage || events[3].Text != "Build passed." {
-		t.Fatalf("events[3] = %+v, want the second assistant message", events[3])
+	if events[3].Type != agent.TranscriptEventToolResult || events[3].ToolOutput != "build ok" {
+		t.Fatalf("events[3] = %+v, want the tool result", events[3])
+	}
+	if events[4].Type != agent.TranscriptEventMessage || events[4].Text != "Build passed." {
+		t.Fatalf("events[4] = %+v, want the second assistant message", events[4])
 	}
 
 	for i, event := range events {
@@ -62,6 +65,71 @@ func TestParseStreamTranscript_EmitsEventsAndReturnsFinalText(t *testing.T) {
 		if !event.Timestamp.Equal(fixedNow) {
 			t.Fatalf("events[%d].Timestamp = %v, want %v", i, event.Timestamp, fixedNow)
 		}
+	}
+}
+
+// TestParseStreamTranscript_PerEventTimestampsAreDistinctAndMonotonic is
+// issue 36's core fix: occurred_at must come from each stream event's own
+// timestamp, not a single persist-time stamp shared by every row. A real
+// `claude --output-format stream-json` transcript carries a distinct
+// RFC3339Nano timestamp per line; this asserts every parsed event's
+// Timestamp reflects its own line, in increasing order.
+func TestParseStreamTranscript_PerEventTimestampsAreDistinctAndMonotonic(t *testing.T) {
+	transcript := `{"type":"system","subtype":"init","timestamp":"2026-08-28T12:00:00.000Z"}
+{"type":"assistant","timestamp":"2026-08-28T12:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Let me check the build."}]}}
+{"type":"assistant","timestamp":"2026-08-28T12:00:02.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"go build ./..."}}]}}
+{"type":"user","timestamp":"2026-08-28T12:00:07.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"build ok"}]}}
+{"type":"result","subtype":"success","result":"done"}
+`
+	recorder := agent.NewTranscriptRecorder()
+	if _, ok := parseStreamTranscript(transcript, recorder, time.Now); !ok {
+		t.Fatalf("parseStreamTranscript reported ok=false, want true")
+	}
+
+	events := recorder.Events()
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4: %+v", len(events), events)
+	}
+	for i := 1; i < len(events); i++ {
+		if !events[i].Timestamp.After(events[i-1].Timestamp) {
+			t.Fatalf("events[%d].Timestamp = %v, want strictly after events[%d].Timestamp = %v", i, events[i].Timestamp, i-1, events[i-1].Timestamp)
+		}
+	}
+	if got := events[2].Timestamp.Sub(events[1].Timestamp); got != time.Second {
+		t.Fatalf("events[2].Timestamp - events[1].Timestamp = %v, want 1s (the real inter-event gap from the stream)", got)
+	}
+	if got := events[3].Timestamp.Sub(events[2].Timestamp); got != 5*time.Second {
+		t.Fatalf("events[3].Timestamp - events[2].Timestamp = %v, want 5s (the real inter-event gap from the stream)", got)
+	}
+}
+
+// TestParseStreamTranscript_NoDroppedLeadingEventsAndCallResultPairing is
+// issue 36's other core fix: capture starts at the stream's actual
+// beginning (a system/init summary, then the first assistant message and
+// every tool call), and every TOOL_RESULT is paired to its TOOL_CALL by id
+// with no orphans.
+func TestParseStreamTranscript_NoDroppedLeadingEventsAndCallResultPairing(t *testing.T) {
+	recorder := agent.NewTranscriptRecorder()
+	if _, ok := parseStreamTranscript(scriptedStreamTranscript, recorder, time.Now); !ok {
+		t.Fatalf("parseStreamTranscript reported ok=false, want true")
+	}
+
+	events := recorder.Events()
+	if len(events) != 5 {
+		t.Fatalf("got %d events, want 5", len(events))
+	}
+	if events[0].Type != agent.TranscriptEventMessage || events[0].Role != "system" {
+		t.Fatalf("events[0] = %+v, want the leading system/init summary — no dropped leading events", events[0])
+	}
+	call, result := events[2], events[3]
+	if call.Type != agent.TranscriptEventToolCall || call.ToolCallID != "tool-1" {
+		t.Fatalf("call = %+v, want TOOL_CALL with ToolCallID tool-1", call)
+	}
+	if result.Type != agent.TranscriptEventToolResult || result.ToolCallID != "tool-1" {
+		t.Fatalf("result = %+v, want TOOL_RESULT paired to the same ToolCallID (no orphan)", result)
+	}
+	if result.ToolName != call.ToolName {
+		t.Fatalf("result.ToolName = %q, want it resolved from the call it pairs to (%q)", result.ToolName, call.ToolName)
 	}
 }
 
@@ -133,8 +201,8 @@ func TestExecute_StreamingTranscriptFeedsSinkAndStructuredResult(t *testing.T) {
 	if result.Summary != "Fixed the build." {
 		t.Fatalf("Summary = %q", result.Summary)
 	}
-	if len(recorder.Events()) != 4 {
-		t.Fatalf("got %d transcript events, want 4", len(recorder.Events()))
+	if len(recorder.Events()) != 5 {
+		t.Fatalf("got %d transcript events, want 5", len(recorder.Events()))
 	}
 }
 
