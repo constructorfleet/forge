@@ -108,7 +108,11 @@ type TranscriptEvent struct {
 	ToolName    string
 	ToolInput   string
 	ToolOutput  string
-	OccurredAt  time.Time
+	// ToolCallID pairs a TOOL_RESULT back to the TOOL_CALL that produced it
+	// (issue 36). Set to the tool-use id on both a TOOL_CALL (its own id)
+	// and its matching TOOL_RESULT (the id it references); empty otherwise.
+	ToolCallID string
+	OccurredAt time.Time
 }
 
 // ReviewFinding is one structured Finding raised during a ReviewRun,
@@ -279,6 +283,24 @@ type Store interface {
 	// this specific attempt via RecordTranscriptEvents.
 	RecordAgentRun(ctx context.Context, run AgentRun) (int64, error)
 
+	// StartAgentRun inserts an in-progress AgentRun row up front — before
+	// the Agent is invoked — and returns its id, so transcript events can be
+	// persisted incrementally against it as they stream (issue 36) rather
+	// than only in a single batch at the end. run.Result/FinishedAt/tokens
+	// are not yet known: the row records a RUNNING result and a placeholder
+	// finished_at until FinalizeAgentRun updates it. No "agent.run" Event is
+	// appended here; that stays FinalizeAgentRun's job so the audit log's
+	// event still marks completion, exactly as RecordAgentRun did.
+	StartAgentRun(ctx context.Context, run AgentRun) (int64, error)
+
+	// FinalizeAgentRun updates the AgentRun row StartAgentRun created with
+	// its terminal result, finished_at, and token usage, and appends the
+	// "agent.run" Event — the completion half of the run lifecycle whose
+	// start was StartAgentRun. A run that is never finalized (e.g. the
+	// process died mid-invocation) keeps its RUNNING result, a durable
+	// signal that it was interrupted.
+	FinalizeAgentRun(ctx context.Context, agentRunID int64, run AgentRun) error
+
 	// AgentRunsByExecution returns every AgentRun recorded for one
 	// Execution, ordered by insertion.
 	AgentRunsByExecution(ctx context.Context, executionID string) ([]AgentRun, error)
@@ -293,6 +315,15 @@ type Store interface {
 	// call site (internal/engine): a failure here must never fail the
 	// Issue's run, only forfeit that attempt's transcript durability.
 	RecordTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error
+
+	// ReplaceTranscriptEvents overwrites the persisted transcript for one
+	// AgentRun with events, in a single transaction: it deletes any rows
+	// already stored for the run, then inserts events in order. Incremental
+	// capture (issue 36) flushes a bounded, most-recent window repeatedly as
+	// an Agent streams, so each flush must supersede the last rather than
+	// append — that is how the persisted transcript stays a faithful window
+	// (with its dropped-earlier marker) instead of accumulating stale rows.
+	ReplaceTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error
 
 	// TranscriptEventsByAgentRun returns every TranscriptEvent recorded for
 	// one AgentRun (attempt), ordered by Seq.

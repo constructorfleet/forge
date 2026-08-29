@@ -24,7 +24,7 @@ type recordedCall struct {
 // newFakeRunner returns a Runner that records every call it receives and
 // returns the canned stdout/stderr/exitCode/err on each invocation.
 func newFakeRunner(calls *[]recordedCall, stdout, stderr string, exitCode int, err error) Runner {
-	return func(ctx context.Context, dir string, args []string, stdin string, env []string) (string, string, int, error) {
+	return func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
 		*calls = append(*calls, recordedCall{dir: dir, args: append([]string(nil), args...), stdin: stdin, env: append([]string(nil), env...)})
 		return stdout, stderr, exitCode, err
 	}
@@ -684,6 +684,7 @@ func TestDefaultRunner_BoundsUnboundedOutput(t *testing.T) {
 		[]string{"-c", "yes x | head -c 5000000"},
 		"",
 		nil,
+		func(string) {},
 	)
 	if err != nil {
 		t.Fatalf("runner returned error: %v", err)

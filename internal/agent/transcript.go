@@ -19,6 +19,12 @@ const (
 	// TranscriptEventToolResult is the bounded result of a prior
 	// TranscriptEventToolCall.
 	TranscriptEventToolResult TranscriptEventType = "TOOL_RESULT"
+	// TranscriptEventTruncation marks that earlier events were dropped to
+	// keep a run's transcript bounded (issue 36). It carries a human-readable
+	// count in Text and always sorts first (Seq 0) so a reader sees, up
+	// front, that what follows is the most-recent window rather than an
+	// unlabelled sliver.
+	TranscriptEventTruncation TranscriptEventType = "TRUNCATION"
 )
 
 // TranscriptEvent is one observed step of an Agent's work on an Issue: a
@@ -49,6 +55,12 @@ type TranscriptEvent struct {
 	// ToolName identifies the tool for TranscriptEventToolCall/
 	// TranscriptEventToolResult.
 	ToolName string
+
+	// ToolCallID pairs a TranscriptEventToolResult back to the
+	// TranscriptEventToolCall that produced it (issue 36): it holds the
+	// backend's tool-use id, set on both the call (its own id) and the
+	// matching result (the id it references). Empty for message events.
+	ToolCallID string
 
 	// ToolInput is the tool call's bounded input, populated only for
 	// TranscriptEventToolCall.

@@ -45,6 +45,75 @@ func (s *SQLiteStore) RecordAgentRun(ctx context.Context, run AgentRun) (int64, 
 	return id, nil
 }
 
+// AgentRunResultRunning is the result recorded for an AgentRun row between
+// StartAgentRun and FinalizeAgentRun (issue 36). A run left with this
+// result is one whose process died before it could be finalized — a
+// durable "interrupted" marker rather than a lost record.
+const AgentRunResultRunning = "RUNNING"
+
+// StartAgentRun inserts an in-progress AgentRun row up front and returns its
+// id, so a caller can persist transcript events against it incrementally as
+// the Agent streams (issue 36). The row records AgentRunResultRunning and a
+// placeholder finished_at (= StartedAt) until FinalizeAgentRun overwrites
+// them; no "agent.run" Event is appended here (see FinalizeAgentRun).
+func (s *SQLiteStore) StartAgentRun(ctx context.Context, run AgentRun) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_runs (execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ExecutionID, run.IssueID, run.Backend, run.StartedAt.UTC(), run.StartedAt.UTC(), AgentRunResultRunning, run.ContextBytes, nil, nil,
+	)
+	if err != nil {
+		switch {
+		case isForeignKeyConstraintErr(err):
+			return 0, fmt.Errorf("storage: start agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, ErrNotFound)
+		default:
+			return 0, fmt.Errorf("storage: start agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+		}
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("storage: start agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+	}
+	return id, nil
+}
+
+// FinalizeAgentRun updates the AgentRun row StartAgentRun created
+// (agentRunID) with its terminal result, finished_at, and token usage, and
+// appends the "agent.run" Event — the completion half of the lifecycle. It
+// is the analogue of RecordAgentRun's event append, deferred to run
+// completion so the audit log still marks a finished run exactly once.
+func (s *SQLiteStore) FinalizeAgentRun(ctx context.Context, agentRunID int64, run AgentRun) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET finished_at = ?, result = ?, input_tokens = ?, output_tokens = ?
+		WHERE id = ?`,
+		run.FinishedAt.UTC(), run.Result, run.InputTokens, run.OutputTokens, agentRunID,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, ErrNotFound)
+	}
+	if err := appendAgentRunEvent(ctx, tx, run); err != nil {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: finalize agent run %d: %w", agentRunID, err)
+	}
+	return nil
+}
+
 func appendAgentRunEvent(ctx context.Context, tx *sql.Tx, run AgentRun) error {
 	data, err := json.Marshal(struct {
 		Backend      string `json:"backend"`

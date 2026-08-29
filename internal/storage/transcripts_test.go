@@ -140,3 +140,146 @@ func TestTranscriptEventsByIssue_OrdersAcrossMultipleAttempts(t *testing.T) {
 		t.Fatalf("got[1] = %+v, want second attempt's event", got[1])
 	}
 }
+
+func TestReplaceTranscriptEvents_OverwritesExistingEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-replace", "issue-replace")
+
+	runID, err := store.RecordAgentRun(ctx, storage.AgentRun{
+		ExecutionID:  "exec-replace",
+		IssueID:      "issue-replace",
+		Backend:      "claude-code",
+		StartedAt:    time.Now(),
+		FinishedAt:   time.Now(),
+		Result:       "IMPLEMENTED",
+		ContextBytes: 10,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	initial := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "first attempt", OccurredAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+		{Seq: 1, Type: "TOOL_CALL", Role: "assistant", ToolName: "Bash", ToolInput: `{"cmd":"go build"}`, OccurredAt: time.Date(2026, 8, 28, 12, 0, 1, 0, time.UTC)},
+	}
+	if err := store.RecordTranscriptEvents(ctx, "exec-replace", "issue-replace", runID, initial); err != nil {
+		t.Fatalf("RecordTranscriptEvents (initial): %v", err)
+	}
+
+	got, err := store.TranscriptEventsByAgentRun(ctx, "exec-replace", "issue-replace", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun (after initial): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d events after initial, want 2", len(got))
+	}
+
+	replacement := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "replaced", OccurredAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+		{Seq: 1, Type: "TOOL_CALL", Role: "assistant", ToolName: "Edit", ToolInput: `{"file":"main.go"}`, OccurredAt: time.Date(2026, 8, 28, 12, 0, 1, 0, time.UTC)},
+		{Seq: 2, Type: "TOOL_RESULT", Role: "user", ToolName: "Edit", ToolOutput: "edited", OccurredAt: time.Date(2026, 8, 28, 12, 0, 2, 0, time.UTC)},
+	}
+	if err := store.ReplaceTranscriptEvents(ctx, "exec-replace", "issue-replace", runID, replacement); err != nil {
+		t.Fatalf("ReplaceTranscriptEvents: %v", err)
+	}
+
+	got, err = store.TranscriptEventsByAgentRun(ctx, "exec-replace", "issue-replace", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun (after replace): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d events after replace, want 3", len(got))
+	}
+	for i, want := range replacement {
+		if got[i].Seq != want.Seq || got[i].Type != want.Type || got[i].Text != want.Text {
+			t.Fatalf("event[%d] = %+v, want %+v", i, got[i], want)
+		}
+	}
+}
+
+func TestReplaceTranscriptEvents_EmptySliceClearsEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-replace-empty", "issue-replace-empty")
+
+	runID, err := store.RecordAgentRun(ctx, storage.AgentRun{
+		ExecutionID:  "exec-replace-empty",
+		IssueID:      "issue-replace-empty",
+		Backend:      "claude-code",
+		StartedAt:    time.Now(),
+		FinishedAt:   time.Now(),
+		Result:       "IMPLEMENTED",
+		ContextBytes: 10,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	initial := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Text: "should be cleared", OccurredAt: time.Now()},
+	}
+	if err := store.RecordTranscriptEvents(ctx, "exec-replace-empty", "issue-replace-empty", runID, initial); err != nil {
+		t.Fatalf("RecordTranscriptEvents (initial): %v", err)
+	}
+
+	if err := store.ReplaceTranscriptEvents(ctx, "exec-replace-empty", "issue-replace-empty", runID, []storage.TranscriptEvent{}); err != nil {
+		t.Fatalf("ReplaceTranscriptEvents (empty): %v", err)
+	}
+
+	got, err := store.TranscriptEventsByAgentRun(ctx, "exec-replace-empty", "issue-replace-empty", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun (after empty replace): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d events after empty replace, want 0", len(got))
+	}
+}
+
+func TestReplaceTranscriptEvents_WithStartAgentRun(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-replace-start", "issue-replace-start")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID:  "exec-replace-start",
+		IssueID:      "issue-replace-start",
+		Backend:      "claude-code",
+		StartedAt:    time.Now(),
+		ContextBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	events := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "incremental event 1", OccurredAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+	}
+	if err := store.ReplaceTranscriptEvents(ctx, "exec-replace-start", "issue-replace-start", runID, events); err != nil {
+		t.Fatalf("ReplaceTranscriptEvents (first flush): %v", err)
+	}
+
+	got, err := store.TranscriptEventsByAgentRun(ctx, "exec-replace-start", "issue-replace-start", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun (first flush): %v", err)
+	}
+	if len(got) != 1 || got[0].Text != "incremental event 1" {
+		t.Fatalf("got = %+v", got)
+	}
+
+	moreEvents := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "incremental event 1", OccurredAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+		{Seq: 1, Type: "TOOL_CALL", Role: "assistant", ToolName: "Bash", ToolInput: `{"cmd":"go build"}`, OccurredAt: time.Date(2026, 8, 28, 12, 0, 1, 0, time.UTC)},
+	}
+	if err := store.ReplaceTranscriptEvents(ctx, "exec-replace-start", "issue-replace-start", runID, moreEvents); err != nil {
+		t.Fatalf("ReplaceTranscriptEvents (second flush): %v", err)
+	}
+
+	got, err = store.TranscriptEventsByAgentRun(ctx, "exec-replace-start", "issue-replace-start", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun (second flush): %v", err)
+	}
+	if len(got) != 2 || got[1].ToolInput != `{"cmd":"go build"}` {
+		t.Fatalf("got = %+v", got)
+	}
+}
