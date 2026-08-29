@@ -35,6 +35,7 @@ Commands:
   plan <feature-id>        Run the planning compiler pipeline for a Feature
   approve <feature-id> spec   Approve a Specification at its current revision
   approve <feature-id> tickets  Approve a Ticket Plan at its current revision
+  materialize <feature-id> Turn an approved Ticket Plan into an executable Issue DAG
   help                     Show this help text
 
 Run 'forge <command> --help' for command-specific flags.
@@ -70,6 +71,8 @@ func run(args []string) int {
 		return runResume(rest)
 	case "plan":
 		return runPlan(rest)
+	case "materialize":
+		return runMaterialize(rest)
 	case "approve":
 		if len(rest) >= 2 && rest[1] == "tickets" {
 			return runApproveTickets(rest)

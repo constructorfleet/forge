@@ -116,6 +116,19 @@ func (f *FakeTracker) CreateIssue(_ context.Context, req IssueRequest) (CreatedI
 	return CreatedIssue{ID: id, URL: fmt.Sprintf("https://fake.tracker/issues/%s", id)}, nil
 }
 
+// UpdateIssue replaces id's stored body.
+func (f *FakeTracker) UpdateIssue(_ context.Context, id string, req UpdateIssueRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	issue, ok := f.issues[id]
+	if !ok {
+		return fmt.Errorf("tracker: fake: no issue %q", id)
+	}
+	issue.Body = req.Body
+	f.issues[id] = issue
+	return nil
+}
+
 // GetComments returns the comments posted on id, oldest first.
 func (f *FakeTracker) GetComments(_ context.Context, id string) ([]Comment, error) {
 	f.mu.Lock()

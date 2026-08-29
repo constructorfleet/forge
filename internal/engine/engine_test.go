@@ -18,6 +18,7 @@ import (
 	"github.com/Teagan42/forge/internal/gate/gatetest"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -516,6 +517,52 @@ func TestExecute_UnknownTrackerIssue_ReturnsError(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{})
 	if _, err := te.eng.Execute(context.Background(), "missing", te.base); err == nil {
 		t.Fatal("Execute: want error for unknown issue, got nil")
+	}
+}
+
+func TestExecute_MaterializingIssue_RejectedBeforeAnyStateChange(t *testing.T) {
+	body := tracker.RenderForgeProvenance(tracker.ForgeProvenance{
+		Status:  tracker.ProvenanceMaterializing,
+		Project: "my-feature",
+	})
+	te := newTestEngine(t, map[string]domain.Issue{
+		"42": {ID: "42", Body: body},
+	})
+
+	if _, err := te.eng.Execute(context.Background(), "42", te.base); err == nil {
+		t.Fatal("Execute: want error for a still-materializing issue, got nil")
+	}
+	if n := len(te.fake.Invocations()); n != 0 {
+		t.Fatalf("agent was invoked %d times, want 0 — materializing issues must never reach a Worker", n)
+	}
+}
+
+func TestExecute_MalformedProvenance_Rejected(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"42": {ID: "42", Body: "## Forge Provenance\nfreeform text\n"},
+	})
+
+	if _, err := te.eng.Execute(context.Background(), "42", te.base); err == nil {
+		t.Fatal("Execute: want error for a malformed provenance block, got nil")
+	}
+}
+
+func TestExecute_ReadyMaterializedIssue_Executes(t *testing.T) {
+	body := tracker.RenderForgeProvenance(tracker.ForgeProvenance{
+		Status:  tracker.ProvenanceReady,
+		Project: "my-feature",
+	})
+	te := newTestEngine(t, map[string]domain.Issue{
+		"42": {ID: "42", Body: body},
+	})
+	te.fake.ProgramResult("42", agent.AgentResult{Status: agent.StatusImplemented, Summary: "did the thing"})
+
+	result, err := te.eng.Execute(context.Background(), "42", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateReviewing {
+		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
 	}
 }
 

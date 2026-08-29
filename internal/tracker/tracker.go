@@ -60,6 +60,15 @@ type IssueRequest struct {
 	Body string
 }
 
+// UpdateIssueRequest carries the fields UpdateIssue overwrites on an
+// existing Issue. Body is always a full replacement, not a patch/merge —
+// callers (e.g. internal/materialize's Phase B/C) are responsible for
+// composing the complete new body before calling UpdateIssue.
+type UpdateIssueRequest struct {
+	// Body is the new Issue body/description, replacing the existing one.
+	Body string
+}
+
 // CreatedIssue is the identity CreateIssue returns for a newly created
 // Issue — enough to fetch it back via GetIssue and to link to it for a
 // human reader, without pulling in the full ghIssue/domain.Issue shape a
@@ -150,6 +159,13 @@ type Tracker interface {
 	// identity (CreatedIssue) to fetch it back via GetIssue and to
 	// validate it was created as expected.
 	CreateIssue(ctx context.Context, req IssueRequest) (CreatedIssue, error)
+
+	// UpdateIssue replaces id's body with req.Body. Used by Issue
+	// materialization (see internal/materialize) to rewrite temporary
+	// ticket keys to tracker IDs in the canonical `## Dependencies` block
+	// and to stamp/advance the `## Forge Provenance` block once the whole
+	// materialized graph validates.
+	UpdateIssue(ctx context.Context, id string, req UpdateIssueRequest) error
 
 	// Capabilities reports which optional behaviors this Tracker
 	// implementation supports (see the Capabilities doc comment).

@@ -373,6 +373,17 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: fetch issue %s: %w", issueID, err)
 	}
+	// Phase 1 handoff gate (see internal/materialize): an Issue produced by
+	// materialization stays non-executable until Phase C stamps its Forge
+	// Provenance block ready. Rejecting anything else here — a stale
+	// "materializing" stamp left by a partial materialization failure, or a
+	// malformed block — is what makes materialization's all-or-nothing
+	// guarantee real: no Issue born from a partial failure ever reaches a
+	// Worker. An Issue with no Forge Provenance block at all (hand-created,
+	// predating the planning compiler) is unaffected.
+	if err := tracker.ValidateExecutable(issue.ID, issue.Body); err != nil {
+		return ExecuteResult{}, fmt.Errorf("engine: issue %s: %w", issueID, err)
+	}
 	// Tracker adapters normalize only tracker-native fields (ID,
 	// Dependencies); Scope, State, and RetryBudget are execution-set
 	// concerns the engine owns (see internal/tracker/github's normalizeIssue
