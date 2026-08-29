@@ -51,6 +51,7 @@ func TestLoop_ResolvesReadyDecisionsInDependencyOrder(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"SQLite"}`+"\n```\n")
 	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"stdlib log"}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -72,8 +73,8 @@ func TestLoop_ResolvesReadyDecisionsInDependencyOrder(t *testing.T) {
 	}
 
 	invocations := backend.Invocations()
-	if len(invocations) != 2 {
-		t.Fatalf("Invocations() len = %d, want 2 (one per Decision, no shared conversation)", len(invocations))
+	if len(invocations) != 3 {
+		t.Fatalf("Invocations() len = %d, want 3 (one per Decision plus the readiness review, no shared conversation)", len(invocations))
 	}
 }
 
@@ -93,6 +94,7 @@ func TestLoop_SpawnsNewUnknownsAndRecomputesFrontier(t *testing.T) {
 		`]}`+
 		"\n```\n")
 	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"golang-migrate"}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -118,7 +120,7 @@ func TestLoop_SpawnsNewUnknownsAndRecomputesFrontier(t *testing.T) {
 	}
 }
 
-func TestLoop_NoFrontierIsANoop(t *testing.T) {
+func TestLoop_EmptyFrontierRunsReadinessReviewAndCompletesWhenReady(t *testing.T) {
 	goal := goalArtifact()
 	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
 
@@ -128,17 +130,72 @@ func TestLoop_NoFrontierIsANoop(t *testing.T) {
 
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramDefault("```json\n" + `{"outcome":"should not be invoked"}` + "\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
 		t.Fatalf("Loop: %v", err)
 	}
 
-	if len(backend.Invocations()) != 0 {
-		t.Error("Loop invoked the backend despite an already-resolved Decision and empty frontier")
+	invocations := backend.Invocations()
+	if len(invocations) != 1 || invocations[0].Key != "planning-readiness-review" {
+		t.Fatalf("Invocations() = %+v, want exactly one readiness review (no already-resolved Decision re-resolved)", invocations)
 	}
 	if len(persist.calls) != 0 {
-		t.Error("Loop persisted despite doing no work")
+		t.Error("Loop persisted despite a READY_FOR_SPEC verdict with no new decisions")
+	}
+}
+
+func TestLoop_NotReadyMaterializesDecisionsAndContinues(t *testing.T) {
+	goal := goalArtifact()
+	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
+
+	d := questionDecision("Where does state live?")
+	d.ApprovedRevision = d.Revision
+	decisions := map[string]*planning.Artifact{"001-storage": d}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("planning-readiness-review", "```json\n"+
+		`{"status":"NOT_READY","decisions":[`+
+		`{"temp_key":"a","title":"Pick auth","question":"Which auth strategy?","depends_on":[],"consequential":true}`+
+		`]}`+
+		"\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"OAuth"}`+"\n```\n")
+
+	persist := &fakePersist{}
+	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
+		t.Fatalf("Loop: %v", err)
+	}
+
+	if len(decisions) != 2 {
+		t.Fatalf("len(decisions) = %d, want 2 (storage + readiness-review-spawned auth)", len(decisions))
+	}
+	var spawnedID string
+	for id := range decisions {
+		if id != "001-storage" {
+			spawnedID = id
+		}
+	}
+	if spawnedID == "" || !planning.Ready(decisions[spawnedID]) {
+		t.Fatalf("readiness-review-spawned decision %q was not resolved", spawnedID)
+	}
+}
+
+func TestLoop_NotReadyWithNoDecisionsIsAnError(t *testing.T) {
+	goal := goalArtifact()
+	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
+
+	d := questionDecision("Where does state live?")
+	d.ApprovedRevision = d.Revision
+	decisions := map[string]*planning.Artifact{"001-storage": d}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramDefault("```json\n" + `{"status":"NOT_READY","decisions":[]}` + "\n```\n")
+
+	persist := &fakePersist{}
+	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err == nil {
+		t.Fatal("Loop: want error for NOT_READY with no proposed decisions (would loop forever), got nil")
 	}
 }
 
@@ -155,15 +212,17 @@ func TestLoop_ResumesFromPartiallyResolvedState(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"outcome":"stdlib log"}` + "\n```\n")
+	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"stdlib log"}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
 		t.Fatalf("Loop: %v", err)
 	}
 
-	if len(backend.Invocations()) != 1 {
-		t.Fatalf("Invocations() len = %d, want 1 (001-storage already resolved, must not be re-resolved)", len(backend.Invocations()))
+	invocations := backend.Invocations()
+	if len(invocations) != 2 {
+		t.Fatalf("Invocations() len = %d, want 2 (002-logger resolved plus the readiness review; 001-storage already resolved, must not be re-resolved)", len(invocations))
 	}
 	if !planning.Ready(decisions["002-logger"]) {
 		t.Error("002-logger was not resolved on resume")
@@ -183,6 +242,7 @@ func TestLoop_NeedsHumanPausesOnlyAffectedPathAndContinuesOthers(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramResult("decision-resolution", "```json\n"+`{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`+"\n```\n")
 	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"Redis"}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
 
 	var handled []string
 	onNeedsHuman := func(ctx context.Context, decisionID string, decision *planning.Artifact, detail decisionresolution.NeedsHumanDetail) (*planning.Artifact, error) {

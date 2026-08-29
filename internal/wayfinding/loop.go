@@ -17,6 +17,7 @@ import (
 	"github.com/Teagan42/forge/internal/decisionresolution"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
+	"github.com/Teagan42/forge/internal/planningreadiness"
 )
 
 // Persist is called by Loop every time it changes a Decision artifact's
@@ -70,7 +71,14 @@ func Loop(
 	for {
 		frontier := decisiongraph.Frontier(decisions)
 		if len(frontier) == 0 {
-			return nil
+			ready, err := runReadinessReview(ctx, backend, repo, goalArtifact, goalRef, decisions, persist)
+			if err != nil {
+				return err
+			}
+			if ready {
+				return nil
+			}
+			continue
 		}
 		targetID := frontier[0]
 
@@ -149,4 +157,57 @@ func existingIDs(decisions map[string]*planning.Artifact) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// runReadinessReview runs PlanningReadinessReview once decisiongraph.Frontier
+// empties (ticket 15): a fresh, independent check of whether the Feature's
+// Decisions are actually sufficient to write a spec from, rather than
+// assuming an empty frontier means wayfinding is done. On
+// StatusReadyForSpec it reports ready = true and Loop returns. Otherwise
+// the review's proposed Decisions are materialized and persisted exactly
+// like a DecisionResolution's new_unknowns, putting them back on the
+// frontier, and ready = false tells Loop's caller to keep going.
+//
+// A NOT_READY verdict that proposes no Decisions at all would otherwise
+// leave the frontier empty forever, causing every subsequent iteration to
+// re-run the same review against the same unchanged Decision set -- an
+// infinite loop. runReadinessReview treats that as an error instead: the
+// reviewer must either say the plan is ready or say what's missing.
+func runReadinessReview(
+	ctx context.Context,
+	backend planningagent.Backend,
+	repo agent.RepositoryContext,
+	goalArtifact *planning.Artifact,
+	goalRef decisiongraph.GoalRef,
+	decisions map[string]*planning.Artifact,
+	persist Persist,
+) (ready bool, err error) {
+	pc, err := compilePlanningContext(repo, goalArtifact, decisions)
+	if err != nil {
+		return false, fmt.Errorf("wayfinding: compile planning context for readiness review: %w", err)
+	}
+
+	res, err := planningreadiness.Review(ctx, backend, pc)
+	if err != nil {
+		return false, fmt.Errorf("wayfinding: readiness review: %w", err)
+	}
+
+	if res.Status == planningreadiness.StatusReadyForSpec {
+		return true, nil
+	}
+
+	materialized, err := decisiongraph.Materialize(res.Decisions, goalRef, existingIDs(decisions))
+	if err != nil {
+		return false, fmt.Errorf("wayfinding: materialize readiness review decisions: %w", err)
+	}
+	if len(materialized) == 0 {
+		return false, fmt.Errorf("wayfinding: readiness review reported %s but proposed no decisions to resolve", planningreadiness.StatusNotReady)
+	}
+	for _, m := range materialized {
+		decisions[m.ID] = m.Artifact
+		if err := persist(m.ID, m.Artifact); err != nil {
+			return false, fmt.Errorf("wayfinding: persist %s: %w", m.ID, err)
+		}
+	}
+	return false, nil
 }
