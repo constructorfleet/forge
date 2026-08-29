@@ -62,6 +62,49 @@ type WorkspaceCreator interface {
 	Validate(ctx context.Context, executionID, issueID string) (domain.Workspace, error)
 }
 
+// WorkspaceRebaser is an optional capability of a WorkspaceCreator: moving
+// an existing Workspace's branch onto a new base in place, instead of the
+// destroy-and-recreate Cleanup+Create sequence WorkspaceCreator alone would
+// require. RetryIssue type-asserts for it when refreshing a retried Issue's
+// Worker base (ticket 29) onto a Workspace that already exists.
+//
+// A conflict-free rebase returns (nil, nil). A rebase that hits a conflict
+// is aborted (the Workspace is left exactly as it was) and its conflicting
+// paths are returned with a nil error — a conflict is an expected,
+// caller-actionable outcome, not an infrastructure failure.
+type WorkspaceRebaser interface {
+	Rebase(ctx context.Context, executionID, issueID, newBase string) (conflictPaths []string, err error)
+}
+
+// TargetTipResolver resolves the current tip of the target branch Workers
+// open pull requests against. RetryIssue uses it to refresh a retried
+// Issue's Worker base forward to that tip (ticket 29) instead of reusing
+// the base captured at the Issue's original READY transition (ADR 0006).
+// Optional: nil leaves RetryIssue's pre-ticket-29 behavior (reuse the
+// recorded base unchanged) in place, so existing callers of New keep
+// compiling and behaving unchanged.
+type TargetTipResolver interface {
+	CurrentTip(ctx context.Context) (string, error)
+}
+
+// TargetTipResolverFunc adapts a plain function to a TargetTipResolver.
+type TargetTipResolverFunc func(ctx context.Context) (string, error)
+
+func (f TargetTipResolverFunc) CurrentTip(ctx context.Context) (string, error) {
+	return f(ctx)
+}
+
+// AncestorChecker reports whether commit is an ancestor of (reachable
+// from) branch's current tip. RetryIssue uses it to refuse a base refresh
+// that would move to a tip not descended from the previously captured
+// base — preserving the "never branch from a base that predates a
+// dependency's merge" invariant (ADR 0005/0006) when TargetTip is wired.
+// Optional like TargetTip: nil skips the check, trusting TargetTip to
+// always resolve forward.
+type AncestorChecker interface {
+	IsAncestor(ctx context.Context, commit, branch string) (bool, error)
+}
+
 // CIWaiter resumes CI supervision for an Issue already in CI_PENDING.
 type CIWaiter interface {
 	Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error)
@@ -124,6 +167,17 @@ type Engine struct {
 
 	// CIWaiter resumes CI monitoring for issues already in CI_PENDING.
 	CIWaiter CIWaiter
+
+	// TargetTip resolves the target branch's current tip so RetryIssue can
+	// refresh a retried Issue's Worker base forward to it (ticket 29).
+	// Optional: nil preserves pre-ticket-29 behavior of reusing the base
+	// recorded at the Issue's original READY transition.
+	TargetTip TargetTipResolver
+
+	// Ancestry checks that a refreshed base still descends from the
+	// previously captured one before RetryIssue applies it (ticket 29).
+	// Optional: see TargetTip.
+	Ancestry AncestorChecker
 
 	// StatusTracker is the subset of tracker.Tracker the status-reflection
 	// signal (ticket 24, internal/statusreflect) uses to add/remove labels

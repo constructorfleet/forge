@@ -65,6 +65,10 @@ func (s *spyWorkspaces) Validate(ctx context.Context, executionID, issueID strin
 	return s.mgr.Validate(ctx, executionID, issueID)
 }
 
+func (s *spyWorkspaces) Rebase(ctx context.Context, executionID, issueID, newBase string) ([]string, error) {
+	return s.mgr.Rebase(ctx, executionID, issueID, newBase)
+}
+
 func (s *spyWorkspaces) CleanupCalled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,6 +76,7 @@ func (s *spyWorkspaces) CleanupCalled() bool {
 }
 
 var _ engine.WorkspaceCreator = (*spyWorkspaces)(nil)
+var _ engine.WorkspaceRebaser = (*spyWorkspaces)(nil)
 
 func openTestStore(t *testing.T) *storage.SQLiteStore {
 	t.Helper()
