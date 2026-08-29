@@ -223,6 +223,29 @@ func (r *scriptedCIRepairer) CallCount() int {
 	return len(r.calls)
 }
 
+// waitForCallCount polls get, which reports some Executor's current call
+// count for one Issue, until it reaches want or the timeout elapses.
+// Freeing a Worker slot (sem release + signal) and the async CI-watch
+// goroutine's first Wait call are two independently scheduled goroutines
+// with no ordering guarantee between them, so a dependent's dispatch can
+// briefly lag behind the CI watcher's started signal a test has already
+// observed; polling avoids flaking on that harmless scheduling race while
+// still failing loudly if the call never happens.
+func waitForCallCount(t *testing.T, get func() int, want int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if got := get(); got == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("CallCount = %d, want %d within timeout", get(), want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func issueSet(ids ...string) map[string]domain.Issue {
 	issues := make(map[string]domain.Issue, len(ids))
 	for _, id := range ids {
@@ -377,9 +400,7 @@ func TestRun_CIPendingIssueReleasesWorkerSlotWhileCIWatches(t *testing.T) {
 		t.Fatal("timed out waiting for CI watcher to start")
 	}
 
-	if got := exec.CallCount("b"); got != 1 {
-		t.Fatalf("CallCount(b) = %d, want 1 while a is still under CI watch", got)
-	}
+	waitForCallCount(t, func() int { return exec.CallCount("b") }, 1)
 
 	watcher.release <- struct{}{}
 
@@ -500,9 +521,7 @@ func TestRun_CIFailedIssueRepairsAndReturnsToCIWatch(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for first CI watcher start")
 	}
-	if got := exec.CallCount("b"); got != 1 {
-		t.Fatalf("CallCount(b) = %d, want 1 while a is only under CI watch", got)
-	}
+	waitForCallCount(t, func() int { return exec.CallCount("b") }, 1)
 
 	watcher.release <- struct{}{}
 

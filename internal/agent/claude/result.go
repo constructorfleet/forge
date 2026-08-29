@@ -16,6 +16,19 @@ import (
 // the JSON.
 var fencedJSONBlock = regexp.MustCompile("(?s)```(?:json)?[ \t]*\r?\n(.*?)\r?\n(?m:^```)")
 
+// trailingComma matches a comma followed only by whitespace before a
+// closing `}` or `]`, e.g. `"summary": "…",}`. LLMs occasionally emit
+// this cosmetic malformation; stripping it lets an otherwise well-formed
+// result envelope parse instead of being discarded as FAILED.
+var trailingComma = regexp.MustCompile(`,(\s*[}\]])`)
+
+// repairTrailingCommas removes trailing commas before closing braces or
+// brackets, at any nesting depth, so a single small malformation doesn't
+// sink an otherwise-valid JSON payload.
+func repairTrailingCommas(raw string) string {
+	return trailingComma.ReplaceAllString(raw, "$1")
+}
+
 // structuredResult is the JSON shape Claude Code is instructed to emit as
 // the last fenced code block in its output (see resultContract).
 type structuredResult struct {
@@ -43,8 +56,16 @@ type usageFields struct {
 func parseStructuredResult(stdout string) (structuredResult, bool) {
 	matches := fencedJSONBlock.FindAllStringSubmatch(stdout, -1)
 	for i := len(matches) - 1; i >= 0; i-- {
-		var res structuredResult
-		if err := json.Unmarshal([]byte(matches[i][1]), &res); err != nil {
+		block := matches[i][1]
+		res, ok := unmarshalStructuredResult(block)
+		if !ok {
+			// Retry with known cosmetic malformations repaired (e.g. a
+			// trailing comma before the closing brace). This is a bounded
+			// fallback: if the repaired text still doesn't parse as a
+			// recognized result, the block is skipped just like before.
+			res, ok = unmarshalStructuredResult(repairTrailingCommas(block))
+		}
+		if !ok {
 			continue
 		}
 		switch agent.AgentStatus(res.Status) {
@@ -53,4 +74,12 @@ func parseStructuredResult(stdout string) (structuredResult, bool) {
 		}
 	}
 	return structuredResult{}, false
+}
+
+func unmarshalStructuredResult(raw string) (structuredResult, bool) {
+	var res structuredResult
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		return structuredResult{}, false
+	}
+	return res, true
 }

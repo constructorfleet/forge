@@ -452,6 +452,129 @@ func TestExecute_ResultBlockSummaryContainingTripleBacktickIsNotTruncated(t *tes
 	}
 }
 
+func TestExecute_TrailingCommaBeforeClosingBraceIsRepaired(t *testing.T) {
+	// Regression test for the exact envelope from Phase-2 dogfood issue #5
+	// (ticket 12): a fully implemented, tests-passing outcome was discarded
+	// as FAILED because the JSON ended with a trailing comma before `}`.
+	var calls []recordedCall
+	stdout := "```json\n" +
+		`{"status": "IMPLEMENTED", "summary": "Structured-invocation core landed.",}` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED (trailing comma should be repaired)", result.Status)
+	}
+	if result.Summary != "Structured-invocation core landed." {
+		t.Fatalf("Summary = %q, unexpected", result.Summary)
+	}
+}
+
+func TestExecute_TrailingCommaInNestedNeedsInfoIsRepaired(t *testing.T) {
+	// Trailing commas can appear at any nesting depth, not just the
+	// outermost object.
+	var calls []recordedCall
+	stdout := "```json\n" +
+		`{"status": "NEEDS_INFO", "summary": "Blocked.", "needs_info": {"question": "Which backend?", "context": "Two candidates.",},}` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusNeedsInfo {
+		t.Fatalf("Status = %q, want NEEDS_INFO", result.Status)
+	}
+	if result.NeedsInfo == nil || result.NeedsInfo.Question != "Which backend?" {
+		t.Fatalf("NeedsInfo = %+v, want question preserved", result.NeedsInfo)
+	}
+}
+
+func TestExecute_TrailingCommaWithProseWrappingIsRepaired(t *testing.T) {
+	// The malformed block may be surrounded by free-form prose; the repair
+	// must still apply to the fenced block content, not the whole output.
+	var calls []recordedCall
+	stdout := "I finished the implementation. Here is the result:\n\n```json\n" +
+		`{"status": "IMPLEMENTED", "summary": "Done.",}` +
+		"\n```\n\nLet me know if you need anything else.\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", result.Status)
+	}
+}
+
+func TestExecute_TrailingCommaInLastOfMultipleBlocksIsRepaired(t *testing.T) {
+	// An earlier, well-formed example block must not shadow a later,
+	// malformed-but-repairable real result block.
+	var calls []recordedCall
+	stdout := "Here's an example of the format:\n\n```json\n" +
+		`{"status":"IMPLEMENTED","summary":"example, not the real result"}` +
+		"\n```\n\nNow the actual result:\n\n```json\n" +
+		`{"status": "FAILED", "summary": "the real result",}` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusFailed {
+		t.Fatalf("Status = %q, want FAILED (from the last, repaired block)", result.Status)
+	}
+	if result.Summary != "the real result" {
+		t.Fatalf("Summary = %q, want the last block's summary", result.Summary)
+	}
+}
+
+func TestExecute_TokenUsageSurvivesTrailingCommaRepair(t *testing.T) {
+	// The repair must apply uniformly, including to usage decoding.
+	var calls []recordedCall
+	stdout := "```json\n" +
+		`{"status": "IMPLEMENTED", "summary": "Done.", "usage": {"input_tokens": 100, "output_tokens": 50,},}` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Usage == nil || result.Usage.InputTokens != 100 || result.Usage.OutputTokens != 50 {
+		t.Fatalf("Usage = %+v, want tokens preserved through repair", result.Usage)
+	}
+}
+
+func TestExecute_UnrecoverableMalformedBlockStillFails(t *testing.T) {
+	// Genuinely truncated/ambiguous output must still fail loudly rather
+	// than being silently accepted; the repair is bounded to known
+	// cosmetic issues, not a general JSON-repair pass.
+	var calls []recordedCall
+	stdout := "```json\n" +
+		`{"status": "IMPLEMENTED", "summary": "Truncated mid-str` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusFailed {
+		t.Fatalf("Status = %q, want FAILED for unrecoverable malformed output", result.Status)
+	}
+	if !strings.Contains(result.Summary, "no structured result found") {
+		t.Fatalf("Summary = %q, want diagnostic about missing structured result", result.Summary)
+	}
+}
+
 func TestTruncate_MarksTruncatedOutput(t *testing.T) {
 	s := strings.Repeat("x", 100)
 	got := truncate(s, 10)
