@@ -96,3 +96,39 @@ func TestResolve_RejectsInvalidNewUnknown(t *testing.T) {
 		t.Fatal("Resolve: want error for blank new_unknown temp_key, got nil")
 	}
 }
+
+func TestResolve_DecodesNeedsHuman(t *testing.T) {
+	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("Which vendor do we pick?")})
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramDefault("```json\n" +
+		`{"needs_human":{"question":"Which vendor do we pick?","context":"Both meet requirements."}}` +
+		"\n```\n")
+
+	res, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.NeedsHuman == nil {
+		t.Fatal("NeedsHuman = nil, want populated")
+	}
+	if res.NeedsHuman.Question != "Which vendor do we pick?" {
+		t.Errorf("NeedsHuman.Question = %q", res.NeedsHuman.Question)
+	}
+	if res.NeedsHuman.Context != "Both meet requirements." {
+		t.Errorf("NeedsHuman.Context = %q", res.NeedsHuman.Context)
+	}
+	if res.Outcome != "" {
+		t.Errorf("Outcome = %q, want blank alongside NeedsHuman", res.Outcome)
+	}
+}
+
+func TestResolve_RejectsBlankNeedsHumanQuestion(t *testing.T) {
+	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("?")})
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramDefault("```json\n" + `{"needs_human":{"question":""}}` + "\n```\n")
+
+	if _, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"}); err == nil {
+		t.Fatal("Resolve: want error for blank needs_human question, got nil")
+	}
+}

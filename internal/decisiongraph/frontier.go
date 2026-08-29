@@ -7,10 +7,11 @@ import (
 )
 
 // Frontier returns the IDs of Decisions in decisions that are actionable
-// now: not yet Ready (planning.Ready -- approved) themselves, but every
-// Decision they depend on (their decision-kind DerivedFrom entries) is
-// Ready. A Decision with no decision-kind dependencies is on the frontier
-// as soon as it exists and isn't already Ready.
+// now: not yet Ready (planning.Ready -- approved) themselves, not paused on
+// a human (State == StateNeedsHuman, see Pause), but every Decision they
+// depend on (their decision-kind DerivedFrom entries) is Ready. A Decision
+// with no decision-kind dependencies is on the frontier as soon as it
+// exists and isn't already Ready or paused.
 //
 // Frontier is computed purely from Decision states and dependencies -- the
 // same durable-content-only discipline internal/planning's predicates use
@@ -19,7 +20,7 @@ import (
 func Frontier(decisions map[string]*planning.Artifact) []string {
 	var frontier []string
 	for id, d := range decisions {
-		if planning.Ready(d) {
+		if planning.Ready(d) || d.State == StateNeedsHuman {
 			continue
 		}
 
