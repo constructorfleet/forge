@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/constructorfleet/forge/compare/forge-v0.5.0...forge-v0.6.0) (2026-08-29)
+
+
+### Features
+
+* commit/PR seam + tracker GraphQL and dependency-parser fixes ([#112](https://github.com/constructorfleet/forge/issues/112)) ([cfb1ada](https://github.com/constructorfleet/forge/commit/cfb1adabbb4fa91cd38dc09586001a55b89e45ec))
+
+
+### Bug Fixes
+
+* The execute subcommand is not using TDD ([#111](https://github.com/constructorfleet/forge/issues/111)) ([eb2badf](https://github.com/constructorfleet/forge/commit/eb2badf6c5b34ab4492f6783253b765f677bb004)), closes [#105](https://github.com/constructorfleet/forge/issues/105)
+
 ## [0.5.0](https://github.com/constructorfleet/forge/compare/forge-v0.4.1...forge-v0.5.0) (2026-08-29)
 
 
