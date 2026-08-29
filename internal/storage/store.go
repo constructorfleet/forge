@@ -92,6 +92,25 @@ type AgentRun struct {
 	OutputTokens *int
 }
 
+// TranscriptEvent is one persisted step of an Agent's work on an Issue
+// during one AgentRun (ticket 28), mirroring internal/agent.TranscriptEvent
+// so storage has no dependency on internal/agent — callers (the engine)
+// translate between the two, the same convention GateRun/ReviewRun
+// document.
+type TranscriptEvent struct {
+	ExecutionID string
+	IssueID     string
+	AgentRunID  int64
+	Seq         int
+	Type        string
+	Role        string
+	Text        string
+	ToolName    string
+	ToolInput   string
+	ToolOutput  string
+	OccurredAt  time.Time
+}
+
 // ReviewFinding is one structured Finding raised during a ReviewRun,
 // mirroring review.Finding but living in this package so storage has no
 // dependency on internal/review — callers (the engine) translate between
@@ -255,8 +274,10 @@ type Store interface {
 	RecordGateRun(ctx context.Context, run GateRun) error
 
 	// RecordAgentRun persists one implementation Agent invocation and
-	// appends a corresponding "agent.run" Event.
-	RecordAgentRun(ctx context.Context, run AgentRun) error
+	// appends a corresponding "agent.run" Event, returning the
+	// storage-assigned AgentRun id so callers can key TranscriptEvents to
+	// this specific attempt via RecordTranscriptEvents.
+	RecordAgentRun(ctx context.Context, run AgentRun) (int64, error)
 
 	// AgentRunsByExecution returns every AgentRun recorded for one
 	// Execution, ordered by insertion.
@@ -265,6 +286,23 @@ type Store interface {
 	// AgentRunsByIssue returns every AgentRun recorded for one Issue within
 	// an Execution, ordered by insertion.
 	AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]AgentRun, error)
+
+	// RecordTranscriptEvents persists every TranscriptEvent captured during
+	// one AgentRun (ticket 28's transcript logging), keyed by the AgentRun
+	// id RecordAgentRun returned. Capture is best-effort by contract at the
+	// call site (internal/engine): a failure here must never fail the
+	// Issue's run, only forfeit that attempt's transcript durability.
+	RecordTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error
+
+	// TranscriptEventsByAgentRun returns every TranscriptEvent recorded for
+	// one AgentRun (attempt), ordered by Seq.
+	TranscriptEventsByAgentRun(ctx context.Context, executionID, issueID string, agentRunID int64) ([]TranscriptEvent, error)
+
+	// TranscriptEventsByIssue returns every TranscriptEvent recorded for an
+	// Issue across every AgentRun (attempt), ordered chronologically — the
+	// read surface ticket 28 requires (e.g. `forge status <exec> <issue>
+	// --transcript`).
+	TranscriptEventsByIssue(ctx context.Context, executionID, issueID string) ([]TranscriptEvent, error)
 
 	// GateRunsByIssue returns every GateRun recorded for one Issue within an
 	// Execution, ordered by insertion (i.e. execution order).

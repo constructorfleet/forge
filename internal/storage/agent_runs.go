@@ -9,15 +9,17 @@ import (
 )
 
 // RecordAgentRun persists one implementation Agent invocation and appends
-// an "agent.run" Event in the same transaction.
-func (s *SQLiteStore) RecordAgentRun(ctx context.Context, run AgentRun) error {
+// an "agent.run" Event in the same transaction, returning the
+// storage-assigned agent_runs id so callers (internal/engine) can key
+// TranscriptEvents to this specific attempt via RecordTranscriptEvents.
+func (s *SQLiteStore) RecordAgentRun(ctx context.Context, run AgentRun) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+		return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_runs (execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ExecutionID, run.IssueID, run.Backend, run.StartedAt.UTC(), run.FinishedAt.UTC(), run.Result, run.ContextBytes, run.InputTokens, run.OutputTokens,
@@ -25,18 +27,22 @@ func (s *SQLiteStore) RecordAgentRun(ctx context.Context, run AgentRun) error {
 	if err != nil {
 		switch {
 		case isForeignKeyConstraintErr(err):
-			return fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, ErrNotFound)
+			return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, ErrNotFound)
 		default:
-			return fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+			return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
 		}
 	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+	}
 	if err := appendAgentRunEvent(ctx, tx, run); err != nil {
-		return fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+		return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
+		return 0, fmt.Errorf("storage: record agent run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
 	}
-	return nil
+	return id, nil
 }
 
 func appendAgentRunEvent(ctx context.Context, tx *sql.Tx, run AgentRun) error {

@@ -170,3 +170,71 @@ func TestRunStatus_ReflectsExecuteOutput(t *testing.T) {
 		t.Fatalf("runStatus = %d, want 0", code)
 	}
 }
+
+func TestRunStatus_TranscriptRequiresBothIDs(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	if code := runStatus([]string{"--db", dbPath, "--transcript", "exec-1"}); code != 2 {
+		t.Errorf("runStatus(--transcript, one arg) = %d, want 2 (usage error)", code)
+	}
+	if code := runStatus([]string{"--db", dbPath, "--transcript"}); code != 2 {
+		t.Errorf("runStatus(--transcript, no args) = %d, want 2 (usage error)", code)
+	}
+}
+
+func TestPrintTranscript_RendersEachEventKind(t *testing.T) {
+	events := []storage.TranscriptEvent{
+		{AgentRunID: 1, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "Looking at the issue.", OccurredAt: time.Unix(0, 0).UTC()},
+		{AgentRunID: 1, Seq: 1, Type: "TOOL_CALL", ToolName: "Bash", ToolInput: `{"command":"go build ./..."}`, OccurredAt: time.Unix(0, 0).UTC()},
+		{AgentRunID: 1, Seq: 2, Type: "TOOL_RESULT", ToolName: "tool-1", ToolOutput: "build ok", OccurredAt: time.Unix(0, 0).UTC()},
+	}
+
+	var buf bytes.Buffer
+	printTranscript(&buf, events)
+	out := buf.String()
+
+	for _, want := range []string{
+		"transcript (3 events)",
+		"Looking at the issue.",
+		"tool_call", "Bash", `{"command":"go build ./..."}`,
+		"tool_result", "tool-1", "build ok",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printTranscript output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestRunStatus_TranscriptReflectsExecuteOutput drives Engine directly, as
+// TestRunStatus_ReflectsExecuteOutput does, then exercises the `--transcript`
+// read surface (ticket 28) end-to-end against the resulting database.
+func TestRunStatus_TranscriptReflectsExecuteOutput(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+
+	root, base := newTempRepo(t)
+	wsMgr := mustWorkspaceManager(t, root)
+	trk := &stubTrackerForCLI{issue: domain.Issue{ID: "5"}}
+	fake := newProgrammedFakeAgent(t, "5")
+
+	eng := engine.New(store, trk, wsMgr, fake, mustConfig(), root)
+	result, err := eng.Execute(ctx, "5", base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// FakeAgent (via newProgrammedFakeAgent) never emits transcript events,
+	// so the read surface should report zero events rather than error —
+	// exercising the CLI plumbing, not capture itself (covered in
+	// internal/engine and internal/agent/claude).
+	code := runStatus([]string{"--db", dbPath, "--transcript", result.ExecutionID, "5"})
+	if code != 0 {
+		t.Fatalf("runStatus(--transcript) = %d, want 0", code)
+	}
+}
