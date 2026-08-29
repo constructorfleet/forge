@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/constructorfleet/forge/compare/forge-v0.9.0...forge-v0.9.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* gopls driver: subprocess lifecycle, initialize handshake, readiness & restart ([#132](https://github.com/constructorfleet/forge/issues/132)) ([8967c54](https://github.com/constructorfleet/forge/commit/8967c5463f5f7c05ccf710f0f6f2dfdcdab2b81f)), closes [#123](https://github.com/constructorfleet/forge/issues/123)
+
 ## [0.9.0](https://github.com/constructorfleet/forge/compare/forge-v0.8.0...forge-v0.9.0) (2026-08-29)
 
 
