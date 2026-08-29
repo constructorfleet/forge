@@ -143,9 +143,9 @@ func ResumeDecision(ctx context.Context, store ResumeDecisionStore, trk ResumeDe
 // checkpoint's question.
 func loadDecisionFromCheckpoint(ctx context.Context, store ResumeDecisionStore, executionID, decisionID string, checkpoint storage.DecisionCheckpoint) (*planning.Artifact, error) {
 	d := &planning.Artifact{
-		Kind:        planning.KindDecision,
-		State:       decisiongraph.StateNeedsHuman,
-		Sections:    []planning.Section{{Heading: "Question", Body: checkpoint.Question}},
+		Kind:     planning.KindDecision,
+		State:    decisiongraph.StateNeedsHuman,
+		Sections: []planning.Section{{Heading: "Question", Body: checkpoint.Question}},
 	}
 	d.Revision = checkpoint.DecisionRevision
 	return d, nil

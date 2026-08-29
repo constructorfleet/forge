@@ -137,7 +137,7 @@ func ValidateTicketPlanDeterministic(
 	}
 
 	// Provenance: validate derived_from
-	if artifact.DerivedFrom == nil || len(artifact.DerivedFrom) == 0 {
+	if len(artifact.DerivedFrom) == 0 {
 		return errors.New("ticket-plan: missing derived_from provenance")
 	}
 

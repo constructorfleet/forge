@@ -1,0 +1,10 @@
+.git
+.github
+.forge
+.scratch
+docs
+*.md
+*.db
+*.sqlite
+bin/
+dist/

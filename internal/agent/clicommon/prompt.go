@@ -1,4 +1,4 @@
-package claude
+package clicommon
 
 import (
 	"fmt"
@@ -7,33 +7,42 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 )
 
-// resultContract is the instruction appended to every prompt telling Claude
-// Code how to signal its outcome back to Forge. Since issue 20/ticket 32,
-// the envelope's shape (status/summary/needs_info/usage) is enforced by the
-// CLI itself via `--json-schema` (see resultJSONSchema in result.go) rather
-// than by prose here, so this is reduced to a pointer covering only what
-// the schema can't express: which status means what, and when to populate
-// needs_info.
-const resultContract = "## Result\n\n" +
-	"Report your outcome as \"status\": \"IMPLEMENTED\" once you have " +
-	"completed the work, \"NEEDS_INFO\" if you need information from a " +
-	"human before you can proceed, or \"FAILED\" if you cannot complete " +
-	"the work. Populate \"needs_info\" (with \"question\" and \"context\") " +
-	"only when status is \"NEEDS_INFO\"."
+// ResultContract is the instruction appended to every prompt telling a
+// backend how to signal its outcome back to Forge: a single fenced JSON
+// block, as the final thing it emits, matching StructuredResult's shape.
+const ResultContract = "## Required output format\n\n" +
+	"When you are done — whether you completed the work, need information " +
+	"from a human, or cannot proceed — emit exactly one fenced JSON code " +
+	"block as the LAST thing in your response, matching this shape:\n\n" +
+	"```json\n" +
+	"{\n" +
+	"  \"status\": \"IMPLEMENTED\" | \"NEEDS_INFO\" | \"FAILED\",\n" +
+	"  \"summary\": \"one paragraph describing what happened\",\n" +
+	"  \"needs_info\": {\n" +
+	"    \"question\": \"what you need answered (only if status is NEEDS_INFO)\",\n" +
+	"    \"context\": \"why the question arose (only if status is NEEDS_INFO)\"\n" +
+	"  }\n" +
+	"}\n" +
+	"```\n\n" +
+	"Omit \"needs_info\" unless status is \"NEEDS_INFO\". Do not emit more " +
+	"than one such block."
 
-// rules is the fixed set of workflow-mechanics boundaries every invocation
+// Rules is the fixed set of workflow-mechanics boundaries every invocation
 // carries: the Agent does the engineering, Forge owns everything else (see
 // CONTEXT.md "Agent").
-const rules = "## Rules\n\n" +
+const Rules = "## Rules\n\n" +
 	"- Implement the Issue's requirements completely and correctly in this Workspace.\n" +
 	"- Do NOT create pull requests.\n" +
 	"- Do NOT manage labels or other issue-tracker metadata.\n" +
 	"- Do NOT decide workflow state; Forge's orchestrator owns all workflow mechanics.\n"
 
-// buildPrompt renders req into the prompt piped to Claude Code on stdin. It
-// draws on whatever the normalized Issue and Repository/Policy context
-// currently carry (see internal/agent.AgentRequest).
-func buildPrompt(req agent.AgentRequest) string {
+// BuildPrompt renders req into the prompt handed to a backend, identified
+// by backendName only for readability in headers/comments — the content
+// itself is backend-independent. It draws on whatever the normalized Issue
+// and Repository/Policy context currently carry (see
+// internal/agent.AgentRequest), and is shared by every CLI/HTTP Agent
+// Adapter so the result contract and rules stay identical across backends.
+func BuildPrompt(backendName string, req agent.AgentRequest) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Forge Task: Issue %s\n\n", req.Issue.ID)
@@ -95,7 +104,7 @@ func buildPrompt(req agent.AgentRequest) string {
 		b.WriteString("\n\n")
 	}
 
-	b.WriteString(rules)
+	b.WriteString(Rules)
 	b.WriteString("\n")
 
 	if len(req.Feedback) > 0 {
@@ -107,14 +116,14 @@ func buildPrompt(req agent.AgentRequest) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(resultContract)
+	b.WriteString(ResultContract)
 	b.WriteString("\n")
 
 	return b.String()
 }
 
 // hasRepositoryContext reports whether repo carries anything worth
-// rendering, so buildPrompt can omit an empty "## Repository Context"
+// rendering, so BuildPrompt can omit an empty "## Repository Context"
 // header rather than emitting a section with nothing under it.
 func hasRepositoryContext(repo agent.RepositoryContext) bool {
 	return repo.BaseRevision != "" ||

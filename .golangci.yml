@@ -1,0 +1,23 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+# Scoped deliberately narrower than the "standard" preset: errcheck, unparam,
+# and unused currently flag pre-existing debt across the codebase (see issue
+# tracker) that is out of scope for the CI/CD pipeline itself. Re-enable them
+# in a follow-up ticket once that debt is addressed.
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - misspell
+    - unconvert
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt
