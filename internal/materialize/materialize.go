@@ -259,6 +259,14 @@ func renderTicketSections(t ticketplan.Ticket) string {
 		b.WriteString(ac)
 		b.WriteString("\n")
 	}
+	if len(t.ImplementationContext) > 0 {
+		b.WriteString("\n### Implementation Context\n")
+		for _, note := range t.ImplementationContext {
+			b.WriteString("- ")
+			b.WriteString(note)
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString("\n")
 	return b.String()
 }

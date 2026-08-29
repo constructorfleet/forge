@@ -9,12 +9,13 @@ import (
 )
 
 type TicketGenResult struct {
-	Key                string                   `json:"key"`
-	Objective          string                   `json:"objective"`
-	Requirements       []string                 `json:"requirements"`
-	AcceptanceCriteria []string                 `json:"acceptance_criteria"`
-	Dependencies       []string                 `json:"dependencies"`
-	Estimate           *planning.TicketEstimate `json:"estimate,omitempty"`
+	Key                   string                   `json:"key"`
+	Objective             string                   `json:"objective"`
+	Requirements          []string                 `json:"requirements"`
+	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
+	Dependencies          []string                 `json:"dependencies"`
+	ImplementationContext []string                 `json:"implementation_context,omitempty"`
+	Estimate              *planning.TicketEstimate `json:"estimate,omitempty"`
 }
 
 type TicketPlanGenerationResult struct {
@@ -81,9 +82,16 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "3. **requirements** - List of requirement IDs (REQ-NNN) this ticket addresses (at least one)\n"
 	prompt += "4. **acceptance_criteria** - List of measurable acceptance criteria (at least one)\n"
 	prompt += "5. **dependencies** - List of other ticket keys this ticket depends on (empty if none)\n"
-	prompt += "6. **estimate** - Optional effort/complexity estimate with:\n"
+	prompt += "6. **implementation_context** - List of concrete starting points for the implementer: likely files, directories, symbols, existing implementations, or analogous examples already in the repository. Include this whenever such pointers can be identified during planning; leave it empty only when no such pointers exist.\n"
+	prompt += "7. **estimate** - Optional effort/complexity estimate with:\n"
 	prompt += "   - **size** - One of: S, M, L, XL (required if estimate provided)\n"
 	prompt += "   - **risk** - Optional risk hint (e.g., \"new_tech\", \"unknown_deps\", \"complex_refactor\")\n\n"
+	prompt += "Sizing and scope:\n"
+	prompt += "- Scope each ticket to a single atomic engineering outcome, not a restatement of a broad spec requirement.\n"
+	prompt += "- Each ticket must be implementable, testable, and validatable by a frontier coding model in approximately 10 minutes of execution time.\n"
+	prompt += "- Prefer multiple small dependent tickets over one broad ticket containing several independently implementable changes; express sequencing with explicit dependencies.\n"
+	prompt += "- Split a ticket further when it spans multiple subsystems, introduces several independent behaviors, or would require substantial investigation before implementation could begin.\n"
+	prompt += "- A ticket should describe what concrete change to make and where to start, giving the implementer enough context to begin without rediscovering the architecture or the basic approach from scratch.\n\n"
 	prompt += "Rules:\n"
 	prompt += "- Keys must be sequential (TKT-001, TKT-002, ...)\n"
 	prompt += "- Dependencies must only reference other ticket keys (TKT-NNN), never decision IDs\n"
@@ -95,13 +103,44 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "```json\n"
 	prompt += "{\n"
 	prompt += `  "tickets": [` + "\n"
-	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
+	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "implementation_context": ["internal/foo/bar.go: extend Baz() with ..."], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
 	prompt += `    ...` + "\n"
 	prompt += `  ]` + "\n"
 	prompt += "}\n"
 	prompt += "```\n"
 
 	return prompt
+}
+
+// RenderTicketBody renders a generated ticket's section body in the standard
+// ticket-plan markdown layout (Objective / Requirements / Acceptance Criteria /
+// Implementation Context / Dependencies).
+func RenderTicketBody(t TicketGenResult) string {
+	body := fmt.Sprintf("### Objective\n%s\n\n### Requirements\n", t.Objective)
+	for _, req := range t.Requirements {
+		body += fmt.Sprintf("%s\n", req)
+	}
+	body += "\n### Acceptance Criteria\n"
+	for _, ac := range t.AcceptanceCriteria {
+		body += fmt.Sprintf("- %s\n", ac)
+	}
+	body += "\n### Implementation Context\n"
+	if len(t.ImplementationContext) == 0 {
+		body += "None"
+	} else {
+		for _, note := range t.ImplementationContext {
+			body += fmt.Sprintf("- %s\n", note)
+		}
+	}
+	body += "\n\n### Dependencies\n"
+	if len(t.Dependencies) == 0 {
+		body += "None"
+	} else {
+		for _, dep := range t.Dependencies {
+			body += fmt.Sprintf("%s\n", dep)
+		}
+	}
+	return body
 }
 
 func validateTicketPlanGenerationResult(r TicketPlanGenerationResult) error {
@@ -143,6 +182,12 @@ func validateTicketPlanGenerationResult(r TicketPlanGenerationResult) error {
 		for _, ac := range t.AcceptanceCriteria {
 			if ac == "" {
 				return fmt.Errorf("ticket %s has empty acceptance criterion", t.Key)
+			}
+		}
+
+		for _, note := range t.ImplementationContext {
+			if note == "" {
+				return fmt.Errorf("ticket %s has empty implementation context entry", t.Key)
 			}
 		}
 

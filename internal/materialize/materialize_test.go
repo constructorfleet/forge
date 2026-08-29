@@ -3,6 +3,7 @@ package materialize_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/materialize"
@@ -115,6 +116,30 @@ func TestMaterialize_NoDependencies_RendersNone(t *testing.T) {
 	}
 	if len(deps) != 0 {
 		t.Fatalf("got dependencies %v, want none", deps)
+	}
+}
+
+func TestMaterialize_RendersImplementationContext(t *testing.T) {
+	trk := tracker.NewFakeTracker()
+	tickets := []ticketplan.Ticket{{
+		Key:                   "TKT-001",
+		Objective:             "Solo ticket",
+		Requirements:          []string{"REQ-001"},
+		AcceptanceCriteria:    []string{"Done"},
+		ImplementationContext: []string{"internal/widget/builder.go: extend Build()"},
+	}}
+
+	result, err := materialize.Materialize(context.Background(), trk, tickets, testOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	issue, err := trk.GetIssue(context.Background(), result.IssueIDs["TKT-001"])
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if !strings.Contains(issue.Body, "### Implementation Context\n- internal/widget/builder.go: extend Build()") {
+		t.Fatalf("issue body missing implementation context: %q", issue.Body)
 	}
 }
 

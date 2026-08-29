@@ -21,6 +21,54 @@ func makeTestTicketPlan() *planning.Artifact {
 	}
 }
 
+func TestTicketPlanParseImplementationContext(t *testing.T) {
+	tp := &planning.Artifact{
+		Kind: planning.KindTicketPlan,
+		Sections: []planning.Section{
+			{Heading: "Ticket: TKT-001", Body: "### Objective\nImplement widget builder\n\n### Requirements\nREQ-001\n\n### Acceptance Criteria\n- Widget builds successfully\n\n### Implementation Context\n- internal/widget/builder.go: extend Build() with the new option\n- See internal/widget/analog_example.go for a similar pattern\n\n### Dependencies\nNone"},
+		},
+	}
+
+	tickets, err := ParseTicketPlan(tp)
+	if err != nil {
+		t.Fatalf("ParseTicketPlan failed: %v", err)
+	}
+	if len(tickets) != 1 {
+		t.Fatalf("expected 1 ticket, got %d", len(tickets))
+	}
+
+	want := []string{
+		"internal/widget/builder.go: extend Build() with the new option",
+		"See internal/widget/analog_example.go for a similar pattern",
+	}
+	got := tickets[0].ImplementationContext
+	if len(got) != len(want) {
+		t.Fatalf("expected %d implementation context entries, got %d: %v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestTicketPlanParseImplementationContextOptional(t *testing.T) {
+	tp := makeTestTicketPlan()
+
+	tickets, err := ParseTicketPlan(tp)
+	if err != nil {
+		t.Fatalf("ParseTicketPlan failed: %v", err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("expected 2 tickets, got %d", len(tickets))
+	}
+	for _, ticket := range tickets {
+		if len(ticket.ImplementationContext) != 0 {
+			t.Errorf("ticket %s: expected no implementation context, got %v", ticket.Key, ticket.ImplementationContext)
+		}
+	}
+}
+
 func TestTicketPlanStructureValid(t *testing.T) {
 	tp := makeTestTicketPlan()
 	tp.Revision = planning.ComputeRevision(tp)

@@ -335,22 +335,7 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 	}
 
 	for _, t := range tpResult.Tickets {
-		body := fmt.Sprintf("### Objective\n%s\n\n### Requirements\n", t.Objective)
-		for _, req := range t.Requirements {
-			body += fmt.Sprintf("%s\n", req)
-		}
-		body += "\n### Acceptance Criteria\n"
-		for _, ac := range t.AcceptanceCriteria {
-			body += fmt.Sprintf("- %s\n", ac)
-		}
-		body += "\n### Dependencies\n"
-		if len(t.Dependencies) == 0 {
-			body += "None"
-		} else {
-			for _, dep := range t.Dependencies {
-				body += fmt.Sprintf("%s\n", dep)
-			}
-		}
+		body := ticketplan.RenderTicketBody(t)
 		tpArtifact.Sections = append(tpArtifact.Sections, planning.Section{
 			Heading: fmt.Sprintf("Ticket: %s", t.Key),
 			Body:    body,
@@ -469,22 +454,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 		}
 
 		for _, t := range tpResult.Tickets {
-			body := fmt.Sprintf("### Objective\n%s\n\n### Requirements\n", t.Objective)
-			for _, req := range t.Requirements {
-				body += fmt.Sprintf("%s\n", req)
-			}
-			body += "\n### Acceptance Criteria\n"
-			for _, ac := range t.AcceptanceCriteria {
-				body += fmt.Sprintf("- %s\n", ac)
-			}
-			body += "\n### Dependencies\n"
-			if len(t.Dependencies) == 0 {
-				body += "None"
-			} else {
-				for _, dep := range t.Dependencies {
-					body += fmt.Sprintf("%s\n", dep)
-				}
-			}
+			body := ticketplan.RenderTicketBody(t)
 			newTPArtifact.Sections = append(newTPArtifact.Sections, planning.Section{
 				Heading: fmt.Sprintf("Ticket: %s", t.Key),
 				Body:    body,
