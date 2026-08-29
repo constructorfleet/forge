@@ -103,8 +103,18 @@ func buildPrompt(pc planningagent.PlanningContext) string {
 // picture (existing Decisions, non-consequential filtering) to do so
 // correctly.
 func validateResult(res Result) error {
-	seen := make(map[string]bool, len(res.Decisions))
-	for i, d := range res.Decisions {
+	return ValidateProposedDecisions(res.Decisions)
+}
+
+// ValidateProposedDecisions rejects a slice of ProposedDecision InvokeStructured
+// cannot safely hand to Forge for materialization: a blank or duplicate
+// temp_key, or a blank title, on any proposed Decision. It is exported so
+// other planning contracts that surface ProposedDecision-shaped output (e.g.
+// internal/decisionresolution's new_unknowns) can reuse the same rule rather
+// than duplicating it.
+func ValidateProposedDecisions(decisions []ProposedDecision) error {
+	seen := make(map[string]bool, len(decisions))
+	for i, d := range decisions {
 		if d.TempKey == "" {
 			return fmt.Errorf("planningsurvey: decision %d has a blank temp_key", i)
 		}
