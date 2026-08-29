@@ -9,7 +9,7 @@ package agent
 type SemanticCapabilities struct {
 	Definition      bool
 	References      bool
-	Implementation  bool
+	Implementations bool
 	Hover           bool
 	DocumentSymbol  bool
 	WorkspaceSymbol bool
@@ -60,4 +60,32 @@ type SemanticProfile struct {
 // pattern.
 type SemanticProfiler interface {
 	SemanticProfile() SemanticProfile
+}
+
+// NativeServer is one language server identity a SemanticDescriptor asks a
+// backend to point its own native tooling at (the "lspPlugin"
+// InjectionChannel).
+type NativeServer struct {
+	Language string
+	Command  []string
+}
+
+// MCPServer is one language server identity a SemanticDescriptor asks a
+// backend to consume through an injected MCP server (the "mcp"
+// InjectionChannel).
+type MCPServer struct {
+	Language string
+	Command  []string
+}
+
+// SemanticDescriptor is the backend-neutral Semantic Navigation payload a
+// SemanticProvider seam (internal/semantic) attaches to an AgentRequest via
+// Session.Augment. Adapters translate whichever list is populated into
+// their own CLI flags/config in later tickets; the provider only decides
+// which list to fill. The zero value means "no semantic navigation for
+// this request" — the behavior of every Agent call before this field
+// existed.
+type SemanticDescriptor struct {
+	MCPServers    []MCPServer
+	NativeServers []NativeServer
 }

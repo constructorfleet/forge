@@ -59,10 +59,10 @@ func (f *FakeAgent) Execute(_ context.Context, req AgentRequest) (AgentResult, e
 // Invocations returns every AgentRequest passed to Execute so far, in call
 // order. Each returned AgentRequest (including its reference-typed fields,
 // such as Feedback, Repository.QualityGates, Repository.Languages,
-// Repository.PackageManagers, and Issue.Dependencies) is independent of both
-// the caller's original slices and any other snapshot returned by
-// Invocations; mutating one has no effect on the FakeAgent or on other
-// snapshots.
+// Repository.PackageManagers, Issue.Dependencies, and
+// Semantic.MCPServers/NativeServers) is independent of both the caller's
+// original slices and any other snapshot returned by Invocations; mutating
+// one has no effect on the FakeAgent or on other snapshots.
 func (f *FakeAgent) Invocations() []AgentRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -85,5 +85,7 @@ func cloneRequest(req AgentRequest) AgentRequest {
 	clone.Repository.Languages = append([]string(nil), req.Repository.Languages...)
 	clone.Repository.PackageManagers = append([]string(nil), req.Repository.PackageManagers...)
 	clone.Issue.Dependencies = append([]domain.Dependency(nil), req.Issue.Dependencies...)
+	clone.Semantic.MCPServers = append([]MCPServer(nil), req.Semantic.MCPServers...)
+	clone.Semantic.NativeServers = append([]NativeServer(nil), req.Semantic.NativeServers...)
 	return clone
 }

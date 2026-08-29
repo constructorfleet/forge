@@ -259,3 +259,40 @@ func TestFakeAgent_RecordedInvocationIsImmuneToLaterCallerMutation(t *testing.T)
 		t.Errorf("recorded Dependencies[0].DependsOnID = %q, want %q (immune to later mutation)", got.Issue.Dependencies[0].DependsOnID, "issue-dep")
 	}
 }
+
+func TestFakeAgent_RecordedSemanticDescriptorIsImmuneToLaterSliceGrowth(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	fake.ProgramResult("issue-semantic", agent.AgentResult{Status: agent.StatusImplemented})
+
+	mcpServers := []agent.MCPServer{{Language: "go", Command: []string{"mcp-lsp"}}}
+	nativeServers := []agent.NativeServer{{Language: "go", Command: []string{"gopls"}}}
+
+	req := agent.AgentRequest{
+		Issue: domain.Issue{ID: "issue-semantic"},
+		Semantic: agent.SemanticDescriptor{
+			MCPServers:    mcpServers,
+			NativeServers: nativeServers,
+		},
+	}
+
+	if _, err := fake.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	// Appending to the caller's original slices after the call, as a repair
+	// iteration reusing/growing them might, must not retroactively resize
+	// the recorded invocation's snapshot.
+	mcpServers = append(mcpServers, agent.MCPServer{Language: "python", Command: []string{"mcp-py"}})
+	nativeServers = append(nativeServers, agent.NativeServer{Language: "python", Command: []string{"pyright"}})
+	if len(mcpServers) != 2 || len(nativeServers) != 2 {
+		t.Fatalf("precondition: caller slices should have grown to len 2, got mcp=%d native=%d", len(mcpServers), len(nativeServers))
+	}
+
+	got := fake.Invocations()[0]
+	if len(got.Semantic.MCPServers) != 1 {
+		t.Errorf("recorded Semantic.MCPServers = %+v, want len 1 (immune to later append)", got.Semantic.MCPServers)
+	}
+	if len(got.Semantic.NativeServers) != 1 {
+		t.Errorf("recorded Semantic.NativeServers = %+v, want len 1 (immune to later append)", got.Semantic.NativeServers)
+	}
+}
