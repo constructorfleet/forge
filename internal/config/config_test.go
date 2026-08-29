@@ -566,6 +566,177 @@ func TestLoad_StatusReflectionDisabledAllowsEmptyLabels(t *testing.T) {
 	}
 }
 
+func TestDefault_LSPInertByDefault(t *testing.T) {
+	// No .forge.yaml, and no lsp: section, must leave the feature entirely
+	// inert: Enabled false and every override surface empty.
+	cfg := Default()
+	if cfg.LSP.Enabled {
+		t.Error("LSP.Enabled = true, want false (opt-in)")
+	}
+	if len(cfg.LSP.Servers) != 0 {
+		t.Errorf("LSP.Servers = %+v, want empty", cfg.LSP.Servers)
+	}
+	if len(cfg.LSP.Extensions) != 0 {
+		t.Errorf("LSP.Extensions = %+v, want empty", cfg.LSP.Extensions)
+	}
+	if len(cfg.LSP.Capabilities) != 0 {
+		t.Errorf("LSP.Capabilities = %+v, want empty", cfg.LSP.Capabilities)
+	}
+	if len(cfg.LSP.Providers) != 0 {
+		t.Errorf("LSP.Providers = %+v, want empty", cfg.LSP.Providers)
+	}
+	if err := validate(cfg); err != nil {
+		t.Errorf("validate(Default()) = %v, want nil", err)
+	}
+}
+
+func TestLoad_LSPFullConfig(t *testing.T) {
+	path := writeTemp(t, `
+lsp:
+  enabled: true
+  servers:
+    go:
+      command: ["gopls"]
+  extensions:
+    .mjs: javascript
+  capabilities:
+    claude-code:
+      definition: false
+      hover: true
+  providers:
+    definition: harness-native
+    references: forge-managed
+    hover: "off"
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.LSP.Enabled {
+		t.Error("LSP.Enabled = false, want true")
+	}
+	gopls, ok := cfg.LSP.Servers["go"]
+	if !ok || !slices.Equal(gopls.Command, []string{"gopls"}) {
+		t.Errorf("LSP.Servers[go] = %+v, ok=%v, want {[gopls]} true", gopls, ok)
+	}
+	if cfg.LSP.Extensions[".mjs"] != "javascript" {
+		t.Errorf("LSP.Extensions[.mjs] = %q, want javascript", cfg.LSP.Extensions[".mjs"])
+	}
+	override, ok := cfg.LSP.Capabilities["claude-code"]
+	if !ok {
+		t.Fatal("LSP.Capabilities[claude-code] missing")
+	}
+	if override.Definition == nil || *override.Definition {
+		t.Errorf("LSP.Capabilities[claude-code].Definition = %v, want pointer to false", override.Definition)
+	}
+	if override.Hover == nil || !*override.Hover {
+		t.Errorf("LSP.Capabilities[claude-code].Hover = %v, want pointer to true", override.Hover)
+	}
+	if override.References != nil {
+		t.Errorf("LSP.Capabilities[claude-code].References = %v, want nil (unset)", override.References)
+	}
+	if cfg.LSP.Providers["definition"] != LSPProviderHarnessNative {
+		t.Errorf("LSP.Providers[definition] = %q, want harness-native", cfg.LSP.Providers["definition"])
+	}
+	if cfg.LSP.Providers["references"] != LSPProviderForgeManaged {
+		t.Errorf("LSP.Providers[references] = %q, want forge-managed", cfg.LSP.Providers["references"])
+	}
+	if cfg.LSP.Providers["hover"] != LSPProviderOff {
+		t.Errorf("LSP.Providers[hover] = %q, want off", cfg.LSP.Providers["hover"])
+	}
+}
+
+func TestLoad_LSPUnknownKeyRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  enable: true\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error for unknown field")
+	}
+	if !strings.Contains(err.Error(), "enable") {
+		t.Errorf("Load() error = %v, want it to name the unknown field enable", err)
+	}
+}
+
+func TestLoad_LSPServerEmptyCommandRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  servers:\n    go:\n      command: []\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.servers[go].command") {
+		t.Errorf("Load() error = %v, want it to identify lsp.servers[go].command", err)
+	}
+}
+
+func TestLoad_LSPServerEmptyLanguageKeyRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  servers:\n    \"\":\n      command: [\"gopls\"]\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.servers") {
+		t.Errorf("Load() error = %v, want it to identify lsp.servers", err)
+	}
+}
+
+func TestLoad_LSPExtensionMissingDotRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  extensions:\n    mjs: javascript\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.extensions") {
+		t.Errorf("Load() error = %v, want it to identify lsp.extensions", err)
+	}
+}
+
+func TestLoad_LSPExtensionEmptyLanguageRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  extensions:\n    .mjs: \"\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.extensions[.mjs]") {
+		t.Errorf("Load() error = %v, want it to identify lsp.extensions[.mjs]", err)
+	}
+}
+
+func TestLoad_LSPUnknownProviderPreferenceRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  providers:\n    definition: sometimes\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.providers[definition]") {
+		t.Errorf("Load() error = %v, want it to identify lsp.providers[definition]", err)
+	}
+	if !strings.Contains(err.Error(), "sometimes") {
+		t.Errorf("Load() error = %v, want it to include the offending value", err)
+	}
+}
+
+func TestLoad_LSPUnknownProviderCapabilityKeyRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  providers:\n    typo_field: harness-native\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.providers") {
+		t.Errorf("Load() error = %v, want it to identify lsp.providers", err)
+	}
+	if !strings.Contains(err.Error(), "typo_field") {
+		t.Errorf("Load() error = %v, want it to include the offending key", err)
+	}
+}
+
 func TestLoad_NoSecretsFieldsExist(t *testing.T) {
 	// Structural guard: config carries no token/password/secret fields.
 	// Anything auth-related must be sourced from the environment at use
