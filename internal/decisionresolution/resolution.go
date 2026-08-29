@@ -29,12 +29,28 @@ const invocationKey = "decision-resolution"
 // resolution surfaced. NewUnknowns reuses planningsurvey.ProposedDecision --
 // the same DecisionProposal shape PlanningSurvey emits -- since both are
 // forge's caller-scoped, not-yet-materialized proposal for a new Decision.
+//
+// NeedsHuman is populated instead of Outcome/Rationale/Consequences/
+// Assumptions when the Decision cannot be resolved without a human's
+// judgment -- something only a person can answer (a preference, an
+// external constraint, an authorization). A NeedsHuman response never
+// reaches internal/decisiongraph.ApplyResolution; see
+// internal/decisiongraph.Pause (ticket 15a).
 type Result struct {
 	Outcome      string                            `json:"outcome"`
 	Rationale    string                            `json:"rationale"`
 	Consequences string                            `json:"consequences"`
 	Assumptions  string                            `json:"assumptions"`
 	NewUnknowns  []planningsurvey.ProposedDecision `json:"new_unknowns"`
+	NeedsHuman   *NeedsHumanDetail                 `json:"needs_human"`
+}
+
+// NeedsHumanDetail describes, in structured form, what a NEEDS_HUMAN
+// resolution requires from a human before the Decision can be resolved.
+// Mirrors internal/agent.NeedsInfoDetail's shape for Phase 1 Issues.
+type NeedsHumanDetail struct {
+	Question string `json:"question"`
+	Context  string `json:"context"`
 }
 
 // Request is DecisionResolution's typed input: a compiled PlanningContext
@@ -83,7 +99,10 @@ func buildPrompt(req Request) string {
 		"consequences, and name anything you assumed. If answering surfaces a genuinely " +
 		"consequential new unknown -- one that would change the spec or the implementation " +
 		"depending on how it's answered -- propose it as a new_unknown; otherwise leave " +
-		"new_unknowns empty.\n\n")
+		"new_unknowns empty. If the Decision genuinely cannot be resolved without a human's " +
+		"judgment -- a preference, an external constraint, an authorization only a person can " +
+		"give -- do not guess: respond with needs_human instead, and omit outcome, rationale, " +
+		"consequences, assumptions, and new_unknowns.\n\n")
 
 	pc := req.Context
 	if pc.Goal != nil {
@@ -115,19 +134,28 @@ func buildPrompt(req Request) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("Respond with exactly one fenced json block containing:\n" +
+	b.WriteString("Respond with exactly one fenced json block containing either a resolution:\n" +
 		`{"outcome":"...","rationale":"...","consequences":"...","assumptions":"...",` +
 		`"new_unknowns":[{"temp_key":"...","title":"...","question":"...",` +
-		`"depends_on":["..."],"consequential":true}]}` + "\n")
+		`"depends_on":["..."],"consequential":true}]}` + "\n" +
+		"or, if you need a human to decide:\n" +
+		`{"needs_human":{"question":"...","context":"..."}}` + "\n")
 
 	return b.String()
 }
 
 // validateResult rejects a structured response InvokeStructured cannot
-// safely hand to Forge: a blank outcome, or a new_unknowns entry with a
-// blank/duplicate temp_key or blank title (see
+// safely hand to Forge: a NeedsHuman response with a blank question, or --
+// for a normal resolution -- a blank outcome, or a new_unknowns entry with
+// a blank/duplicate temp_key or blank title (see
 // planningsurvey.ValidateProposedDecisions).
 func validateResult(res Result) error {
+	if res.NeedsHuman != nil {
+		if res.NeedsHuman.Question == "" {
+			return fmt.Errorf("decisionresolution: needs_human question is blank")
+		}
+		return nil
+	}
 	if res.Outcome == "" {
 		return fmt.Errorf("decisionresolution: outcome is blank")
 	}

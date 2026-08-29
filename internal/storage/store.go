@@ -443,6 +443,19 @@ type Store interface {
 	// featureID. Releasing a missing lease is a no-op.
 	ReleaseFeaturePlanningLease(ctx context.Context, featureID string) error
 
+	// SaveDecisionCheckpoint persists (inserting or replacing) the
+	// NEEDS_HUMAN checkpoint for one Decision within a Planning Execution:
+	// the question asked, the Decision provenance it arose from, when, and
+	// which of the label/comment side effects have already run -- so the
+	// NEEDS_HUMAN handling in internal/wayfinding stays idempotent across
+	// repeats (ticket 15a).
+	SaveDecisionCheckpoint(ctx context.Context, checkpoint DecisionCheckpoint) error
+
+	// GetDecisionCheckpoint reloads the NEEDS_HUMAN checkpoint for one
+	// Decision within a Planning Execution. Returns ErrNotFound if none
+	// has been recorded.
+	GetDecisionCheckpoint(ctx context.Context, executionID, decisionID string) (DecisionCheckpoint, error)
+
 	// Close releases the underlying database connection(s).
 	Close() error
 }
@@ -490,4 +503,31 @@ type StatusSignalCheckpoint struct {
 	ExecutionID   string
 	IssueID       string
 	CommentPosted bool
+}
+
+// DecisionCheckpoint is the persisted record of a Planning Execution's
+// Decision pausing on NEEDS_HUMAN: the question asked, the Decision
+// provenance (DecisionRevision) it arose from, when, and the state of the
+// idempotent label/comment side effects. Mirrors NeedsInfoCheckpoint's
+// shape and the same crash-window rationale (see
+// internal/wayfinding's pause handling) -- CommentAuthor/CommentPostedAt
+// are the tracker-reported (server-clock) values, not locally captured,
+// for the same clock-skew and self-comment-exclusion reasons.
+//
+// ResumedAt/ResumedContext are write-only for now, a forward seam for
+// ticket 15b's resume handling, mirroring NeedsInfoCheckpoint's identical
+// fields.
+type DecisionCheckpoint struct {
+	ExecutionID      string
+	DecisionID       string
+	DecisionRevision string
+	Question         string
+	Context          string
+	LabelAdded       bool
+	CommentPosted    bool
+	CommentAuthor    string
+	CommentPostedAt  time.Time
+	CreatedAt        time.Time
+	ResumedAt        *time.Time
+	ResumedContext   string
 }

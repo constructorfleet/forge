@@ -80,3 +80,45 @@ func TestApplyResolution_OmitsBlankSections(t *testing.T) {
 		}
 	}
 }
+
+func TestPause_SetsStateNeedsHumanAndKeepsQuestion(t *testing.T) {
+	d := &planning.Artifact{
+		Kind:        planning.KindDecision,
+		DerivedFrom: []planning.DerivedFromEntry{{Kind: planning.KindGoal, ID: "goal", Revision: "goalrev"}},
+		Sections:    []planning.Section{{Heading: "Question", Body: "Which vendor?"}},
+	}
+	d.Revision = planning.ComputeRevision(d)
+
+	paused := decisiongraph.Pause(d)
+
+	if paused.State != decisiongraph.StateNeedsHuman {
+		t.Errorf("State = %q, want %q", paused.State, decisiongraph.StateNeedsHuman)
+	}
+	if planning.Ready(paused) {
+		t.Error("paused Decision must not be Ready")
+	}
+	if paused.Revision != planning.ComputeRevision(paused) {
+		t.Error("Revision is stale relative to its own content")
+	}
+	if len(paused.Sections) != 1 || paused.Sections[0].Heading != "Question" || paused.Sections[0].Body != "Which vendor?" {
+		t.Errorf("Sections = %+v, want [Question: Which vendor?]", paused.Sections)
+	}
+
+	hasGoal := false
+	for _, dep := range paused.DerivedFrom {
+		if dep.Kind == planning.KindGoal && dep.ID == "goal" {
+			hasGoal = true
+		}
+	}
+	if !hasGoal {
+		t.Error("Pause dropped the goal DerivedFrom entry")
+	}
+
+	// Original decision must not be mutated.
+	if planning.Ready(d) {
+		t.Error("Pause mutated the input Artifact in place")
+	}
+	if d.State == decisiongraph.StateNeedsHuman {
+		t.Error("Pause mutated the input Artifact's State")
+	}
+}

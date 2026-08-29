@@ -48,6 +48,15 @@ type Persist func(id string, artifact *planning.Artifact) error
 // goal Artifact for materialized Decisions' provenance (decisiongraph.GoalRef);
 // goalArtifact may be nil if no goal Artifact has been compiled (Loop still
 // runs, just without goal content in the prompt).
+//
+// A Decision that resolves to NEEDS_HUMAN is never applied
+// (decisiongraph.ApplyResolution) or materialized: onNeedsHuman is invoked
+// instead (see PauseHandler for Forge's own checkpoint/tracker/status
+// implementation), the Decision it returns is persisted paused, and Loop
+// continues on to the rest of the frontier -- only that Decision's path is
+// paused; independent paths keep resolving in the same Loop call (ticket
+// 15a). onNeedsHuman must be non-nil if any Decision might report
+// NEEDS_HUMAN.
 func Loop(
 	ctx context.Context,
 	backend planningagent.Backend,
@@ -56,6 +65,7 @@ func Loop(
 	goalRef decisiongraph.GoalRef,
 	decisions map[string]*planning.Artifact,
 	persist Persist,
+	onNeedsHuman NeedsHumanHandler,
 ) error {
 	for {
 		frontier := decisiongraph.Frontier(decisions)
@@ -75,6 +85,21 @@ func Loop(
 		})
 		if err != nil {
 			return fmt.Errorf("wayfinding: resolve %s: %w", targetID, err)
+		}
+
+		if res.NeedsHuman != nil {
+			if onNeedsHuman == nil {
+				return fmt.Errorf("wayfinding: decision %s needs human input but no NeedsHumanHandler is configured", targetID)
+			}
+			paused, err := onNeedsHuman(ctx, targetID, decisions[targetID], *res.NeedsHuman)
+			if err != nil {
+				return fmt.Errorf("wayfinding: pause %s for human input: %w", targetID, err)
+			}
+			decisions[targetID] = paused
+			if err := persist(targetID, paused); err != nil {
+				return fmt.Errorf("wayfinding: persist %s: %w", targetID, err)
+			}
+			continue
 		}
 
 		resolved := decisiongraph.ApplyResolution(decisions[targetID], res)
