@@ -75,6 +75,21 @@ func (c *Client) CreateIssue(ctx context.Context, req tracker.IssueRequest) (tra
 	return tracker.CreatedIssue{ID: strconv.Itoa(resp.Number), URL: resp.HTMLURL}, nil
 }
 
+// UpdateIssue replaces id's body via a PATCH request.
+func (c *Client) UpdateIssue(ctx context.Context, id string, req tracker.UpdateIssueRequest) error {
+	number, err := parseIssueID(id)
+	if err != nil {
+		return err
+	}
+
+	reqBody := struct {
+		Body string `json:"body"`
+	}{Body: req.Body}
+
+	path := c.issuePath(number, "")
+	return c.do(ctx, http.MethodPatch, path, reqBody, nil)
+}
+
 // Capabilities reports the optional behaviors this Client supports.
 // PlanningMirror is false: no planning-mirror projection behavior is built
 // yet (see the ticket 10 doc comment on tracker.Capabilities).

@@ -186,6 +186,33 @@ func TestCreateIssue_ThenGetIssue_FetchesTheCreatedIssue(t *testing.T) {
 	}
 }
 
+func TestUpdateIssue_PatchesBody(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	err := c.UpdateIssue(context.Background(), "42", tracker.UpdateIssueRequest{Body: "new body"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Fatalf("got method %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/repos/acme/widgets/issues/42" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if gotBody["body"] != "new body" {
+		t.Fatalf("unexpected request body: %+v", gotBody)
+	}
+}
+
 func TestCapabilities_PlanningMirrorIsFalse(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("Capabilities should not make a network request")

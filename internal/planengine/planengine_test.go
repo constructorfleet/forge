@@ -268,6 +268,9 @@ func (f *fakeTrackerForResume) CreatePullRequest(_ context.Context, _ tracker.Pu
 func (f *fakeTrackerForResume) CreateIssue(_ context.Context, _ tracker.IssueRequest) (tracker.CreatedIssue, error) {
 	return tracker.CreatedIssue{}, nil
 }
+func (f *fakeTrackerForResume) UpdateIssue(_ context.Context, _ string, _ tracker.UpdateIssueRequest) error {
+	return nil
+}
 func (f *fakeTrackerForResume) Capabilities() tracker.Capabilities { return tracker.Capabilities{} }
 
 func TestResumePlanningExecution_ResumesWhenNewHumanComment(t *testing.T) {
