@@ -118,6 +118,14 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("agent.provider", cfg.Agent.Provider, "must not be empty"))
 	}
 
+	switch cfg.Agent.PermissionMode {
+	case PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeBypassPermissions, PermissionModePlan:
+		// recognized
+	default:
+		errs = append(errs, fieldErr("agent.permission_mode", string(cfg.Agent.PermissionMode),
+			"unsupported permission mode; supported: default, acceptEdits, bypassPermissions, plan"))
+	}
+
 	if cfg.Quality.MaxOutputBytes < 1 {
 		errs = append(errs, fieldErr("quality.max_output_bytes", fmt.Sprint(cfg.Quality.MaxOutputBytes), "must be >= 1"))
 	}

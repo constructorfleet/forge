@@ -164,8 +164,10 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 				if _, ok := ag.(*agent.FakeAgent); !ok {
 					t.Errorf("buildAgent(%q) = %T, want *agent.FakeAgent", tc.provider, ag)
 				}
-			} else if _, ok := ag.(*claude.Adapter); !ok {
+			} else if adapter, ok := ag.(*claude.Adapter); !ok {
 				t.Errorf("buildAgent(%q) = %T, want *claude.Adapter", tc.provider, ag)
+			} else if adapter.PermissionMode != string(cfg.Agent.PermissionMode) {
+				t.Errorf("buildAgent(%q).PermissionMode = %q, want %q", tc.provider, adapter.PermissionMode, cfg.Agent.PermissionMode)
 			}
 		})
 	}

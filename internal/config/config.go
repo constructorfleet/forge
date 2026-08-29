@@ -122,7 +122,40 @@ type BlockedConfig struct {
 // AgentConfig selects the Agent Adapter backend.
 type AgentConfig struct {
 	Provider string `yaml:"provider"`
+
+	// PermissionMode controls how the Claude Code CLI handles tool-use
+	// permission prompts. Forge runs the Agent Adapter as an unattended
+	// subprocess (ticket 30, "Agent runs need a non-interactive permission
+	// mode") — there is no human present to answer an interactive prompt,
+	// so a permission mode that would block on one leaves the run hung
+	// until Execution's own timeout/cancellation kicks in. Empty defaults
+	// to PermissionModeBypassPermissions, matching the Workspace isolation
+	// boundary (CONTEXT.md "Workspace") the Agent already runs inside.
+	PermissionMode AgentPermissionMode `yaml:"permission_mode"`
 }
+
+// AgentPermissionMode selects the Claude Code CLI's `--permission-mode`
+// value.
+type AgentPermissionMode string
+
+const (
+	// PermissionModeDefault leaves Claude Code's own interactive
+	// permission prompting in place. Unsuitable for unattended Execution
+	// runs; supported only for operators invoking the Adapter in a context
+	// where a human is actually present to answer prompts.
+	PermissionModeDefault AgentPermissionMode = "default"
+	// PermissionModeAcceptEdits auto-approves file edits but still prompts
+	// for other tool categories (e.g. arbitrary shell commands).
+	PermissionModeAcceptEdits AgentPermissionMode = "acceptEdits"
+	// PermissionModeBypassPermissions auto-approves every tool call,
+	// relying on Workspace isolation (the Issue's Git worktree) as the
+	// safety boundary instead of per-call prompts. Default for unattended
+	// Execution runs.
+	PermissionModeBypassPermissions AgentPermissionMode = "bypassPermissions"
+	// PermissionModePlan restricts the Agent to read-only planning,
+	// prompting before any mutating tool call.
+	PermissionModePlan AgentPermissionMode = "plan"
+)
 
 // StatusReflectionConfig configures the tracker-side in-progress signal
 // Forge applies as an Issue moves through active work (ticket 24,
@@ -217,7 +250,7 @@ func Default() Config {
 			MaxOutputBytes:    4000,
 		},
 		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
-		Agent:   AgentConfig{Provider: "claude-code"},
+		Agent:   AgentConfig{Provider: "claude-code", PermissionMode: PermissionModeBypassPermissions},
 		StatusReflection: StatusReflectionConfig{
 			Enabled:         false,
 			InProgressLabel: "in-progress",

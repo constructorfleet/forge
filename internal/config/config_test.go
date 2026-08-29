@@ -64,6 +64,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Agent.Provider != "claude-code" {
 		t.Errorf("Agent.Provider = %q, want claude-code", cfg.Agent.Provider)
 	}
+	if cfg.Agent.PermissionMode != PermissionModeBypassPermissions {
+		t.Errorf("Agent.PermissionMode = %q, want %q", cfg.Agent.PermissionMode, PermissionModeBypassPermissions)
+	}
 	if len(cfg.Dependencies.Overrides) != 0 {
 		t.Errorf("Dependencies.Overrides = %+v, want empty", cfg.Dependencies.Overrides)
 	}
@@ -307,6 +310,33 @@ func TestLoad_InvalidTrackerType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gitlab") {
 		t.Errorf("Load() error = %v, want it to include the offending value", err)
+	}
+}
+
+func TestLoad_InvalidAgentPermissionMode(t *testing.T) {
+	path := writeTemp(t, "agent:\n  permission_mode: yolo\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.permission_mode") {
+		t.Errorf("Load() error = %v, want it to identify agent.permission_mode", err)
+	}
+	if !strings.Contains(err.Error(), "yolo") {
+		t.Errorf("Load() error = %v, want it to include the offending value", err)
+	}
+}
+
+func TestLoad_AgentPermissionModeOverride(t *testing.T) {
+	path := writeTemp(t, "agent:\n  permission_mode: plan\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Agent.PermissionMode != PermissionModePlan {
+		t.Errorf("Agent.PermissionMode = %q, want plan", cfg.Agent.PermissionMode)
 	}
 }
 
