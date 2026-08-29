@@ -51,6 +51,47 @@ type PullRequest struct {
 	URL    string
 }
 
+// ReviewState is Forge's normalized state for one pull-request review
+// (issue 109, "Review Rectification").
+type ReviewState string
+
+const (
+	ReviewApproved         ReviewState = "APPROVED"
+	ReviewChangesRequested ReviewState = "CHANGES_REQUESTED"
+	ReviewCommented        ReviewState = "COMMENTED"
+	ReviewDismissed        ReviewState = "DISMISSED"
+)
+
+// PullRequestReview is one normalized review submitted against a pull
+// request. GitHub (and trackers generally) let a reviewer submit multiple
+// reviews over a PR's lifetime; callers that need "the current verdict"
+// per reviewer must reduce to each Author's most recent, non-dismissed
+// entry themselves (see internal/ci's review classification) — this type
+// carries the raw, unreduced history.
+type PullRequestReview struct {
+	// ID is the tracker-native review identifier.
+	ID int64
+	// Author is the reviewer's tracker username.
+	Author string
+	State  ReviewState
+	// Body is the reviewer's summary comment, if any. A CHANGES_REQUESTED
+	// review with an empty Body carries nothing actionable to repair from.
+	Body        string
+	SubmittedAt time.Time
+}
+
+// PullRequestMergeStatus is the normalized mergeability of a pull request
+// against its base branch (issue 109, "Merge Conflicts").
+type PullRequestMergeStatus struct {
+	// Conflicted is true when the tracker reports the pull request cannot
+	// be merged into its base due to a conflict. False covers every other
+	// state, including "not yet computed" — callers that need to
+	// distinguish "known clean" from "unknown" should treat Conflicted as
+	// authoritative only once the tracker has finished computing it (see
+	// the github adapter's doc comment on its mergeable_state mapping).
+	Conflicted bool
+}
+
 // IssueRequest carries everything CreateIssue needs to create a new Issue
 // on the tracker.
 type IssueRequest struct {
@@ -182,6 +223,24 @@ type Tracker interface {
 // is silently skipped, which is the escape hatch such contexts need.
 type AuthPreflighter interface {
 	VerifyAuth(ctx context.Context) error
+}
+
+// ReviewsGetter is an optional capability a Tracker adapter implements when
+// it can report the reviews submitted against a pull request (issue 109,
+// "Review Rectification"). internal/ci's Supervisor type-asserts for this
+// interface each poll; a Tracker that doesn't implement it (e.g. a fake
+// used by tests unrelated to review rectification) simply skips review
+// classification, matching AuthPreflighter's escape-hatch pattern above.
+type ReviewsGetter interface {
+	GetPullRequestReviews(ctx context.Context, number int) ([]PullRequestReview, error)
+}
+
+// MergeStatusGetter is an optional capability a Tracker adapter implements
+// when it can report a pull request's mergeability against its base branch
+// (issue 109, "Merge Conflicts"). Optional like ReviewsGetter — see
+// internal/ci's Supervisor.
+type MergeStatusGetter interface {
+	GetPullRequestMergeStatus(ctx context.Context, number int) (PullRequestMergeStatus, error)
 }
 
 // RateLimitError is returned by a Tracker implementation when a request is

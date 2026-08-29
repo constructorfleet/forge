@@ -708,7 +708,24 @@ func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID stri
 	return agent.Feedback{}, fmt.Errorf("engine: issue %s has no failed CI run to repair", issueID)
 }
 
+// buildCIFeedback renders a persisted CIRun into bounded Agent feedback.
+// The rendering branches on run.Kind (issue 109, "PR supervision"): a
+// required-check failure (the default, empty Kind) keeps the pre-existing
+// "CI check failed" framing; a review-triggered repair (Kind ==
+// storage.CIRunKindReview, produced only for a single reviewer's
+// actionable CHANGES_REQUESTED — see internal/ci's classifyReviews) is
+// framed as reviewer feedback instead, naming the reviewer rather than a
+// check. Kind == storage.CIRunKindConflict never reaches here: a detected
+// conflict routes the Issue to NEEDS_INFO, not CI_FAILED (see
+// internal/ci/conflict.go), so RepairCIFailure never repairs one.
 func buildCIFeedback(run storage.CIRun) agent.Feedback {
+	if run.Kind == storage.CIRunKindReview {
+		message := fmt.Sprintf("Reviewer requested changes:\nReviewer: %s", run.CheckName)
+		if run.Details != "" {
+			message += "\nComment:\n" + run.Details
+		}
+		return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
+	}
 	message := fmt.Sprintf("CI check failed:\nCheck: %s", run.CheckName)
 	if run.Details != "" {
 		message += "\nDetails:\n" + run.Details

@@ -213,10 +213,17 @@ func latestFailure(issueID string, events []storage.Event, gates []storage.GateR
 		if ciRuns[i].Status != storage.CIRunStatusFailed {
 			continue
 		}
-		if ciRuns[i].Details != "" {
-			return fmt.Sprintf("ci %s failed: %s", ciRuns[i].CheckName, ciRuns[i].Details)
+		label := "ci " + ciRuns[i].CheckName
+		switch ciRuns[i].Kind {
+		case storage.CIRunKindReview:
+			label = "review by " + ciRuns[i].CheckName
+		case storage.CIRunKindConflict:
+			return "pull request has a merge conflict with its base branch"
 		}
-		return fmt.Sprintf("ci %s failed", ciRuns[i].CheckName)
+		if ciRuns[i].Details != "" {
+			return fmt.Sprintf("%s failed: %s", label, ciRuns[i].Details)
+		}
+		return fmt.Sprintf("%s failed", label)
 	}
 	for i := len(reviews) - 1; i >= 0; i-- {
 		if reviews[i].Verdict != "CHANGES_REQUIRED" {
