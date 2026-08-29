@@ -45,6 +45,15 @@ const maxCapturedOutputLen = 4 * maxDiagnosticLen
 // without an interactive session.
 const claudePrintFlag = "-p"
 
+// defaultPermissionMode is the Claude Code --permission-mode value used
+// when an Adapter does not set PermissionMode. Agent runs happen inside an
+// isolated Workspace with no human present to answer permission prompts
+// (see CONTEXT.md "Workspace"), so the subprocess must never block waiting
+// for interactive approval: bypassPermissions runs every tool call
+// unattended, which is safe because the Workspace is the isolation
+// boundary, not per-tool prompts.
+const defaultPermissionMode = "bypassPermissions"
+
 // allowedEnvVars is the fixed base allowlist of environment variables
 // passed to the Claude Code subprocess. The Agent's environment is
 // sanitized rather than inherited wholesale so secrets present in Forge's
@@ -93,6 +102,12 @@ type Adapter struct {
 	// in the base allowlist, defaultAuthEnvVars, or ExtraEnvPassthrough is
 	// excluded, regardless of what's set in Forge's own environment.
 	ExtraEnvPassthrough []string
+
+	// PermissionMode sets the Claude Code --permission-mode value for the
+	// subprocess. Defaults to defaultPermissionMode ("bypassPermissions")
+	// when empty, so unsupervised Agent runs never block on an interactive
+	// permission prompt no one is present to answer.
+	PermissionMode string
 }
 
 // Execute implements agent.Agent. It builds a prompt from req, invokes
@@ -113,7 +128,12 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		runner = a.defaultRunner()
 	}
 
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, []string{claudePrintFlag}, prompt, env)
+	permissionMode := a.PermissionMode
+	if permissionMode == "" {
+		permissionMode = defaultPermissionMode
+	}
+
+	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, []string{claudePrintFlag, "--permission-mode", permissionMode}, prompt, env)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return agent.AgentResult{

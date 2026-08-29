@@ -308,6 +308,34 @@ func TestExecute_UsesWorkspaceAsWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestExecute_InvokesWithNonInteractivePermissionModeByDefault(t *testing.T) {
+	var calls []recordedCall
+	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	if _, err := a.Execute(context.Background(), baseRequest()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	want := []string{"-p", "--permission-mode", "bypassPermissions"}
+	if strings.Join(calls[0].args, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %v, want %v", calls[0].args, want)
+	}
+}
+
+func TestExecute_InvokesWithConfiguredPermissionMode(t *testing.T) {
+	var calls []recordedCall
+	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil), PermissionMode: "acceptEdits"}
+
+	if _, err := a.Execute(context.Background(), baseRequest()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	want := []string{"-p", "--permission-mode", "acceptEdits"}
+	if strings.Join(calls[0].args, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %v, want %v", calls[0].args, want)
+	}
+}
+
 func TestExecute_DefaultRunnerUsedWhenUnset(t *testing.T) {
 	a := &Adapter{Executable: "definitely-not-a-real-claude-binary-xyz"}
 	result, err := a.Execute(context.Background(), baseRequest())
