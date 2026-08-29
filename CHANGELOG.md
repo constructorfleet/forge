@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/constructorfleet/forge/compare/forge-v0.9.1...forge-v0.10.0) (2026-08-29)
+
+
+### Features
+
+* Claude native-LSP gopls provisioning ([#135](https://github.com/constructorfleet/forge/issues/135)) ([29cf35f](https://github.com/constructorfleet/forge/commit/29cf35fd74eb9532473e90963df632b8fe42616e)), closes [#128](https://github.com/constructorfleet/forge/issues/128)
+
 ## [0.9.1](https://github.com/constructorfleet/forge/compare/forge-v0.9.0...forge-v0.9.1) (2026-08-29)
 
 
