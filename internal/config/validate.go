@@ -137,6 +137,10 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.StatusReflection.Enabled && strings.TrimSpace(cfg.StatusReflection.InProgressLabel) == "" {
+		errs = append(errs, fieldErr("status_reflection.in_progress_label", cfg.StatusReflection.InProgressLabel, "must not be empty when status_reflection.enabled is true"))
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}

@@ -124,6 +124,31 @@ type AgentConfig struct {
 	Provider string `yaml:"provider"`
 }
 
+// StatusReflectionConfig configures the tracker-side in-progress signal
+// Forge applies as an Issue moves through active work (ticket 24,
+// "Execution status reflection to the tracker") — see
+// internal/statusreflect. Disabled by default: today's behavior (no
+// tracker-side signal until a pull request appears) is unchanged unless an
+// operator opts in.
+type StatusReflectionConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// InProgressLabel is applied for every state from CLAIMED through
+	// PR_CREATING (Forge actively working the Issue) and removed once the
+	// Issue leaves that range for any reason. Required (non-empty) when
+	// Enabled is true.
+	InProgressLabel string `yaml:"in_progress_label"`
+	// InReviewLabel replaces InProgressLabel once a pull request exists
+	// (CI_PENDING/CI_FAILED). Empty disables this label — the in-progress
+	// label is simply removed with nothing to replace it.
+	InReviewLabel string `yaml:"in_review_label"`
+	// FailedLabel replaces InProgressLabel when an Issue reaches FAILED.
+	// Empty disables this label.
+	FailedLabel string `yaml:"failed_label"`
+	// Comment, if true, posts a one-line comment the first time the
+	// in-progress signal is applied (the READY -> CLAIMED transition).
+	Comment bool `yaml:"comment"`
+}
+
 // DependenciesConfig configures the escape-hatch Dependency Source. The
 // canonical source is the issue body's `## Dependencies` block; entries here
 // override it. See CONTEXT.md "Dependency Source" and ADR 0003. Keys and
@@ -141,18 +166,19 @@ type DependenciesConfig struct {
 // configured here are exactly what an Issue's RetryBudget is constructed
 // from.
 type Config struct {
-	Version      int                `yaml:"version"`
-	Tracker      TrackerConfig      `yaml:"tracker"`
-	Git          GitConfig          `yaml:"git"`
-	Execution    ExecutionConfig    `yaml:"execution"`
-	Retry        domain.RetryLimits `yaml:"retry"`
-	Workflow     WorkflowConfig     `yaml:"workflow"`
-	Quality      QualityConfig      `yaml:"quality"`
-	PullRequests PullRequestsConfig `yaml:"pull_requests"`
-	CI           CIConfig           `yaml:"ci"`
-	Blocked      BlockedConfig      `yaml:"blocked"`
-	Agent        AgentConfig        `yaml:"agent"`
-	Dependencies DependenciesConfig `yaml:"dependencies"`
+	Version          int                    `yaml:"version"`
+	Tracker          TrackerConfig          `yaml:"tracker"`
+	Git              GitConfig              `yaml:"git"`
+	Execution        ExecutionConfig        `yaml:"execution"`
+	Retry            domain.RetryLimits     `yaml:"retry"`
+	Workflow         WorkflowConfig         `yaml:"workflow"`
+	Quality          QualityConfig          `yaml:"quality"`
+	PullRequests     PullRequestsConfig     `yaml:"pull_requests"`
+	CI               CIConfig               `yaml:"ci"`
+	Blocked          BlockedConfig          `yaml:"blocked"`
+	Agent            AgentConfig            `yaml:"agent"`
+	Dependencies     DependenciesConfig     `yaml:"dependencies"`
+	StatusReflection StatusReflectionConfig `yaml:"status_reflection"`
 }
 
 // defaultCommitMessageTemplate is PullRequestsConfig.CommitMessageTemplate's
@@ -192,6 +218,13 @@ func Default() Config {
 		},
 		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
 		Agent:   AgentConfig{Provider: "claude-code"},
+		StatusReflection: StatusReflectionConfig{
+			Enabled:         false,
+			InProgressLabel: "in-progress",
+			InReviewLabel:   "in-review",
+			FailedLabel:     "failed",
+			Comment:         false,
+		},
 	}
 }
 

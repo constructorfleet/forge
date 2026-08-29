@@ -115,9 +115,16 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	eng.Publisher = gitPublisher{locks: locks}
 	// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
 	eng.PRTracker = trk
+	// trk also implements statusreflect.Tracker (AddLabel/RemoveLabel/
+	// AddComment) in full; wired unconditionally like NeedsInfoTracker/
+	// PRTracker above, since the ticket-24 signal itself defaults to off
+	// via cfg.StatusReflection.Enabled (see statusreflect.Apply).
+	eng.StatusTracker = trk
 	eng.BaseBranch = baseBranchName(cfg.Git.Base)
 	if cfg.PullRequests.WatchCI {
-		eng.CIWaiter = ci.New(store, trk, cfg, eng.BaseBranch)
+		sup := ci.New(store, trk, cfg, eng.BaseBranch)
+		sup.StatusTracker = trk
+		eng.CIWaiter = sup
 	}
 	return eng, nil
 }
@@ -153,7 +160,9 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 	sch := scheduler.New(trk, scheduler.Adapt(eng), resolver, base, cfg.Execution.MaxParallel)
 	sch.OnComplete = resolver.onComplete
 	if cfg.PullRequests.WatchCI {
-		sch.CIWatcher = ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
+		sup := ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
+		sup.StatusTracker = trk
+		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}
 	return sch, nil

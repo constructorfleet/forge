@@ -323,6 +323,16 @@ type Store interface {
 	// within an Execution. Returns ErrNotFound if none has been recorded.
 	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (NeedsInfoCheckpoint, error)
 
+	// SaveStatusSignalCheckpoint persists (inserting or replacing) whether
+	// the ticket-24 status-reflection start comment has been posted for one
+	// Issue within an Execution (internal/statusreflect).
+	SaveStatusSignalCheckpoint(ctx context.Context, checkpoint StatusSignalCheckpoint) error
+
+	// GetStatusSignalCheckpoint reloads the status-signal checkpoint for one
+	// Issue within an Execution. Returns ErrNotFound if none has been
+	// recorded.
+	GetStatusSignalCheckpoint(ctx context.Context, executionID, issueID string) (StatusSignalCheckpoint, error)
+
 	// CreatePlanningExecution persists a new Planning Execution (ticket 11's
 	// runtime container for `forge plan`, scoped to a Feature rather than
 	// coding Issues).
@@ -400,4 +410,15 @@ type NeedsInfoCheckpoint struct {
 	CreatedAt       time.Time
 	ResumedAt       *time.Time
 	ResumedContext  string
+}
+
+// StatusSignalCheckpoint is the persisted record of whether the ticket-24
+// status-reflection start comment (internal/statusreflect) has already been
+// posted for one Issue's READY -> CLAIMED transition within an Execution.
+// See SaveStatusSignalCheckpoint's doc comment for why the comment, unlike
+// the label swap statusreflect.Apply performs, needs a persisted guard.
+type StatusSignalCheckpoint struct {
+	ExecutionID   string
+	IssueID       string
+	CommentPosted bool
 }

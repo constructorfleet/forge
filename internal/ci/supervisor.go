@@ -8,6 +8,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/statusreflect"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/textcap"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -31,6 +32,15 @@ type Supervisor struct {
 	BaseBranch string
 	Now        func() time.Time
 	Sleep      Sleeper
+
+	// StatusTracker is the subset of tracker.Tracker the ticket-24
+	// status-reflection signal uses (internal/statusreflect) to swap the
+	// in-progress label for the in-review label (or clear it entirely) once
+	// Wait reaches a resting state. Optional: nil (or
+	// Config.StatusReflection.Enabled false, the default) leaves Wait's
+	// tracker side effect a no-op, matching every other optional seam in
+	// this codebase (see engine.Engine.StatusTracker).
+	StatusTracker statusreflect.Tracker
 }
 
 func New(store storage.Store, trk Tracker, cfg config.Config, baseBranch string) *Supervisor {
@@ -97,11 +107,17 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			if err != nil {
 				return "", fmt.Errorf("ci: transition issue %s to DONE: %w", issueID, err)
 			}
+			if err := statusreflect.Apply(ctx, s.StatusTracker, s.Config.StatusReflection, issueID, domain.StateCIPending, domain.StateDone); err != nil {
+				return "", fmt.Errorf("ci: reflect status for issue %s: %w", issueID, err)
+			}
 			return issue.State, nil
 		case storage.CIRunStatusFailed:
 			issue, err := s.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCIFailed)
 			if err != nil {
 				return "", fmt.Errorf("ci: transition issue %s to CI_FAILED: %w", issueID, err)
+			}
+			if err := statusreflect.Apply(ctx, s.StatusTracker, s.Config.StatusReflection, issueID, domain.StateCIPending, domain.StateCIFailed); err != nil {
+				return "", fmt.Errorf("ci: reflect status for issue %s: %w", issueID, err)
 			}
 			return issue.State, nil
 		default:

@@ -436,6 +436,76 @@ func TestLoad_MultipleErrorsAllReported(t *testing.T) {
 	}
 }
 
+func TestDefault_StatusReflectionDisabled(t *testing.T) {
+	// Ticket 24: the tracker-side in-progress signal must default to off so
+	// existing behavior is unchanged unless an operator opts in.
+	cfg := Default()
+	if cfg.StatusReflection.Enabled {
+		t.Error("StatusReflection.Enabled = true, want false (default off)")
+	}
+	if cfg.StatusReflection.InProgressLabel != "in-progress" {
+		t.Errorf("StatusReflection.InProgressLabel = %q, want in-progress", cfg.StatusReflection.InProgressLabel)
+	}
+	if cfg.StatusReflection.InReviewLabel != "in-review" {
+		t.Errorf("StatusReflection.InReviewLabel = %q, want in-review", cfg.StatusReflection.InReviewLabel)
+	}
+	if cfg.StatusReflection.FailedLabel != "failed" {
+		t.Errorf("StatusReflection.FailedLabel = %q, want failed", cfg.StatusReflection.FailedLabel)
+	}
+	if cfg.StatusReflection.Comment {
+		t.Error("StatusReflection.Comment = true, want false")
+	}
+}
+
+func TestLoad_StatusReflectionEnabled(t *testing.T) {
+	path := writeTemp(t, `
+status_reflection:
+  enabled: true
+  in_progress_label: working
+  in_review_label: review
+  failed_label: broken
+  comment: true
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := StatusReflectionConfig{
+		Enabled:         true,
+		InProgressLabel: "working",
+		InReviewLabel:   "review",
+		FailedLabel:     "broken",
+		Comment:         true,
+	}
+	if cfg.StatusReflection != want {
+		t.Errorf("StatusReflection = %+v, want %+v", cfg.StatusReflection, want)
+	}
+}
+
+func TestLoad_StatusReflectionEnabledRequiresInProgressLabel(t *testing.T) {
+	path := writeTemp(t, "status_reflection:\n  enabled: true\n  in_progress_label: \"\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "status_reflection.in_progress_label") {
+		t.Errorf("Load() error = %v, want it to identify status_reflection.in_progress_label", err)
+	}
+}
+
+func TestLoad_StatusReflectionDisabledAllowsEmptyLabels(t *testing.T) {
+	// Enabled defaults to false, so leaving the whole block out of a config
+	// file (or an explicit false with no labels) must not fail validation —
+	// InProgressLabel is only required once an operator opts in.
+	path := writeTemp(t, "status_reflection:\n  enabled: false\n")
+
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+}
+
 func TestLoad_NoSecretsFieldsExist(t *testing.T) {
 	// Structural guard: config carries no token/password/secret fields.
 	// Anything auth-related must be sourced from the environment at use
