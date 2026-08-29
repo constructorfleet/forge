@@ -103,6 +103,7 @@ func (c *Client) normalizeIssue(gh ghIssue) (domain.Issue, error) {
 	return domain.Issue{
 		ID:           issueID,
 		Title:        gh.Title,
+		Body:         gh.Body,
 		Dependencies: deps,
 	}, nil
 }

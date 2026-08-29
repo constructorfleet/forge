@@ -112,7 +112,7 @@ func (f *FakeTracker) CreateIssue(_ context.Context, req IssueRequest) (CreatedI
 	id := strconv.Itoa(f.nextIssueID)
 	f.nextIssueID++
 
-	f.issues[id] = domain.Issue{ID: id, Title: req.Title}
+	f.issues[id] = domain.Issue{ID: id, Title: req.Title, Body: req.Body}
 	return CreatedIssue{ID: id, URL: fmt.Sprintf("https://fake.tracker/issues/%s", id)}, nil
 }
 

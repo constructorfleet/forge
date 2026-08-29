@@ -94,6 +94,8 @@ func TestExecutionRoundTrip(t *testing.T) {
 	issue := domain.Issue{
 		ID:          "issue-1",
 		ExecutionID: exec.ID,
+		Title:       "Add widget support",
+		Body:        "Widgets should render before gadgets.",
 		State:       domain.StateReady,
 		Scope:       domain.ScopeManaged,
 		Dependencies: []domain.Dependency{
@@ -123,6 +125,9 @@ func TestExecutionRoundTrip(t *testing.T) {
 	got := loaded.Issues[0]
 	if got.ID != issue.ID || got.State != issue.State || got.Scope != issue.Scope {
 		t.Fatalf("issue mismatch: got %+v", got)
+	}
+	if got.Title != issue.Title || got.Body != issue.Body {
+		t.Fatalf("issue title/body mismatch: got %+v", got)
 	}
 	if len(got.Dependencies) != 1 || got.Dependencies[0].DependsOnID != "issue-0" {
 		t.Fatalf("dependencies mismatch: got %+v", got.Dependencies)
