@@ -2,6 +2,8 @@ package engine_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -48,13 +50,21 @@ type fakeSemanticProvider struct {
 
 	mu       sync.Mutex
 	prepared int
+	servers  []semantic.DetectedServer
 }
 
-func (p *fakeSemanticProvider) Prepare(context.Context, string, agent.RepositoryContext, []semantic.DetectedServer) semantic.Session {
+func (p *fakeSemanticProvider) Prepare(_ context.Context, _ string, _ agent.RepositoryContext, servers []semantic.DetectedServer) semantic.Session {
 	p.mu.Lock()
 	p.prepared++
+	p.servers = servers
 	p.mu.Unlock()
 	return p.session
+}
+
+func (p *fakeSemanticProvider) Servers() []semantic.DetectedServer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.servers
 }
 
 func (p *fakeSemanticProvider) Prepared() int {
@@ -208,5 +218,34 @@ func TestExecute_NoSemanticProviderWired_RequestSemanticStaysZeroValue(t *testin
 	got := te.fake.Invocations()[0].Semantic
 	if len(got.MCPServers) != 0 || len(got.NativeServers) != 0 {
 		t.Errorf("Semantic descriptor = %+v, want zero value when Engine.Semantic is unset", got)
+	}
+}
+
+// TestExecute_GoWorkspace_PreparesWithGoplsDetectedServer is issue #128's
+// engine-wiring gap: Prepare must be called with the real Detected Servers
+// for the repository (internal/lsp.Detect), not the pre-#122 nil
+// placeholder, so a Go repository's Provider actually sees {go, gopls} and
+// can fill NativeServers for the Claude path.
+func TestExecute_GoWorkspace_PreparesWithGoplsDetectedServer(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"64": {ID: "64"},
+	})
+	if err := os.WriteFile(filepath.Join(te.eng.RepoRoot, "go.mod"), []byte("module example.com/x\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	te.fake.ProgramResult("64", agent.AgentResult{Status: agent.StatusImplemented})
+
+	sess := &fakeSemanticSession{}
+	provider := &fakeSemanticProvider{session: sess}
+	te.eng.Semantic = provider
+
+	ctx := context.Background()
+	if _, err := te.eng.Execute(ctx, "64", te.base); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	servers := provider.Servers()
+	if len(servers) != 1 || servers[0].Language != "go" || len(servers[0].Command) != 1 || servers[0].Command[0] != "gopls" {
+		t.Errorf("Prepare's Detected Servers = %+v, want [{go, [gopls]}]", servers)
 	}
 }

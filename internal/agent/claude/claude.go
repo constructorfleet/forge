@@ -212,6 +212,22 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	args = append(args, streamingArgs...)
 	args = append(args, jsonSchemaArgs...)
 
+	// A non-empty Semantic.NativeServers (the SemanticProvider seam's
+	// InjectionChannelLSPPlugin fill, e.g. {go, gopls}) means Claude Code's
+	// own native `LSP` tool is missing that capability and Forge must
+	// supply a language server behind it. writeLSPPlugin is best-effort: a
+	// provisioning failure here (e.g. an unwritable Workspace) degrades to
+	// no semantic navigation for this call rather than failing the whole
+	// Execute, matching internal/semantic's own best-effort contract.
+	if len(req.Semantic.NativeServers) > 0 {
+		if pluginDir, cleanup, err := writeLSPPlugin(req.WorkspacePath, req.Semantic.NativeServers); err == nil {
+			defer cleanup()
+			if pluginDir != "" {
+				args = append(args, "--plugin-dir", pluginDir)
+			}
+		}
+	}
+
 	// Parse the stream-json output incrementally, as each line arrives, so
 	// transcript events (and their real per-event timestamps) are captured
 	// and persisted from the very first turn and up to the moment a
