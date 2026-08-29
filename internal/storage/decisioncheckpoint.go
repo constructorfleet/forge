@@ -108,3 +108,56 @@ func (s *SQLiteStore) GetDecisionCheckpoint(ctx context.Context, executionID, de
 	checkpoint.ResumedContext = resumedContext.String
 	return checkpoint, nil
 }
+
+// GetDecisionCheckpointsByExecution reloads all NEEDS_HUMAN checkpoints
+// for a Planning Execution.
+func (s *SQLiteStore) GetDecisionCheckpointsByExecution(ctx context.Context, executionID string) ([]DecisionCheckpoint, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT decision_id, decision_revision, question, context, label_added, comment_posted, comment_author, comment_posted_at,
+			created_at, resumed_at, resumed_context
+		FROM decision_checkpoints WHERE execution_id = ?`,
+		executionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list decision checkpoints for execution %s: %w", executionID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var checkpoints []DecisionCheckpoint
+	for rows.Next() {
+		var (
+			checkpoint      DecisionCheckpoint
+			contextVal      sql.NullString
+			commentAuthor   sql.NullString
+			commentPostedAt sql.NullTime
+			createdAt       time.Time
+			resumedAt       sql.NullTime
+			resumedContext  sql.NullString
+		)
+		if err := rows.Scan(
+			&checkpoint.DecisionID, &checkpoint.DecisionRevision, &checkpoint.Question, &contextVal, &checkpoint.LabelAdded, &checkpoint.CommentPosted,
+			&commentAuthor, &commentPostedAt,
+			&createdAt, &resumedAt, &resumedContext,
+		); err != nil {
+			return nil, fmt.Errorf("storage: scan decision checkpoint for execution %s: %w", executionID, err)
+		}
+
+		checkpoint.ExecutionID = executionID
+		checkpoint.Context = contextVal.String
+		checkpoint.CommentAuthor = commentAuthor.String
+		if commentPostedAt.Valid {
+			checkpoint.CommentPostedAt = commentPostedAt.Time.UTC()
+		}
+		checkpoint.CreatedAt = createdAt.UTC()
+		if resumedAt.Valid {
+			t := resumedAt.Time.UTC()
+			checkpoint.ResumedAt = &t
+		}
+		checkpoint.ResumedContext = resumedContext.String
+		checkpoints = append(checkpoints, checkpoint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: iterate decision checkpoints for execution %s: %w", executionID, err)
+	}
+	return checkpoints, nil
+}
