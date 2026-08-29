@@ -340,6 +340,36 @@ func TestLoad_AgentPermissionModeOverride(t *testing.T) {
 	}
 }
 
+func TestDefault_AgentTimeoutIsPositive(t *testing.T) {
+	if Default().Agent.Timeout <= 0 {
+		t.Fatalf("Default().Agent.Timeout = %v, want > 0", Default().Agent.Timeout)
+	}
+}
+
+func TestLoad_AgentTimeoutParsesDuration(t *testing.T) {
+	path := writeTemp(t, "agent:\n  timeout: 5m\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agent.Timeout != 5*time.Minute {
+		t.Fatalf("Agent.Timeout = %v, want 5m", cfg.Agent.Timeout)
+	}
+}
+
+func TestLoad_InvalidAgentTimeout(t *testing.T) {
+	path := writeTemp(t, "agent:\n  timeout: 0s\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.timeout") {
+		t.Errorf("Load() error = %v, want it to identify agent.timeout", err)
+	}
+}
+
 func TestLoad_InvalidCIRequiredChecksMode(t *testing.T) {
 	path := writeTemp(t, "ci:\n  required_checks:\n    mode: jenkins\n")
 

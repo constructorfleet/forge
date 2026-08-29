@@ -42,6 +42,7 @@ func DefaultRunner(executable string) Runner {
 		cmd.Dir = dir
 		cmd.Env = env
 		cmd.Stdin = strings.NewReader(stdin)
+		ConfigureProcessGroup(cmd)
 
 		// Bounded, tail-preserving writers (internal/textcap): a runaway
 		// subprocess must not let Forge hold arbitrarily large output in

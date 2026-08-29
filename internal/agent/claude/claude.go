@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/agent/clicommon"
 	"github.com/Teagan42/forge/internal/textcap"
 )
 
@@ -144,17 +145,30 @@ type Adapter struct {
 	// streamed output (ticket 28). Defaults to time.Now when nil; tests
 	// inject a fixed clock for deterministic assertions.
 	Now func() time.Time
+
+	// Timeout bounds one Execute invocation so a wedged subprocess cannot
+	// block a Worker forever (issue 33, "Agent runs need a timeout"). It is
+	// a liveness (idle) timeout, not a flat wall-clock cap: each stdout
+	// line the subprocess produces resets the deadline (see
+	// clicommon.IdleTimeout), so a long-but-progressing run is never
+	// killed — only a genuine stall (no output at all for Timeout) trips
+	// it. Zero disables the timeout, matching pre-ticket-33 behavior;
+	// production wiring always sets this from config.Config.Agent.Timeout,
+	// which defaults to a nonzero value.
+	Timeout time.Duration
 }
 
 // Execute implements agent.Agent. It builds a prompt from req, invokes
 // Claude Code in req.WorkspacePath, and parses the result. Ordinary
 // failures — subprocess errors, non-zero exit codes without a valid
-// structured result — are surfaced through AgentResult.Status (FAILED)
-// rather than a returned error, so callers get uniform handling. Context
-// cancellation is the one exception: it is surfaced as a wrapped ctx.Err()
-// Go error (in addition to Status FAILED) so a retry loop (tickets 21/24)
-// can distinguish "the caller gave up on this attempt" from "the agent
-// genuinely failed" and avoid miscounting it against the retry budget.
+// structured result, and a stalled subprocess hitting a.Timeout (issue 33)
+// — are surfaced through AgentResult.Status (FAILED) rather than a returned
+// error, so callers get uniform handling and a timeout is retried like any
+// other agent failure. Context cancellation is the one exception: it is
+// surfaced as a wrapped ctx.Err() Go error (in addition to Status FAILED)
+// so a retry loop (tickets 21/24) can distinguish "the caller gave up on
+// this attempt" from "the agent genuinely failed" and avoid miscounting it
+// against the retry budget.
 func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
 	prompt := buildPrompt(req)
 	env := sanitizedEnv(a.ExtraEnvPassthrough)
@@ -182,8 +196,20 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	if now == nil {
 		now = time.Now
 	}
+	// runCtx is derived from ctx with an idle-timeout watchdog (issue 33):
+	// touch resets the deadline on every stdout line the subprocess
+	// produces, so only a genuine stall (no output for a.Timeout) cancels
+	// runCtx, distinct from ctx itself being canceled by its parent. stop
+	// must run before Execute returns to release the watchdog goroutine.
+	runCtx, timedOut, touch, stop := clicommon.IdleTimeout(ctx, a.Timeout)
+	defer stop()
+
 	parser := newStreamParser(req.Transcript, now)
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, args, prompt, env, parser.consume)
+	onLine := func(line string) {
+		touch()
+		parser.consume(line)
+	}
+	stdout, stderr, exitCode, err := runner(runCtx, req.WorkspacePath, args, prompt, env, onLine)
 
 	// finalText is the reconstructed equivalent of what `-p` alone would
 	// have printed; every downstream use of the raw stdout capture below is
@@ -206,6 +232,22 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 			Status:  agent.StatusFailed,
 			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: cancelled: %v", ctxErr), finalText, stderr),
 		}, fmt.Errorf("claude adapter: cancelled: %w", ctxErr)
+	}
+
+	// A timeout is reported as an ordinary FAILED outcome (err == nil), not
+	// the wrapped ctx.Err() Go error ctx-cancellation above returns: unlike
+	// an operator-driven cancellation (which should abort the run without
+	// counting against the retry budget), a wedged agent is exactly the
+	// kind of failure the retry budget/`forge retry` exists to recover
+	// from, so it must flow through the normal StatusFailed handling.
+	if timedOut() {
+		return agent.AgentResult{
+			Status: agent.StatusFailed,
+			Summary: diagnosticSummary(
+				fmt.Sprintf("claude adapter: agent timed out after %s with no output", a.Timeout),
+				finalText, stderr,
+			),
+		}, nil
 	}
 
 	if err != nil {
@@ -360,6 +402,7 @@ func (a *Adapter) defaultRunner() Runner {
 		cmd.Dir = dir
 		cmd.Env = env
 		cmd.Stdin = strings.NewReader(stdin)
+		clicommon.ConfigureProcessGroup(cmd)
 
 		// Bounded, tail-preserving writers (internal/textcap, shared with
 		// internal/gate): an unbounded bytes.Buffer here would let a

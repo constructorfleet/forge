@@ -126,6 +126,10 @@ func validate(cfg Config) error {
 			"unsupported permission mode; supported: default, acceptEdits, bypassPermissions, plan"))
 	}
 
+	if cfg.Agent.Timeout <= 0 {
+		errs = append(errs, fieldErr("agent.timeout", fmt.Sprint(cfg.Agent.Timeout), "must be > 0"))
+	}
+
 	if cfg.Quality.MaxOutputBytes < 1 {
 		errs = append(errs, fieldErr("quality.max_output_bytes", fmt.Sprint(cfg.Quality.MaxOutputBytes), "must be >= 1"))
 	}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
@@ -371,6 +373,94 @@ func TestExecute_CancellationSurfacesDistinctError(t *testing.T) {
 	}
 	if result.Status != agent.StatusFailed {
 		t.Fatalf("Status = %q, want FAILED", result.Status)
+	}
+}
+
+func TestExecute_TimeoutKillsWedgedRunner(t *testing.T) {
+	// A Runner that never returns on its own (the "wedged" case ticket 33
+	// was written for) must still be bounded by Adapter.Timeout: Execute
+	// should return promptly, reporting a distinct FAILED outcome rather
+	// than hanging forever or surfacing the generic cancellation error.
+	blocked := make(chan struct{})
+	runner := Runner(func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
+		<-ctx.Done()
+		close(blocked)
+		return "", "", -1, ctx.Err()
+	})
+	a := &Adapter{Runner: runner, Timeout: 20 * time.Millisecond}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v, want nil (timeout is a diagnosable FAILED outcome, not a generic error)", err)
+	}
+	if result.Status != agent.StatusFailed {
+		t.Fatalf("Status = %q, want FAILED", result.Status)
+	}
+	if !strings.Contains(result.Summary, "timed out") {
+		t.Fatalf("Summary = %q, want it to mention the timeout", result.Summary)
+	}
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("runner's ctx was never canceled: the subprocess would be left running")
+	}
+}
+
+func TestExecute_TimeoutResetsOnOutput(t *testing.T) {
+	// A long-but-progressing run must not be killed: each line of output
+	// resets the idle deadline, so a run whose total duration exceeds
+	// Timeout, but never goes Timeout without producing a line, succeeds.
+	runner := Runner(func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
+		for i := 0; i < 5; i++ {
+			select {
+			case <-ctx.Done():
+				return "", "", -1, ctx.Err()
+			case <-time.After(15 * time.Millisecond):
+			}
+			onLine(fmt.Sprintf("progress %d", i))
+		}
+		stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+		return stdout, "", 0, nil
+	})
+	a := &Adapter{Runner: runner, Timeout: 40 * time.Millisecond}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED (heartbeat should have prevented the timeout)", result.Status)
+	}
+}
+
+func TestExecute_FinishesJustUnderDeadlineSucceeds(t *testing.T) {
+	runner := Runner(func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
+		time.Sleep(10 * time.Millisecond)
+		stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+		return stdout, "", 0, nil
+	})
+	a := &Adapter{Runner: runner, Timeout: 200 * time.Millisecond}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", result.Status)
+	}
+}
+
+func TestExecute_ZeroTimeoutDisablesIt(t *testing.T) {
+	var calls []recordedCall
+	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", result.Status)
 	}
 }
 

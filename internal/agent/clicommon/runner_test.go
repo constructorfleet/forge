@@ -2,9 +2,15 @@ package clicommon
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestDefaultRunner_CapturesStdoutStderrAndExitCode(t *testing.T) {
@@ -70,5 +76,63 @@ func TestDefaultRunner_BoundsUnboundedOutput(t *testing.T) {
 	}
 	if len(stdout) > MaxCapturedOutputLen*2 {
 		t.Fatalf("captured stdout len = %d, want bounded near MaxCapturedOutputLen (%d)", len(stdout), MaxCapturedOutputLen)
+	}
+}
+
+func TestDefaultRunner_KillsWholeProcessGroupOnContextCancel(t *testing.T) {
+	// A CLI agent may spawn children of its own; canceling ctx must kill
+	// the whole process group, not just the direct child, or a stray
+	// grandchild is left running and holding the Workspace worktree open
+	// (issue 33, "Agent runs need a timeout").
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := DefaultRunner("sh")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _, _ = runner(ctx, dir, []string{"-c", "sleep 30 & echo $! > child.pid; wait"}, "", nil, func(string) {})
+	}()
+
+	pidPath := filepath.Join(dir, "child.pid")
+	var childPID int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidPath)
+		if err == nil && strings.TrimSpace(string(data)) != "" {
+			childPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
+			if err != nil {
+				t.Fatalf("parse child pid: %v", err)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if childPID == 0 {
+		t.Fatal("child process never reported its pid")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not return after ctx cancellation")
+	}
+
+	// Give the kernel a moment to actually reap the signaled process.
+	aliveDeadline := time.Now().Add(2 * time.Second)
+	for {
+		err := syscall.Kill(childPID, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			break
+		}
+		if time.Now().After(aliveDeadline) {
+			t.Fatalf("child process %d still alive after parent's context was canceled", childPID)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
