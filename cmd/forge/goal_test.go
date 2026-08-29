@@ -4,10 +4,27 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/planning"
 )
+
+// writeFakeEditor writes a shell script that appends a line to the Goal
+// section's body and returns its path, suitable for $EDITOR/$VISUAL in
+// tests exercising `forge goal init --edit`.
+func writeFakeEditor(t *testing.T, dir string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake editor script requires a POSIX shell")
+	}
+	script := filepath.Join(dir, "fake-editor.sh")
+	body := "#!/bin/sh\nprintf '\\n' >> \"$1\"\nprintf 'Edited in-editor.\\n' >> \"$1\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return script
+}
 
 // TestRunGoalInit_CreatesValidSkeleton is the core acceptance criterion:
 // `forge goal init foo` on a clean repo must produce a goal.md that is
@@ -161,6 +178,121 @@ func TestRunGoalInit_RejectsUnsafeFeatureID(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
 		t.Fatalf(".forge dir was created despite invalid feature-id, stat err = %v", err)
+	}
+}
+
+// TestRunGoalInit_EditRestampsRevision confirms `--edit` opens the fake
+// editor, and that the post-edit content is re-parsed and re-stamped so the
+// file remains non-Stale even though its content changed after the initial
+// write.
+func TestRunGoalInit_EditRestampsRevision(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	editor := writeFakeEditor(t, dir)
+	t.Setenv("EDITOR", editor)
+	t.Setenv("VISUAL", "")
+
+	if code := runGoalInit([]string{"init", "foo", "--edit"}); code != 0 {
+		t.Fatalf("runGoalInit --edit = %d, want 0", code)
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	last := a.Sections[len(a.Sections)-1]
+	if !containsLine(last.Body, "Edited in-editor.") {
+		t.Fatalf("edited content missing from last section body: %q", last.Body)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("edited artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+}
+
+func containsLine(body, want string) bool {
+	for _, line := range splitLines(body) {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+		}
+	}
+	lines = append(lines, s[start:])
+	return lines
+}
+
+// TestRunGoalInit_EditWithoutEditorSet confirms `--edit` with neither
+// $VISUAL nor $EDITOR set exits non-zero, leaving the already-written goal
+// file in place untouched.
+func TestRunGoalInit_EditWithoutEditorSet(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+
+	if code := runGoalInit([]string{"init", "foo", "--edit"}); code == 0 {
+		t.Fatal("runGoalInit --edit with no $VISUAL/$EDITOR = 0, want non-zero")
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("goal.md should still exist after failed --edit: ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("skeleton is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+}
+
+// TestRunGoalInit_EditPostParseFailureKeepsAuthorEdits confirms that when
+// the post-edit content fails to parse, runGoalInit reports the error and
+// leaves the file exactly as the (fake) editor saved it, rather than
+// discarding the author's edits.
+func TestRunGoalInit_EditPostParseFailureKeepsAuthorEdits(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	script := filepath.Join(dir, "corrupt-editor.sh")
+	body := "#!/bin/sh\nprintf 'not a valid artifact\\n' > \"$1\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("EDITOR", script)
+	t.Setenv("VISUAL", "")
+
+	if code := runGoalInit([]string{"init", "foo", "--edit"}); code == 0 {
+		t.Fatal("runGoalInit --edit with unparseable post-edit content = 0, want non-zero")
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "not a valid artifact\n" {
+		t.Fatalf("author's edits were discarded: got %q", string(data))
 	}
 }
 
