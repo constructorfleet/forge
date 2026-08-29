@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # Include `edited` and `reopened` so the Conventional Commit PR-title
+    # check re-runs when a PR title is fixed (or the PR reopened), not only
+    # on new commits. Without these, correcting a rejected title would leave
+    # the failed check stuck until an unrelated push.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
