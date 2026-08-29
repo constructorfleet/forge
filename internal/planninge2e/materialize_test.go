@@ -254,8 +254,8 @@ func TestScenario12_GeneratedDAGAcceptedByPhase1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Phase 1 Execute of a materialized issue: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 
 	// The same gate refuses an Issue that never reached Phase C: a partial

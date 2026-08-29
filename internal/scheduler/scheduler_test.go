@@ -1215,8 +1215,8 @@ func TestRun_RealEngine_DependentIssueStartsFromMergedBase(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	for _, id := range []string{"20", "21"} {
-		if results[id].State != domain.StateReviewing {
-			t.Errorf("results[%s].State = %s, want REVIEWING", id, results[id].State)
+		if results[id].State != domain.StateCommitting {
+			t.Errorf("results[%s].State = %s, want COMMITTING", id, results[id].State)
 		}
 		if results[id].ExecutionID == "" {
 			t.Errorf("results[%s].ExecutionID is empty, want the Execution ID Engine.Execute minted", id)

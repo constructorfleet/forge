@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -18,53 +17,33 @@ type GitReachabilityChecker interface {
 	IsAncestor(ctx context.Context, commit, branch string) (bool, error)
 }
 
-// ghIssueState is the minimal shape CheckExternal needs from GitHub's issue
-// JSON: whether the issue is open or closed (CONTEXT.md "External Issue":
-// closed does not equal satisfied).
-type ghIssueState struct {
-	State string `json:"state"`
-}
-
-// ghTimelineEvent is the subset of GitHub's issue-timeline JSON shape
-// CheckExternal uses. Two event kinds matter:
+// closingPRsQuery asks GitHub which merged Pull Request(s) authoritatively
+// closed an issue, alongside the issue's own open/closed state. This is the
+// one association that survives every merge strategy: closedByPullRequestsReferences
+// is populated whether the closing PR was created with a merge commit,
+// squash-merged, or rebase-merged, whereas the REST timeline's "closed"
+// event carries a commit_id only for merge-commit merges (it is null for
+// squash/rebase — the very strategy this repository uses), which is why the
+// previous timeline-commit_id association misclassified every squash-merged
+// closer as "no merged PR" and rendered the dependency permanently
+// unsatisfiable.
 //
-//   - "cross-referenced": GitHub's signal that some other Issue/PR
-//     references this one. This fires for ANY mention (e.g. "related to
-//     #50"), not just the PR that actually closes the issue — so it is
-//     only a candidate list, never proof of association by itself (see
-//     findMergedPRCommit).
-//   - "closed": GitHub's authoritative record of what closed the issue.
-//     When closed by a commit (directly, or via a merged PR's merge
-//     commit), CommitID is that commit's SHA — the one signal that
-//     unambiguously ties a specific commit to this issue's closure.
-type ghTimelineEvent struct {
-	Event    string `json:"event"`
-	CommitID string `json:"commit_id"`
-	Source   *struct {
-		Issue *struct {
-			Number      int `json:"number"`
-			PullRequest *struct {
-				MergedAt *string `json:"merged_at"`
-			} `json:"pull_request"`
-		} `json:"issue"`
-	} `json:"source"`
-}
-
-// ghMergedPullRequest is the subset of GitHub's pull-request JSON shape
-// CheckExternal needs: whether it merged, and if so the merge commit to
-// check reachability of.
-type ghMergedPullRequest struct {
-	MergedAt       *string `json:"merged_at"`
-	MergeCommitSHA string  `json:"merge_commit_sha"`
-}
+// includeClosedPrs:true is required because a merged PR is a closed PR;
+// without it the field only reports still-open PRs that *will* close the
+// issue.
+const closingPRsQuery = `query($owner:String!,$repo:String!,$number:Int!){` +
+	`repository(owner:$owner,name:$repo){` +
+	`issue(number:$number){state ` +
+	`closedByPullRequestsReferences(first:10,includeClosedPrs:true){` +
+	`nodes{merged mergeCommit{oid}}}}}}`
 
 var _ tracker.ExternalChecker = (*Client)(nil)
 
 // CheckExternal implements tracker.ExternalChecker: it determines issueID's
 // current tracker.ExternalState by finding the Pull Request that
-// authoritatively closed it (see findMergedPRCommit — not merely any PR
-// that references it), then (via Reachability) checking whether that PR's
-// merge commit is reachable from baseBranch.
+// authoritatively closed it (via GitHub's closedByPullRequestsReferences —
+// not merely any PR that references it), then (via Reachability) checking
+// whether that PR's merge commit is reachable from baseBranch.
 //
 //   - A merged PR whose merge commit is reachable from baseBranch ->
 //     ExternalSatisfied.
@@ -76,27 +55,22 @@ var _ tracker.ExternalChecker = (*Client)(nil)
 //     does not equal satisfied (CONTEXT.md "External Issue", ADR 0008).
 //
 // CheckExternal makes no attempt to cache its answer across calls — every
-// call re-fetches from GitHub and re-checks git reachability, which is
-// what lets a later poll or `forge resume`/`forge execute` re-invocation
-// observe newly-landed merges.
+// call re-queries GitHub and re-checks git reachability, which is what lets
+// a later poll or `forge resume`/`forge execute` re-invocation observe
+// newly-landed merges.
 func (c *Client) CheckExternal(ctx context.Context, issueID, baseBranch string) (tracker.ExternalState, error) {
 	number, err := parseIssueID(issueID)
 	if err != nil {
 		return "", err
 	}
 
-	var issue ghIssueState
-	if err := c.do(ctx, http.MethodGet, c.issuePath(number, ""), nil, &issue); err != nil {
-		return "", fmt.Errorf("github: check external issue %s: %w", issueID, err)
-	}
-
-	mergeSHA, found, err := c.findMergedPRCommit(ctx, number)
+	closed, mergeSHA, found, err := c.closingMergedPR(ctx, number)
 	if err != nil {
 		return "", fmt.Errorf("github: check external issue %s: %w", issueID, err)
 	}
 
 	if !found {
-		if issue.State == "closed" {
+		if closed {
 			return tracker.ExternalInvalid, nil
 		}
 		return tracker.ExternalPending, nil
@@ -117,92 +91,46 @@ func (c *Client) CheckExternal(ctx context.Context, issueID, baseBranch string) 
 	return tracker.ExternalSatisfied, nil
 }
 
-// findMergedPRCommit walks issue #number's full timeline (following every
-// page, see fetchTimeline) to find the merged Pull Request that
-// authoritatively closed it, returning its merge commit SHA. found is
-// false if no such PR was located — the issue may still be open, closed by
-// a direct commit with no associated PR, or a "cross-referenced" PR merely
-// mentions it without being the one that closed it.
+// closingMergedPR queries closedByPullRequestsReferences for issue #number
+// and returns whether the issue is closed, plus the merge commit SHA of the
+// merged Pull Request that closed it. found is false when no *merged* closing
+// PR exists — the issue may still be open, closed by a direct commit with no
+// PR, or closed with only an unmerged PR referencing it (all of which leave
+// no merge commit whose reachability could satisfy the dependency).
 //
-// A "cross-referenced" event fires for any mention of the issue, so it is
-// only ever a *candidate*: a merged PR that references the issue is not
-// necessarily the PR that closed it (see ghTimelineEvent's doc comment).
-// The timeline's "closed" event is the authoritative signal — its
-// CommitID is the exact commit that closed the issue — so a candidate PR
-// only counts once its merge commit matches that CommitID.
-func (c *Client) findMergedPRCommit(ctx context.Context, number int) (sha string, found bool, err error) {
-	events, err := c.fetchTimeline(ctx, number)
-	if err != nil {
-		return "", false, err
+// When GitHub reports more than one closing PR (an issue can be closed,
+// reopened, and closed again), the first merged one with a recorded merge
+// commit is authoritative enough for satisfaction: reachability of any
+// merged closer's commit from the base means that work has landed.
+func (c *Client) closingMergedPR(ctx context.Context, number int) (closed bool, sha string, found bool, err error) {
+	var resp struct {
+		Repository struct {
+			Issue struct {
+				State                          string `json:"state"`
+				ClosedByPullRequestsReferences struct {
+					Nodes []struct {
+						Merged      bool `json:"merged"`
+						MergeCommit *struct {
+							OID string `json:"oid"`
+						} `json:"mergeCommit"`
+					} `json:"nodes"`
+				} `json:"closedByPullRequestsReferences"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	vars := map[string]interface{}{"owner": c.owner, "repo": c.repo, "number": number}
+	if err := c.graphQL(ctx, closingPRsQuery, vars, &resp); err != nil {
+		return false, "", false, err
 	}
 
-	closingCommit := closingCommitSHA(events)
-	if closingCommit == "" {
-		return "", false, nil
-	}
-
-	for _, ev := range events {
-		if ev.Event != "cross-referenced" || ev.Source == nil || ev.Source.Issue == nil {
-			continue
-		}
-		src := ev.Source.Issue
-		if src.PullRequest == nil || src.PullRequest.MergedAt == nil {
-			continue
-		}
-
-		var pr ghMergedPullRequest
-		prPath := fmt.Sprintf("/repos/%s/%s/pulls/%d", c.owner, c.repo, src.Number)
-		if err := c.do(ctx, http.MethodGet, prPath, nil, &pr); err != nil {
-			return "", false, fmt.Errorf("fetch pull request #%d: %w", src.Number, err)
-		}
-		// Re-confirm against the authoritative PR resource: the timeline
-		// cross-reference's merged_at can be stale by the time we look.
-		if pr.MergedAt == nil || pr.MergeCommitSHA == "" {
-			continue
-		}
-		if pr.MergeCommitSHA == closingCommit {
-			return pr.MergeCommitSHA, true, nil
+	issue := resp.Repository.Issue
+	// GraphQL reports issue state in upper case ("OPEN"/"CLOSED"), unlike the
+	// REST API's lower case.
+	closed = issue.State == "CLOSED"
+	for _, n := range issue.ClosedByPullRequestsReferences.Nodes {
+		if n.Merged && n.MergeCommit != nil && n.MergeCommit.OID != "" {
+			return closed, n.MergeCommit.OID, true, nil
 		}
 	}
-	return "", false, nil
-}
-
-// closingCommitSHA returns the commit that most recently closed the issue
-// according to events, or "" if the issue has never been closed by a
-// commit (still open, or closed manually with no associated commit — e.g.
-// "close as not planned"). A "reopened" event clears any prior closing
-// commit, so a since-reopened-and-not-yet-reclosed issue correctly yields
-// "".
-func closingCommitSHA(events []ghTimelineEvent) string {
-	var sha string
-	for _, ev := range events {
-		switch ev.Event {
-		case "closed":
-			sha = ev.CommitID
-		case "reopened":
-			sha = ""
-		}
-	}
-	return sha
-}
-
-// fetchTimeline fetches every page of issue #number's timeline, following
-// the Link "next" header the same way GetComments does — a long-lived
-// issue's timeline (labels, comments, cross-references, ...) can easily
-// exceed one page, and the event that matters (the authoritative "closed"
-// event, or the PR that references it) can land on any page.
-func (c *Client) fetchTimeline(ctx context.Context, number int) ([]ghTimelineEvent, error) {
-	url := c.baseURL + c.issuePath(number, "/timeline") + "?per_page=100"
-
-	var events []ghTimelineEvent
-	for url != "" {
-		var page []ghTimelineEvent
-		headers, err := c.doWithHeaders(ctx, http.MethodGet, url, nil, &page)
-		if err != nil {
-			return nil, fmt.Errorf("fetch timeline for issue #%d: %w", number, err)
-		}
-		events = append(events, page...)
-		url = nextPageURL(headers)
-	}
-	return events, nil
+	return closed, "", false, nil
 }

@@ -152,6 +152,46 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 	return resp.Header, nil
 }
 
+// graphQL issues a POST against GitHub's GraphQL endpoint (baseURL +
+// "/graphql") with query and variables, decoding the response's "data"
+// object into out. GitHub reports GraphQL-level failures as a 200 carrying
+// an "errors" array (not an HTTP error status), so graphQL surfaces the
+// first such error rather than silently decoding a null "data" — the REST
+// helpers' status-code handling (auth, rate limit, 404) still applies to
+// the transport layer via doWithHeaders.
+//
+// It exists because the one signal CheckExternal needs — which merged Pull
+// Request authoritatively closed an issue — is only exposed reliably via
+// GraphQL's closedByPullRequestsReferences. The REST issue timeline's
+// "closed" event omits its commit_id for squash- and rebase-merged PRs, so
+// a timeline-only association misclassifies every squash-merged closer as
+// "no merged PR" (see external.go).
+func (c *Client) graphQL(ctx context.Context, query string, variables map[string]interface{}, out interface{}) error {
+	reqBody := struct {
+		Query     string                 `json:"query"`
+		Variables map[string]interface{} `json:"variables"`
+	}{Query: query, Variables: variables}
+
+	var envelope struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if _, err := c.doWithHeaders(ctx, http.MethodPost, c.baseURL+"/graphql", reqBody, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Errors) > 0 {
+		return fmt.Errorf("github: graphql: %s", envelope.Errors[0].Message)
+	}
+	if out != nil && len(envelope.Data) > 0 {
+		if err := json.Unmarshal(envelope.Data, out); err != nil {
+			return fmt.Errorf("github: graphql: decode data: %w", err)
+		}
+	}
+	return nil
+}
+
 // rateLimitError classifies a response as a rate-limit rejection:
 //   - a 403 with X-RateLimit-Remaining: 0 (primary limit exhausted)
 //   - a 429 (secondary/abuse limit)

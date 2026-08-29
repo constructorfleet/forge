@@ -120,7 +120,7 @@ func newTestEngine(t *testing.T, issues map[string]domain.Issue) testEngine {
 	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake, ws: ws}
 }
 
-func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
+func TestExecute_HappyPath_NoGatesConfiguredReachesCommitting(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"42": {ID: "42"},
 	})
@@ -132,10 +132,12 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	// config.Default() configures no Quality Gates, so the Gate Runner has
-	// nothing to run and trivially "passes" straight through to REVIEWING
-	// (ticket 20's resting state).
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	// nothing to run and trivially "passes" straight through REVIEWING. With
+	// no Reviewer wired, review auto-approves to COMMITTING; with no
+	// Publisher/PRTracker wired, runCommitAndPR no-ops and COMMITTING is the
+	// resting state.
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 
 	// Full state is inspectable via the persisted store afterward (the
@@ -147,8 +149,8 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 	if state.Execution.BaseRevision != te.base {
 		t.Errorf("Execution.BaseRevision = %s, want %s", state.Execution.BaseRevision, te.base)
 	}
-	if len(state.Issues) != 1 || state.Issues[0].State != domain.StateReviewing {
-		t.Fatalf("persisted issues = %+v, want one Issue in REVIEWING", state.Issues)
+	if len(state.Issues) != 1 || state.Issues[0].State != domain.StateCommitting {
+		t.Fatalf("persisted issues = %+v, want one Issue in COMMITTING", state.Issues)
 	}
 
 	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
@@ -167,6 +169,7 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 		"agent.result",
 		"issue.transitioned", // -> VALIDATING
 		"issue.transitioned", // -> REVIEWING
+		"issue.transitioned", // -> COMMITTING (Reviewer unset auto-approves)
 	}
 	if len(events) != len(wantSequence) {
 		t.Fatalf("got %d events, want %d: %+v", len(events), len(wantSequence), events)
@@ -186,8 +189,8 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesReviewing(t *testing.T) {
 	if err := json.Unmarshal([]byte(events[len(events)-1].Data), &lastTransition); err != nil {
 		t.Fatalf("unmarshal last transition event: %v", err)
 	}
-	if lastTransition.From != string(domain.StateValidating) || lastTransition.To != string(domain.StateReviewing) {
-		t.Errorf("last transition = %+v, want VALIDATING -> REVIEWING", lastTransition)
+	if lastTransition.From != string(domain.StateReviewing) || lastTransition.To != string(domain.StateCommitting) {
+		t.Errorf("last transition = %+v, want REVIEWING -> COMMITTING", lastTransition)
 	}
 
 	// The Agent was invoked with the compiled Repository Context and the
@@ -279,8 +282,8 @@ func TestExecute_ReleasesWorkerClaimAfterRestingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 
 	if _, err := te.store.WorkerClaim(context.Background(), result.ExecutionID, "85"); !errors.Is(err, storage.ErrNotFound) {
@@ -288,10 +291,11 @@ func TestExecute_ReleasesWorkerClaimAfterRestingState(t *testing.T) {
 	}
 }
 
-// TestExecute_QualityGatesPass_AdvancesToReviewing is ticket 19's
+// TestExecute_QualityGatesPass_AdvancesToCommitting is ticket 19's
 // integration test: a fake Agent reports IMPLEMENTED, every configured
-// Quality Gate passes, and the Issue advances to REVIEWING.
-func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
+// Quality Gate passes, review auto-approves (no Reviewer wired), and the
+// Issue advances through REVIEWING to its COMMITTING resting state.
+func TestExecute_QualityGatesPass_AdvancesToCommitting(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"20": {ID: "20"},
 	})
@@ -310,8 +314,8 @@ func TestExecute_QualityGatesPass_AdvancesToReviewing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 	if calls, want := runner.Calls(), []string{"make test", "make lint"}; len(calls) != len(want) {
 		t.Fatalf("got %d gate calls, want %d: %v", len(calls), len(want), calls)
@@ -561,8 +565,8 @@ func TestExecute_ReadyMaterializedIssue_Executes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 }
 
@@ -585,8 +589,8 @@ func TestLoadStatus_ReflectsPersistedStateAfterExecute(t *testing.T) {
 	if report.Execution.ID != result.ExecutionID {
 		t.Errorf("report.Execution.ID = %s, want %s", report.Execution.ID, result.ExecutionID)
 	}
-	if len(report.Issues) != 1 || report.Issues[0].Issue.State != domain.StateReviewing {
-		t.Fatalf("report.Issues = %+v, want one Issue in REVIEWING", report.Issues)
+	if len(report.Issues) != 1 || report.Issues[0].Issue.State != domain.StateCommitting {
+		t.Fatalf("report.Issues = %+v, want one Issue in COMMITTING", report.Issues)
 	}
 	if len(report.Events) == 0 {
 		t.Error("report.Events is empty, want the full transition/event log")

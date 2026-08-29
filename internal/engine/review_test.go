@@ -184,19 +184,22 @@ func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed(t *te
 	}
 }
 
-func TestExecute_ReviewerUnset_ReviewingStaysRestingState(t *testing.T) {
+func TestExecute_ReviewerUnset_AutoApprovesToCommitting(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"32": {ID: "32"},
 	})
 	te.fake.ProgramResult("32", agent.AgentResult{Status: agent.StatusImplemented})
-	// te.eng.Reviewer intentionally left nil.
+	// te.eng.Reviewer intentionally left nil: with no Reviewer, runReview
+	// auto-approves once Quality Gates pass and advances to COMMITTING.
+	// Publisher/PRTracker are also unset here, so runCommitAndPR no-ops and
+	// COMMITTING is where the run rests.
 
 	result, err := te.eng.Execute(context.Background(), "32", te.base)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING (Reviewer unset, optional seam)", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING (Reviewer unset auto-approves; Publisher/PRTracker unset rest here)", result.Issue.State)
 	}
 }
 

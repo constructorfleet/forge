@@ -69,8 +69,8 @@ func TestRetryIssue_RefreshesBaseWhenTargetAdvanced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RetryIssue: %v", err)
 	}
-	if retried.State != domain.StateReviewing {
-		t.Fatalf("retried state = %s, want REVIEWING", retried.State)
+	if retried.State != domain.StateCommitting {
+		t.Fatalf("retried state = %s, want COMMITTING", retried.State)
 	}
 
 	events, err := te.store.EventsByIssue(ctx, result.ExecutionID, "70")

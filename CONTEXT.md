@@ -81,6 +81,33 @@ Separate counters for gate failures, review rejections, and CI failures. Each ha
 **Tracker Adapter**:
 The normalized interface to an external issue tracker (GitHub, GitLab, etc.). Scheduler-facing code contains no tracker-specific models.
 
+### Semantic navigation
+
+**Semantic Navigation**:
+Language-aware code exploration made available to an Agent — definitions, references, implementations, hover/type/signature, document and workspace symbols, and where available call and type hierarchy. Delivered capability-first: the harness's own tooling is used where present, and Forge supplies only the gap. Every result resolves to a source location the Agent can read.
+_Avoid_: LSP (as the domain concept — LSP is one implementation mechanism, not the capability)
+
+**Semantic Capabilities**:
+The set of semantic-navigation operations a backend exposes natively, recorded one flag per operation. Describes what the harness itself can already do, independent of any repository or language.
+
+**Injection Channel**:
+The mechanism by which Forge adds semantic navigation to a backend that lacks it — a Model Context Protocol server, a language-server plugin the harness loads, or none. A property of the backend, not of the language or repository.
+
+**Semantic Profile**:
+A backend's declared pairing of its Semantic Capabilities with its Injection Channel — the single fact the component fulfilling Semantic Navigation reads to decide, per capability, whether to rely on the harness or fill the gap. A backend that declares no profile receives no Semantic Navigation (a safe, inert default) rather than a broken one.
+
+**Language Server**:
+A language-specific server process (e.g. gopls for Go) that Forge starts against a Workspace to supply Semantic Navigation the harness lacks — the concrete backing of a Forge-managed Injection Channel. Distinct from the harness's own native tooling, and never run alongside a native server for the same language in one Workspace.
+
+**Language Server Registry**:
+The mapping from a detected language to the Language Server that serves it (Go → gopls). Seeded with built-in defaults and extended or overridden by configuration; detection gates which entries actually start, configuration supplies their command.
+
+**Semantic Provider**:
+The component that fulfils Semantic Navigation for a single agent invocation. Reading a backend's Semantic Profile and the worktree's detected Language Servers, it decides per capability whether to rely on the harness or fill the gap, owns the lifecycle of any Forge-managed Language Server, and is best-effort — a provisioning failure degrades to no Semantic Navigation rather than failing the work. Path-agnostic: any agent working in a filesystem context is a potential caller, though only execution Workers are served today.
+
+**Source Location**:
+A normalized reference to a point in the source — a file path and line (optionally column and end position) — that an Agent can hand directly to a file read. The common output currency of Semantic Navigation: every location-returning capability resolves to one, so results flow straight into the Agent's normal reading regardless of which provider produced them.
+
 ## Issue states
 
 PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · NEEDS_REPLAN · FAILED · DONE · CANCELLED

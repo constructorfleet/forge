@@ -107,8 +107,8 @@ func TestScenario14_RecoveryAfterLocalStateLoss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute after local state loss: %v", err)
 	}
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 	// The recovered Issue was reconstructed from the tracker, provenance and
 	// all: the new store now holds it.
