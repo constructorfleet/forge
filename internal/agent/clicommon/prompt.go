@@ -36,6 +36,26 @@ const Rules = "## Rules\n\n" +
 	"- Do NOT manage labels or other issue-tracker metadata.\n" +
 	"- Do NOT decide workflow state; Forge's orchestrator owns all workflow mechanics.\n"
 
+// TDDGuidance instructs every backend to implement the Issue test-first,
+// via the red (failing test) -> green (minimal implementation) loop, so
+// Issues are always implemented test-driven regardless of which Agent
+// Adapter runs them (see issue 105).
+const TDDGuidance = "## Development Approach\n\n" +
+	"Implement this Issue using Test-Driven Development: the red -> green " +
+	"loop. For each slice of behavior, write a failing test before writing " +
+	"the implementation that makes it pass, then move to the next slice. " +
+	"Do not write implementation code ahead of a test, and do not write a " +
+	"batch of tests before implementing any of them.\n\n" +
+	"- Test observable behavior through public interfaces (seams), not " +
+	"internal implementation details.\n" +
+	"- Mock only at true system boundaries (external APIs, databases, " +
+	"time/randomness) — never your own code or internal collaborators.\n" +
+	"- Avoid tautological tests whose expected value is computed the same " +
+	"way the implementation computes it; use independent, known-good " +
+	"expected values.\n" +
+	"- Work in vertical slices: one test, one minimal implementation, " +
+	"repeat. Refactoring happens after the loop, not during it.\n"
+
 // BuildPrompt renders req into the prompt handed to a backend, identified
 // by backendName only for readability in headers/comments — the content
 // itself is backend-independent. It draws on whatever the normalized Issue
@@ -105,6 +125,9 @@ func BuildPrompt(backendName string, req agent.AgentRequest) string {
 	}
 
 	b.WriteString(Rules)
+	b.WriteString("\n")
+
+	b.WriteString(TDDGuidance)
 	b.WriteString("\n")
 
 	if len(req.Feedback) > 0 {

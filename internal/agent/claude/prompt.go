@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/agent/clicommon"
 )
 
 // resultContract is the instruction appended to every prompt telling Claude
@@ -96,6 +97,9 @@ func buildPrompt(req agent.AgentRequest) string {
 	}
 
 	b.WriteString(rules)
+	b.WriteString("\n")
+
+	b.WriteString(clicommon.TDDGuidance)
 	b.WriteString("\n")
 
 	if len(req.Feedback) > 0 {
