@@ -162,10 +162,16 @@ func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot str
 // execute` invocation over issueIDs: the same tracker and Engine buildEngine
 // would construct for a single Issue, adapted to scheduler.Executor via
 // scheduler.Adapt, plus a completionResolver DependencyResolver and a
-// BaseResolver that always re-resolves cfg.Git.Base's current tip so a
-// dependency-blocked Issue that becomes ready later captures a base
-// containing whatever has landed on it since (CONTEXT.md "Execution":
-// Worker base captured at READY, not at Execution start).
+// dependencyBaseResolver BaseResolver.
+//
+// An Issue with no Dependencies (or only External ones) resolves to
+// cfg.Git.Base's current tip, as before. An Issue with one or more
+// Dependencies within issueIDs is instead based on its Dependencies'
+// resulting branches (a single Dependency's branch directly, or a
+// synthetic branch integrating several — see workspace.Manager.Integrate),
+// so its Worker sees its prerequisites' committed changes before it starts
+// (issue #108: dependency-ordered execution must also constrain what
+// repository state a dependent executes against, not merely when it runs).
 func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*scheduler.Scheduler, error) {
 	trk, err := buildTracker(cfg, repoRoot)
 	if err != nil {
@@ -177,10 +183,23 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		return nil, err
 	}
 
+	wsMgr, err := workspace.NewManager(repoRoot,
+		workspace.WithWorktreeRoot(cfg.Git.WorktreeRoot),
+		workspace.WithBranchTemplate(cfg.Git.BranchTemplate),
+		workspace.WithLocker(repolock.New(repoRoot)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("forge: workspace manager: %w", err)
+	}
+
 	resolver := newCompletionResolver(issueIDs, trk, cfg.Git.Base)
-	base := scheduler.BaseResolverFunc(func(context.Context, string) (string, error) {
-		return resolveBaseRevision(repoRoot, cfg.Git.Base)
-	})
+	base := &dependencyBaseResolver{
+		tracker:    trk,
+		resolver:   resolver,
+		workspaces: wsMgr,
+		repoRoot:   repoRoot,
+		gitBase:    cfg.Git.Base,
+	}
 
 	sch := scheduler.New(trk, scheduler.Adapt(eng), resolver, base, cfg.Execution.MaxParallel)
 	sch.OnComplete = resolver.onComplete
@@ -226,8 +245,13 @@ type completionResolver struct {
 	checker    tracker.ExternalChecker
 	baseBranch string
 
-	mu        sync.Mutex
-	completed map[string]domain.IssueState
+	mu sync.Mutex
+	// completed records each Managed prerequisite's terminal state and the
+	// Execution it ran under, once it reaches or beyond REVIEWING — the
+	// latter is what dependencyBaseResolver.CurrentBase needs to resolve
+	// that prerequisite's resulting branch via
+	// workspace.Manager.BranchName(executionID, issueID).
+	completed map[string]completionInfo
 	// external caches only checker's *terminal* answers (Satisfied,
 	// Invalid) per External Issue ID. EXTERNAL_PENDING is deliberately
 	// never cached: every Satisfied call for a still-pending External
@@ -239,6 +263,13 @@ type completionResolver struct {
 	external map[string]tracker.ExternalState
 }
 
+// completionInfo is what completionResolver records for each Managed
+// prerequisite once its Executor.Execute call returns.
+type completionInfo struct {
+	state       domain.IssueState
+	executionID string
+}
+
 func newCompletionResolver(issueIDs []string, checker tracker.ExternalChecker, baseBranch string) *completionResolver {
 	requested := make(map[string]bool, len(issueIDs))
 	for _, id := range issueIDs {
@@ -248,21 +279,21 @@ func newCompletionResolver(issueIDs []string, checker tracker.ExternalChecker, b
 		requested:  requested,
 		checker:    checker,
 		baseBranch: baseBranch,
-		completed:  map[string]domain.IssueState{},
+		completed:  map[string]completionInfo{},
 		external:   map[string]tracker.ExternalState{},
 	}
 }
 
 // onComplete is wired as the Scheduler's OnComplete hook: it records each
-// dispatched Issue's final state as it finishes, which Satisfied then
-// consults.
-func (r *completionResolver) onComplete(issueID string, state domain.IssueState, err error) {
+// dispatched Issue's final state and the Execution it ran under as it
+// finishes, which Satisfied and branchFor then consult.
+func (r *completionResolver) onComplete(issueID, executionID string, state domain.IssueState, err error) {
 	if err != nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.completed[issueID] = state
+	r.completed[issueID] = completionInfo{state: state, executionID: executionID}
 }
 
 func (r *completionResolver) Satisfied(ctx context.Context, _, dependsOnID string) (bool, error) {
@@ -271,8 +302,25 @@ func (r *completionResolver) Satisfied(ctx context.Context, _, dependsOnID strin
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	state, ok := r.completed[dependsOnID]
-	return ok && publishReadyStates[state], nil
+	info, ok := r.completed[dependsOnID]
+	return ok && publishReadyStates[info.state], nil
+}
+
+// branchFor resolves the resulting branch of a Managed prerequisite
+// (issueID) that has already been recorded satisfied by onComplete, via
+// workspaces.BranchName(executionID, issueID). ok is false if issueID has
+// not (yet) completed to a satisfied state — dependencyBaseResolver only
+// calls this once Scheduler has already confirmed Satisfied, so that
+// should never happen in practice, but branchFor reports it explicitly
+// rather than returning a nonsensical branch name.
+func (r *completionResolver) branchFor(issueID string, workspaces *workspace.Manager) (string, bool) {
+	r.mu.Lock()
+	info, ok := r.completed[issueID]
+	r.mu.Unlock()
+	if !ok || !publishReadyStates[info.state] {
+		return "", false
+	}
+	return workspaces.BranchName(info.executionID, issueID), true
 }
 
 // externalSatisfied resolves whether an External Issue (dependsOnID, not
@@ -302,6 +350,89 @@ func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID 
 		r.mu.Unlock()
 	}
 	return state == tracker.ExternalSatisfied, nil
+}
+
+// dependencyBaseResolver is the scheduler.BaseResolver `forge execute`
+// uses (issue #108): unlike a fixed-base resolver, it accounts for each
+// Issue's Dependencies within the requested execution set when resolving
+// what base its Workspace should be built on.
+//
+//   - No Dependencies (or only External ones, already required to be
+//     merged-and-reachable from gitBase before they satisfy — see
+//     completionResolver.externalSatisfied): resolves to gitBase's current
+//     tip, exactly as an Issue with no Dependencies always has.
+//   - One Managed Dependency: resolves directly to that Dependency's
+//     resulting branch (workspaces.BranchName via resolver.branchFor), so
+//     the dependent's Workspace is created from it — a stacked branch
+//     (main -> issue/A -> issue/B), not a fresh branch off gitBase that
+//     would leave A's committed work invisible to B's Worker.
+//   - More than one source (multiple Managed Dependencies, or a mix of
+//     Managed and External): integrates every source into one synthetic
+//     branch via workspaces.Integrate, so the dependent sees the union of
+//     all its Dependencies' results. A merge conflict between Dependencies
+//     surfaces as a *workspace.ConflictError, deterministically naming the
+//     offending branch and paths, rather than silently dropping one
+//     Dependency's changes.
+//
+// CurrentBase is only ever called for an Issue whose Dependencies
+// resolver.Resolver (DependencyResolver) has already reported Satisfied,
+// per Scheduler.Run's dispatch order — so every Managed Dependency here is
+// expected to already have a recorded branchFor entry.
+type dependencyBaseResolver struct {
+	tracker    scheduler.IssueFetcher
+	resolver   *completionResolver
+	workspaces *workspace.Manager
+	repoRoot   string
+	gitBase    string
+}
+
+func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string) (string, error) {
+	issue, err := b.tracker.GetIssue(ctx, issueID)
+	if err != nil {
+		return "", fmt.Errorf("forge: resolve base for issue %s: fetch issue: %w", issueID, err)
+	}
+	if len(issue.Dependencies) == 0 {
+		return resolveBaseRevision(b.repoRoot, b.gitBase)
+	}
+
+	var sources []string
+	hasExternal := false
+	for _, dep := range issue.Dependencies {
+		if !b.resolver.requested[dep.DependsOnID] {
+			hasExternal = true
+			continue
+		}
+		branch, ok := b.resolver.branchFor(dep.DependsOnID, b.workspaces)
+		if !ok {
+			return "", fmt.Errorf(
+				"forge: resolve base for issue %s: dependency %s has not completed", issueID, dep.DependsOnID)
+		}
+		sources = append(sources, branch)
+	}
+
+	if len(sources) == 0 {
+		// Every Dependency is External; those are only ever Satisfied once
+		// merged and reachable from gitBase (completionResolver.externalSatisfied),
+		// so gitBase's current tip already contains their results.
+		return resolveBaseRevision(b.repoRoot, b.gitBase)
+	}
+
+	if hasExternal {
+		// A mix of Managed and External Dependencies: fold gitBase's
+		// current tip in alongside the Managed branches so an External
+		// Dependency's merged code is included too, in case it landed
+		// after the Managed branch(es) were created.
+		baseTip, err := resolveBaseRevision(b.repoRoot, b.gitBase)
+		if err != nil {
+			return "", err
+		}
+		sources = append(sources, baseTip)
+	}
+
+	if len(sources) == 1 {
+		return sources[0], nil
+	}
+	return b.workspaces.Integrate(ctx, issueID, sources)
 }
 
 // buildTracker constructs the GitHub tracker.Tracker adapter for repoRoot,

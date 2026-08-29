@@ -15,7 +15,10 @@ Forge's normalized representation of an issue-tracker item. All internal code op
 _Avoid_: Ticket, task, item
 
 **Dependency**:
-A directed relationship indicating that one Issue must complete before another can begin. Dependencies form a DAG; cycles are errors. A Dependency is satisfied only when the prerequisite Issue's PR is merged into the applicable base — not when implementation is locally complete, and not when CI goes green.
+A directed relationship indicating that one Issue must complete before another can begin. Dependencies form a DAG; cycles are errors. A Dependency is satisfied only when the prerequisite Issue's PR is merged into the applicable base — not when implementation is locally complete, and not when CI goes green. A Dependency governs both *when* the dependent Issue may run and *what repository state* it runs against: a dependent with one or more Dependencies within the Execution set starts from its Dependencies' resulting branches (a single Dependency's branch directly, or an Integration Branch when there is more than one), not the Execution's original base branch.
+
+**Integration Branch**:
+A synthetic branch (`forge/integration/<issue>`) built by merging several Dependencies' branches together for an Issue with more than one Dependency, so that Issue's Worker starts from a repository state containing all of them. Recomputed from scratch each time it's needed; a merge conflict between Dependencies aborts and surfaces deterministically rather than dropping one side.
 
 **Dependency Source**:
 Where a Dependency relationship originates. The canonical source is a `## Dependencies` block in the issue body; `.forge.yaml` overrides take precedence when present. The Scheduler consumes normalized Dependencies regardless of source.

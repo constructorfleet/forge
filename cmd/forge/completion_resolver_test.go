@@ -60,7 +60,7 @@ func TestCompletionResolver_ManagedDependency_SatisfiedAtOrBeyondReviewing(t *te
 		t.Fatal("expected unsatisfied before prerequisite completes")
 	}
 
-	r.onComplete("1", domain.StateReviewing, nil)
+	r.onComplete("1", "exec-1", domain.StateReviewing, nil)
 
 	ok, err = r.Satisfied(context.Background(), "2", "1")
 	if err != nil {
@@ -73,7 +73,7 @@ func TestCompletionResolver_ManagedDependency_SatisfiedAtOrBeyondReviewing(t *te
 
 func TestCompletionResolver_ManagedDependency_FailedNeverSatisfies(t *testing.T) {
 	r := newCompletionResolver([]string{"1", "2"}, newStubExternalChecker(), "origin/main")
-	r.onComplete("1", domain.StateFailed, nil)
+	r.onComplete("1", "exec-1", domain.StateFailed, nil)
 
 	ok, err := r.Satisfied(context.Background(), "2", "1")
 	if err != nil {

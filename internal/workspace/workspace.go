@@ -547,3 +547,173 @@ func (m *Manager) withGitMetadataLock(ctx context.Context, fn func() error) erro
 	}
 	return m.locker.WithLock(ctx, "git-metadata", fn)
 }
+
+// BranchName returns the branch name Create would use (or already used)
+// for executionID/issueID, without touching git. Callers that need to
+// reference a completed Issue's resulting branch — e.g. to base a
+// dependent Issue's Workspace on it — derive it from this rather than
+// hand-formatting branchTemplate themselves.
+func (m *Manager) BranchName(executionID, issueID string) string {
+	return m.branch(executionID, issueID)
+}
+
+// ConflictError is returned by Integrate when merging branch into the
+// integration branch hits a conflict. It is returned instead of a plain
+// error so callers can report which dependency branch conflicted and
+// exactly which paths, deterministically, rather than a raw git failure.
+type ConflictError struct {
+	// Branch is the dependency branch whose merge conflicted.
+	Branch string
+	// Paths lists the conflicting paths.
+	Paths []string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("workspace: merge conflict integrating %s: %d conflicting path(s): %s",
+		e.Branch, len(e.Paths), strings.Join(e.Paths, ", "))
+}
+
+// integrationBranch is the branch name Integrate uses for name (typically
+// a dependent Issue's ID). It lives in its own namespace, separate from
+// branchTemplate's per-Execution/per-Issue branches, since an integration
+// branch is not itself the result of any one Execution.
+func (m *Manager) integrationBranch(name string) string {
+	return "forge/integration/" + name
+}
+
+// integrationPath is the worktree directory Integrate uses while computing
+// the merge for name, under worktreeRoot/integration/<name> — outside the
+// executionID/issueID path scheme Create/Cleanup use, so it never collides
+// with a real per-Issue Workspace.
+func (m *Manager) integrationPath(name string) string {
+	root := m.worktreeRoot
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(m.repoRoot, root)
+	}
+	return filepath.Join(root, "integration", name)
+}
+
+// destroyIntegrationLocked removes the worktree at path and, if branchName
+// exists, the branch itself. Called both to clear a stale integration
+// worktree/branch before recomputing it and to clean up after a failed
+// merge. Must be called with m.mu already held.
+func (m *Manager) destroyIntegrationLocked(ctx context.Context, path, branchName string) error {
+	if _, ok, err := m.lookupWorktree(ctx, path); err != nil {
+		return err
+	} else if ok {
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("workspace: remove integration dir %s: %w", path, err)
+	}
+	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
+		return err
+	}
+	if exists, err := m.branchExists(ctx, branchName); err != nil {
+		return err
+	} else if exists {
+		if _, err := m.runGit(ctx, m.repoRoot, "branch", "-D", "--", branchName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Integrate builds (or rebuilds) a synthetic integration branch containing
+// every commit on every branch in branches, for an Issue with more than one
+// Dependency within the same Execution set (CONTEXT.md "Dependency"): the
+// dependent's Workspace must be built on a repository state containing all
+// of its Dependencies' results, not just one.
+//
+// It starts the integration branch at branches[0] and merges each
+// subsequent branch in with `git merge --no-ff`. name identifies the
+// dependent Issue and namespaces the resulting branch
+// ("forge/integration/<name>"); it is recomputed from scratch on every
+// call (any prior integration branch/worktree for name is discarded first)
+// so it always reflects the current tips of branches rather than a stale
+// merge from an earlier attempt.
+//
+// A conflict-free integration returns the new branch name and nil. A
+// merge conflict aborts that merge, discards the partially-built
+// integration branch entirely (never leaving a broken or partial one
+// behind), and returns a *ConflictError identifying the offending branch
+// and its conflicting paths — Integrate must never silently drop a
+// Dependency's changes or leave the caller unable to explain what
+// happened.
+func (m *Manager) Integrate(ctx context.Context, name string, branches []string) (string, error) {
+	if err := validateID("name", name); err != nil {
+		return "", err
+	}
+	if len(branches) < 2 {
+		return "", fmt.Errorf("workspace: integrate %s: at least two branches are required, got %d", name, len(branches))
+	}
+
+	branchName := m.integrationBranch(name)
+	path := m.integrationPath(name)
+
+	err := m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+
+		if err := m.destroyIntegrationLocked(ctx, path, branchName); err != nil {
+			return fmt.Errorf("workspace: integrate %s: clear stale integration state: %w", name, err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("workspace: create parent dir for %s: %w", path, err)
+		}
+
+		// "--" terminates option parsing so a branch name that happens to
+		// start with "-" is never misread as a git worktree add flag.
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "add", "-b", branchName, "--", path, branches[0]); err != nil {
+			return fmt.Errorf("workspace: integrate %s: create integration branch from %s: %w", name, branches[0], err)
+		}
+
+		for _, branch := range branches[1:] {
+			if _, mergeErr := m.runGit(ctx, path, "merge", "--no-ff", "--no-edit", "--", branch); mergeErr != nil {
+				paths, cErr := m.conflictedPaths(ctx, path)
+				if cErr != nil {
+					return errors.Join(mergeErr, cErr)
+				}
+				// Best-effort abort before tearing the worktree down, so a
+				// conflicted merge never lingers even if destroyIntegrationLocked
+				// below fails partway through.
+				_, _, _ = m.runner.Run(ctx, path, "merge", "--abort")
+
+				if len(paths) == 0 {
+					// Not an ordinary content conflict (e.g. branch itself
+					// doesn't resolve) — surface the original git failure,
+					// still after cleaning up the partial worktree/branch.
+					if destroyErr := m.destroyIntegrationLocked(ctx, path, branchName); destroyErr != nil {
+						return errors.Join(mergeErr, destroyErr)
+					}
+					return fmt.Errorf("workspace: integrate %s: merge %s: %w", name, branch, mergeErr)
+				}
+
+				conflictErr := &ConflictError{Branch: branch, Paths: paths}
+				if destroyErr := m.destroyIntegrationLocked(ctx, path, branchName); destroyErr != nil {
+					return errors.Join(conflictErr, destroyErr)
+				}
+				return conflictErr
+			}
+		}
+
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("workspace: remove integration dir %s: %w", path, err)
+		}
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return branchName, nil
+}
