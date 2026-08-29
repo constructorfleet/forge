@@ -5,6 +5,7 @@
 package claude
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,16 @@ var _ agent.Agent = (*Adapter)(nil)
 // ctx cancellation by killing the subprocess. Tests inject a fake Runner so
 // they never shell out to a real claude binary; production code uses
 // defaultRunner.
-type Runner func(ctx context.Context, dir string, args []string, stdin string, env []string) (stdout, stderr string, exitCode int, err error)
+//
+// onLine, when non-nil, is invoked with each stdout line as it is produced
+// (issue 36) — the seam that lets Execute parse and persist the transcript
+// incrementally, so a killed/timed-out run keeps its events up to the
+// moment of the kill rather than losing them to end-of-run batch capture.
+// The returned stdout is still the full (bounded) capture for diagnostics
+// and the non-stream fallback. Implementations may call onLine from the
+// same goroutine that runs the subprocess; Execute's handler is safe for
+// that and never panics back out.
+type Runner func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(line string)) (stdout, stderr string, exitCode int, err error)
 
 // maxDiagnosticLen bounds how much of stdout/stderr is folded into an
 // AgentResult.Summary for FAILED outcomes, keeping diagnostics readable and
@@ -150,13 +160,35 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	}
 	args := []string{claudePrintFlag, "--permission-mode", permissionMode}
 	args = append(args, streamingArgs...)
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, args, prompt, env)
+
+	// Parse the stream-json output incrementally, as each line arrives, so
+	// transcript events (and their real per-event timestamps) are captured
+	// and persisted from the very first turn and up to the moment a
+	// killed/timed-out run is cut off (issue 36) — not reconstructed after
+	// the fact from a tail-truncated buffer that has already lost the run's
+	// opening events.
+	now := a.Now
+	if now == nil {
+		now = time.Now
+	}
+	parser := newStreamParser(req.Transcript, now)
+	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, args, prompt, env, parser.consume)
 
 	// finalText is the reconstructed equivalent of what `-p` alone would
-	// have printed (see extractFinalText); every downstream use of the raw
-	// stdout capture below is replaced with it so transcript capture is
-	// transparent to existing diagnostics and result parsing.
-	finalText := a.extractFinalText(stdout, req.Transcript)
+	// have printed; every downstream use of the raw stdout capture below is
+	// replaced with it so transcript capture is transparent to existing
+	// diagnostics and result parsing. A recognized stream yields the
+	// streamed result; a non-stream or capture-aborted run degrades to raw
+	// stdout, exactly matching this Adapter's pre-transcript behavior.
+	if !parser.parsedAny && !parser.aborted {
+		// The Runner delivered nothing through onLine (e.g. a test double
+		// that returns canned stdout without streaming). Fall back to
+		// parsing the captured buffer so those callers still get capture.
+		for _, line := range strings.Split(stdout, "\n") {
+			parser.consume(line)
+		}
+	}
+	finalText := parser.reconstructedFinalText(stdout)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return agent.AgentResult{
@@ -216,37 +248,6 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: unrecognized status %q", res.Status), stdout, stderr),
 		}, nil
 	}
-}
-
-// extractFinalText recovers the final response text from stdout — the
-// same text `-p` alone would have printed — by parsing it as
-// `--output-format stream-json --verbose` output, and, when sink is
-// non-nil, emitting a TranscriptEvent for every message/tool call/tool
-// result it recognizes along the way (ticket 28).
-//
-// Parsing is entirely best-effort: any failure to recognize the stream —
-// including a panic from a malformed line this code doesn't anticipate —
-// falls back to treating stdout itself as the final text, exactly matching
-// this Adapter's pre-transcript behavior, so a streaming-parse bug can
-// never change an Issue's outcome (ticket 28's degrade-gracefully
-// requirement).
-func (a *Adapter) extractFinalText(stdout string, sink agent.TranscriptSink) (finalText string) {
-	finalText = stdout
-	defer func() {
-		if r := recover(); r != nil {
-			finalText = stdout
-		}
-	}()
-
-	now := a.Now
-	if now == nil {
-		now = time.Now
-	}
-	text, ok := parseStreamTranscript(stdout, sink, now)
-	if !ok {
-		return stdout
-	}
-	return text
 }
 
 func toTokenUsage(in *usageFields) *agent.TokenUsage {
@@ -321,7 +322,7 @@ func (a *Adapter) defaultRunner() Runner {
 	if executable == "" {
 		executable = "claude"
 	}
-	return func(ctx context.Context, dir string, args []string, stdin string, env []string) (string, string, int, error) {
+	return func(ctx context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
 		cmd := exec.CommandContext(ctx, executable, args...)
 		cmd.Dir = dir
 		cmd.Env = env
@@ -330,13 +331,41 @@ func (a *Adapter) defaultRunner() Runner {
 		// Bounded, tail-preserving writers (internal/textcap, shared with
 		// internal/gate): an unbounded bytes.Buffer here would let a
 		// runaway subprocess force Forge to hold arbitrarily large output
-		// in memory (see maxCapturedOutputLen).
-		stdout := textcap.NewTailWriter(maxCapturedOutputLen)
+		// in memory (see maxCapturedOutputLen). stdout is still captured in
+		// full (bounded) for diagnostics and the non-stream fallback; onLine
+		// additionally sees each line live as it is produced (issue 36).
+		stdoutTail := textcap.NewTailWriter(maxCapturedOutputLen)
 		stderr := textcap.NewTailWriter(maxCapturedOutputLen)
-		cmd.Stdout = stdout
 		cmd.Stderr = stderr
 
-		err := cmd.Run()
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return "", stderr.String(), -1, err
+		}
+		if err := cmd.Start(); err != nil {
+			return "", stderr.String(), -1, err
+		}
+
+		// Read stdout to EOF before Wait (required by StdoutPipe's
+		// contract), delivering each line to onLine as it arrives and
+		// mirroring it into the bounded tail. bufio.Reader.ReadString grows
+		// to hold an arbitrarily long single line (a large tool result on
+		// one JSON line), unlike bufio.Scanner's fixed token cap.
+		reader := bufio.NewReader(stdoutPipe)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if len(line) > 0 {
+				_, _ = stdoutTail.Write([]byte(line))
+				if onLine != nil {
+					onLine(strings.TrimRight(line, "\r\n"))
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+
+		err = cmd.Wait()
 		exitCode := 0
 		if err != nil {
 			// An *exec.ExitError means the subprocess ran and exited
@@ -351,6 +380,6 @@ func (a *Adapter) defaultRunner() Runner {
 				err = nil
 			}
 		}
-		return stdout.String(), stderr.String(), exitCode, err
+		return stdoutTail.String(), stderr.String(), exitCode, err
 	}
 }

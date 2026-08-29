@@ -9,7 +9,7 @@ import (
 
 func TestExecute_PropagatesOptionalTokenUsage(t *testing.T) {
 	adapter := &Adapter{
-		Runner: func(context.Context, string, []string, string, []string) (string, string, int, error) {
+		Runner: func(context.Context, string, []string, string, []string, func(string)) (string, string, int, error) {
 			return "```json\n" +
 				`{"status":"IMPLEMENTED","summary":"done","usage":{"input_tokens":12,"output_tokens":3}}` +
 				"\n```\n", "", 0, nil
