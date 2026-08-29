@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/constructorfleet/forge/compare/forge-v0.3.0...forge-v0.4.0) (2026-08-29)
+
+
+### Features
+
+* **specengine:** 16-18 — Specification + TicketPlan pipeline ([#63](https://github.com/constructorfleet/forge/issues/63)) ([a4d22d2](https://github.com/constructorfleet/forge/commit/a4d22d236bb46071a8dccaf5dbacb37c807995a3))
+
 ## [0.3.0](https://github.com/constructorfleet/forge/compare/forge-v0.2.0...forge-v0.3.0) (2026-08-29)
 
 
