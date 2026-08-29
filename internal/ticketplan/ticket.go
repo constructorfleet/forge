@@ -14,6 +14,7 @@ type Ticket struct {
 	Requirements       []string
 	AcceptanceCriteria []string
 	Dependencies       []string
+	Estimate           *planning.TicketEstimate
 }
 
 func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
@@ -106,6 +107,15 @@ func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
 						}
 					}
 				}
+			}
+		}
+
+		// Parse Estimate from artifact metadata
+		if artifact.Estimates != nil {
+			if est, ok := artifact.Estimates[key]; ok {
+				// Copy the estimate to avoid pointer issues
+				estCopy := est
+				ticket.Estimate = &estCopy
 			}
 		}
 

@@ -67,6 +67,16 @@ func ValidateTicketPlanDeterministic(
 				return errInvalidRequirementRef(t.Key, req)
 			}
 		}
+
+		// Validate estimate if present
+		if t.Estimate != nil {
+			if t.Estimate.Size == "" {
+				return fmt.Errorf("ticket-plan: ticket %s has estimate with empty size", t.Key)
+			}
+			if !planning.ValidEstimateSizes[t.Estimate.Size] {
+				return fmt.Errorf("ticket-plan: ticket %s has invalid estimate size %q (must be S, M, L, or XL)", t.Key, t.Estimate.Size)
+			}
+		}
 	}
 
 	// Build dependency graph and validate

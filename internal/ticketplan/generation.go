@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
 )
 
 type TicketGenResult struct {
-	Key                string   `json:"key"`
-	Objective          string   `json:"objective"`
-	Requirements       []string `json:"requirements"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	Dependencies       []string `json:"dependencies"`
+	Key                string                   `json:"key"`
+	Objective          string                   `json:"objective"`
+	Requirements       []string                 `json:"requirements"`
+	AcceptanceCriteria []string                 `json:"acceptance_criteria"`
+	Dependencies       []string                 `json:"dependencies"`
+	Estimate           *planning.TicketEstimate `json:"estimate,omitempty"`
 }
 
 type TicketPlanGenerationResult struct {
@@ -78,18 +80,22 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "2. **objective** - Clear, measurable objective for this ticket\n"
 	prompt += "3. **requirements** - List of requirement IDs (REQ-NNN) this ticket addresses (at least one)\n"
 	prompt += "4. **acceptance_criteria** - List of measurable acceptance criteria (at least one)\n"
-	prompt += "5. **dependencies** - List of other ticket keys this ticket depends on (empty if none)\n\n"
+	prompt += "5. **dependencies** - List of other ticket keys this ticket depends on (empty if none)\n"
+	prompt += "6. **estimate** - Optional effort/complexity estimate with:\n"
+	prompt += "   - **size** - One of: S, M, L, XL (required if estimate provided)\n"
+	prompt += "   - **risk** - Optional risk hint (e.g., \"new_tech\", \"unknown_deps\", \"complex_refactor\")\n\n"
 	prompt += "Rules:\n"
 	prompt += "- Keys must be sequential (TKT-001, TKT-002, ...)\n"
 	prompt += "- Dependencies must only reference other ticket keys (TKT-NNN), never decision IDs\n"
 	prompt += "- No self-dependencies or cycles\n"
 	prompt += "- Every requirement from the spec must be covered by at least one ticket\n"
-	prompt += "- Every ticket must reference at least one requirement\n\n"
+	prompt += "- Every ticket must reference at least one requirement\n"
+	prompt += "- If estimate is provided, size must be S, M, L, or XL\n\n"
 	prompt += "Return your response as a JSON object in a fenced code block:\n"
 	prompt += "```json\n"
 	prompt += "{\n"
 	prompt += `  "tickets": [` + "\n"
-	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": []},` + "\n"
+	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
 	prompt += `    ...` + "\n"
 	prompt += `  ]` + "\n"
 	prompt += "}\n"
@@ -146,6 +152,15 @@ func validateTicketPlanGenerationResult(r TicketPlanGenerationResult) error {
 			}
 			if dep == t.Key {
 				return fmt.Errorf("ticket %s has self-dependency", t.Key)
+			}
+		}
+
+		if t.Estimate != nil {
+			if t.Estimate.Size == "" {
+				return fmt.Errorf("ticket %s has estimate with empty size", t.Key)
+			}
+			if !planning.ValidEstimateSizes[t.Estimate.Size] {
+				return fmt.Errorf("ticket %s has invalid estimate size %q (must be S, M, L, or XL)", t.Key, t.Estimate.Size)
 			}
 		}
 

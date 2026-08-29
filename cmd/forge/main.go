@@ -33,7 +33,8 @@ Commands:
   retry <execution>/<issue> Retry a FAILED Issue within its Execution
   resume <execution-id>    Reconcile and continue an incomplete Execution
   plan <feature-id>        Run the planning compiler pipeline for a Feature
-  approve <feature-id> spec  Approve a Specification at its current revision
+  approve <feature-id> spec   Approve a Specification at its current revision
+  approve <feature-id> tickets  Approve a Ticket Plan at its current revision
   help                     Show this help text
 
 Run 'forge <command> --help' for command-specific flags.
@@ -70,6 +71,9 @@ func run(args []string) int {
 	case "plan":
 		return runPlan(rest)
 	case "approve":
+		if len(rest) > 0 && rest[0] == "tickets" {
+			return runApproveTickets(rest[1:])
+		}
 		return runApprove(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "forge: unknown command %q\n\n", cmd)
@@ -305,6 +309,74 @@ func runApprove(args []string) int {
 	return 0
 }
 
+const approveTicketsUsage = `Usage: forge approve <feature-id> tickets
+
+Approve a Ticket Plan at its current revision. The approval binds to the
+ticket plan's content revision (computed from Kind, DerivedFrom, and Sections).
+If the ticket plan's definitional content is edited, its revision changes and
+the approval is automatically invalidated.
+
+This command requires that the Ticket Plan has passed automated review
+(VerdictApproved from TicketPlanReview).
+`
+
+func runApproveTickets(args []string) int {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprint(os.Stdout, approveTicketsUsage)
+		return 0
+	}
+
+	featureID := args[0]
+
+	ctx := context.Background()
+
+	dsn := filepath.Join(".forge", "forge.db")
+	store, err := storage.Open(dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "storage.Open: %v\n", err)
+		return 1
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Migrate: %v\n", err)
+		return 1
+	}
+
+	loader := &fileArtifactLoader{featureID: featureID}
+
+	// Load the ticket plan
+	tpArtifact, err := loader.LoadTicketPlan(ctx, featureID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge approve tickets: load ticket plan: %v\n", err)
+		return 1
+	}
+	if tpArtifact == nil {
+		fmt.Fprintf(os.Stderr, "forge approve tickets: no ticket plan found for feature %s\n", featureID)
+		return 1
+	}
+
+	// Check if ticket plan is a valid ticket plan
+	if tpArtifact.Kind != planning.KindTicketPlan {
+		fmt.Fprintf(os.Stderr, "forge approve tickets: artifact is not a ticket plan\n")
+		return 1
+	}
+
+	// Compute current revision and set as approved
+	currentRev := planning.ComputeRevision(tpArtifact)
+	tpArtifact.ApprovedRevision = currentRev
+	tpArtifact.State = "approved"
+
+	// Save the approved ticket plan
+	if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
+		fmt.Fprintf(os.Stderr, "forge approve tickets: save ticket plan: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "ticket-plan.md approved for feature %s at revision %s\n", featureID, currentRev[:16])
+	return 0
+}
+
 type fileArtifactLoader struct {
 	featureID string
 }
@@ -361,6 +433,18 @@ func (f *fileArtifactLoader) SaveSpec(ctx context.Context, featureID string, spe
 
 func (f *fileArtifactLoader) LoadSpec(ctx context.Context, featureID string) (*planning.Artifact, error) {
 	path := filepath.Join(".forge", "features", featureID, "spec.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return planning.Parse(data)
+}
+
+func (f *fileArtifactLoader) LoadTicketPlan(ctx context.Context, featureID string) (*planning.Artifact, error) {
+	path := filepath.Join(".forge", "features", featureID, "ticket-plan.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

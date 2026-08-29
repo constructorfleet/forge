@@ -108,6 +108,61 @@ func TestTicketPlanGeneration(t *testing.T) {
 	}
 }
 
+func TestTicketPlanGenerationWithEstimates(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully", "All unit tests pass"],
+				"dependencies": [],
+				"estimate": {"size": "S"}
+			},
+			{
+				"key": "TKT-002",
+				"objective": "Add widget integration tests",
+				"requirements": ["REQ-002"],
+				"acceptance_criteria": ["Integration tests pass", "Coverage > 80%"],
+				"dependencies": ["TKT-001"],
+				"estimate": {"size": "L", "risk": "complex_refactor"}
+			}
+		]
+	}`+"\n```\n")
+
+	res, err := Generate(context.Background(), backend, pc)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if len(res.Tickets) != 2 {
+		t.Fatalf("len(tickets) = %d, want 2", len(res.Tickets))
+	}
+
+	if res.Tickets[0].Estimate == nil {
+		t.Fatal("tickets[0].estimate is nil, want S")
+	}
+	if res.Tickets[0].Estimate.Size != "S" {
+		t.Errorf("tickets[0].estimate.size = %q, want S", res.Tickets[0].Estimate.Size)
+	}
+	if res.Tickets[0].Estimate.Risk != "" {
+		t.Errorf("tickets[0].estimate.risk = %q, want empty", res.Tickets[0].Estimate.Risk)
+	}
+
+	if res.Tickets[1].Estimate == nil {
+		t.Fatal("tickets[1].estimate is nil, want L with risk")
+	}
+	if res.Tickets[1].Estimate.Size != "L" {
+		t.Errorf("tickets[1].estimate.size = %q, want L", res.Tickets[1].Estimate.Size)
+	}
+	if res.Tickets[1].Estimate.Risk != "complex_refactor" {
+		t.Errorf("tickets[1].estimate.risk = %q, want complex_refactor", res.Tickets[1].Estimate.Risk)
+	}
+}
+
 func TestTicketPlanGenerationValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -183,6 +238,21 @@ func TestTicketPlanGenerationValidation(t *testing.T) {
 			name:    "valid",
 			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]},{"key":"TKT-002","objective":"obj2","requirements":["REQ-002"],"acceptance_criteria":["ac2"],"dependencies":["TKT-001"]}]}`,
 			wantErr: false,
+		},
+		{
+			name:    "valid_with_estimates",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"estimate":{"size":"S"}},{"key":"TKT-002","objective":"obj2","requirements":["REQ-002"],"acceptance_criteria":["ac2"],"dependencies":["TKT-001"],"estimate":{"size":"M","risk":"new_tech"}}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "invalid_estimate_size",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"estimate":{"size":"XXL"}}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty_estimate_size",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"estimate":{"size":""}}]}`,
+			wantErr: true,
 		},
 	}
 

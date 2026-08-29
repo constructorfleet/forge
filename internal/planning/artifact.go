@@ -39,7 +39,7 @@ type Section struct {
 //
 // Revision, State, ApprovedRevision, ApprovedBy, and ApprovedAt are
 // workflow fields: they record process state but do not participate in the
-// content revision. Kind, DerivedFrom, and Sections are definitional: they
+// content revision. Kind, DerivedFrom, Estimates, and Sections are definitional: they
 // are exactly what ComputeRevision hashes.
 type Artifact struct {
 	Kind Kind
@@ -59,5 +59,6 @@ type Artifact struct {
 	ApprovedAt       string
 
 	DerivedFrom []DerivedFromEntry
+	Estimates   map[string]TicketEstimate
 	Sections    []Section
 }

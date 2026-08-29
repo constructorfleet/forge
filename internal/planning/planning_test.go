@@ -16,6 +16,7 @@ func sampleArtifact() *planning.Artifact {
 			{Kind: planning.KindDecision, ID: "001-foo", Revision: "bbb"},
 			{Kind: planning.KindGoal, ID: "goal", Revision: "aaa"},
 		},
+		Estimates: make(map[string]planning.TicketEstimate),
 		Sections: []planning.Section{
 			{Heading: "Question", Body: "Where does Dependency metadata live?"},
 			{Heading: "Answer", Body: "Tracker-local by default."},
