@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/constructorfleet/forge/compare/forge-v0.7.1...forge-v0.8.0) (2026-08-29)
+
+
+### Features
+
+* lsp: config surface ([#118](https://github.com/constructorfleet/forge/issues/118)) ([d1a6a4c](https://github.com/constructorfleet/forge/commit/d1a6a4c38ca9649a059c057e5f250b503bcd66bc)), closes [#86](https://github.com/constructorfleet/forge/issues/86)
+
 ## [0.7.1](https://github.com/constructorfleet/forge/compare/forge-v0.7.0...forge-v0.7.1) (2026-08-29)
 
 
