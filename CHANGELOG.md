@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/constructorfleet/forge/compare/forge-v0.7.0...forge-v0.7.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* [Feature Request]: Monitor and Rectify PRs After Creation ([#115](https://github.com/constructorfleet/forge/issues/115)) ([eaf8c56](https://github.com/constructorfleet/forge/commit/eaf8c56e88dadf39e44d6c4a907dd835a72841a7)), closes [#109](https://github.com/constructorfleet/forge/issues/109)
+
 ## [0.7.0](https://github.com/constructorfleet/forge/compare/forge-v0.6.0...forge-v0.7.0) (2026-08-29)
 
 
