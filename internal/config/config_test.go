@@ -737,6 +737,58 @@ func TestLoad_LSPUnknownProviderCapabilityKeyRejected(t *testing.T) {
 	}
 }
 
+func TestDefault_LSPReadinessAndRestartDefaults(t *testing.T) {
+	cfg := Default()
+	if cfg.LSP.ReadinessTimeout != 30*time.Second {
+		t.Errorf("LSP.ReadinessTimeout = %v, want 30s", cfg.LSP.ReadinessTimeout)
+	}
+	if cfg.LSP.RestartLimit != 1 {
+		t.Errorf("LSP.RestartLimit = %d, want 1", cfg.LSP.RestartLimit)
+	}
+	if err := validate(cfg); err != nil {
+		t.Errorf("validate(Default()) = %v, want nil", err)
+	}
+}
+
+func TestLoad_LSPReadinessTimeoutAndRestartLimitOverride(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  readiness_timeout: 10s\n  restart_limit: 3\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LSP.ReadinessTimeout != 10*time.Second {
+		t.Errorf("LSP.ReadinessTimeout = %v, want 10s", cfg.LSP.ReadinessTimeout)
+	}
+	if cfg.LSP.RestartLimit != 3 {
+		t.Errorf("LSP.RestartLimit = %d, want 3", cfg.LSP.RestartLimit)
+	}
+}
+
+func TestLoad_LSPNonPositiveReadinessTimeoutRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  readiness_timeout: 0s\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.readiness_timeout") {
+		t.Errorf("Load() error = %v, want it to identify lsp.readiness_timeout", err)
+	}
+}
+
+func TestLoad_LSPNegativeRestartLimitRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  restart_limit: -1\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.restart_limit") {
+		t.Errorf("Load() error = %v, want it to identify lsp.restart_limit", err)
+	}
+}
+
 func TestLoad_NoSecretsFieldsExist(t *testing.T) {
 	// Structural guard: config carries no token/password/secret fields.
 	// Anything auth-related must be sourced from the environment at use

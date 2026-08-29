@@ -186,6 +186,13 @@ func validate(cfg Config) error {
 		}
 	}
 
+	if cfg.LSP.ReadinessTimeout <= 0 {
+		errs = append(errs, fieldErr("lsp.readiness_timeout", fmt.Sprint(cfg.LSP.ReadinessTimeout), "must be > 0"))
+	}
+	if cfg.LSP.RestartLimit < 0 {
+		errs = append(errs, fieldErr("lsp.restart_limit", fmt.Sprint(cfg.LSP.RestartLimit), "must be >= 0"))
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}
