@@ -49,17 +49,18 @@ const defaultCommitMessageTemplate = "{title}\n\nRefs #{issue}"
 // entered once Review approves an implementation (or, with no Reviewer
 // configured, once Quality Gates pass — see runReview): commit the
 // Workspace's validated work (Publisher.Commit) with a configurable
-// message template, push the branch (Publisher.Push), create or recover a
-// pull request (PRTracker.CreatePullRequest, idempotent by head branch),
-// persist the PR id/url and commit SHA, and transition the Issue through
-// PR_CREATING to CI_PENDING.
+// message template, push the branch (Publisher.Push), guard against an
+// empty diff (see guardEmptyDiff), create or recover a pull request
+// (PRTracker.CreatePullRequest, idempotent by head branch), persist the PR
+// id/url and commit SHA, and transition the Issue through PR_CREATING to
+// CI_PENDING.
 //
 // Both Publisher and PRTracker are optional seams, like Reviewer/Diff
 // before them (see Engine.Reviewer's doc comment): nil leaves COMMITTING a
 // resting state — this ticket's predecessor behavior — so existing callers
 // of New keep compiling and behaving unchanged until cmd/forge wires
 // production implementations.
-func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID string, ws domain.Workspace, issue domain.Issue) (domain.Issue, error) {
+func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, workerBase string, ws domain.Workspace, issue domain.Issue) (domain.Issue, error) {
 	if e.Publisher == nil || e.PRTracker == nil {
 		return issue, nil
 	}
@@ -82,6 +83,14 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID string
 		"branch": ws.Branch,
 	}); err != nil {
 		return domain.Issue{}, err
+	}
+
+	issue, guarded, err := e.guardEmptyDiff(ctx, executionID, issueID, workerBase, ws.Path, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if guarded {
+		return issue, nil
 	}
 
 	issue, err = e.transition(ctx, executionID, issueID, domain.StatePRCreating)
@@ -111,6 +120,40 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID string
 	}
 
 	return e.transition(ctx, executionID, issueID, domain.StateCIPending)
+}
+
+// guardEmptyDiff is the empty-diff pre-PR guard: after the Workspace is
+// committed and pushed, it re-derives the diff against workerBase (the same
+// DiffProducer seam runReview uses) and, if the Agent's overall change set
+// is empty, fails the Issue instead of letting runCommitAndPR open a
+// pull request with nothing in it. This catches an Agent that reported
+// StatusImplemented (and, with no Reviewer configured, sailed straight
+// through REVIEWING) without actually changing anything.
+//
+// guarded reports whether the guard tripped: true means issue has already
+// been driven to FAILED and runCommitAndPR must stop (no PR_CREATING
+// transition, no CreatePullRequest call); false means the diff is
+// non-empty and runCommitAndPR should proceed as normal.
+func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, workerBase, workspacePath string, issue domain.Issue) (_ domain.Issue, guarded bool, _ error) {
+	if e.Diff == nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: Publisher is set but Diff (DiffProducer) is nil for issue %s", issueID)
+	}
+
+	diff, err := e.Diff.Diff(ctx, workspacePath, workerBase)
+	if err != nil {
+		return domain.Issue{}, false, fmt.Errorf("engine: produce diff for issue %s: %w", issueID, err)
+	}
+	if strings.TrimSpace(diff) != "" {
+		return issue, false, nil
+	}
+
+	if err := e.appendEvent(ctx, executionID, issueID, "pr.empty_diff_guard", map[string]string{
+		"reason": "agent reported implemented work but the diff against the worker base is empty",
+	}); err != nil {
+		return domain.Issue{}, false, err
+	}
+	issue, err = e.transition(ctx, executionID, issueID, domain.StateFailed)
+	return issue, true, err
 }
 
 // commitMessage renders e.Config.PullRequests.CommitMessageTemplate (or

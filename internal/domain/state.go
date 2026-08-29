@@ -51,7 +51,11 @@ func (e *InvalidTransitionError) Error() string {
 
 // transitions is the forward-edge table, derived from IDEATION.md §16
 // "State transitions" plus the retry-exhaustion paths to FAILED (CONTEXT.md
-// "Retry Budget"; issue 09) and the needs-info resume flow (issue 07).
+// "Retry Budget"; issue 09), the needs-info resume flow (issue 07), and the
+// empty-diff pre-PR guard's COMMITTING -> FAILED edge (engine.guardEmptyDiff;
+// issue 09/26): an Agent that reports StatusImplemented without actually
+// changing anything is caught right before PR_CREATING rather than opening
+// an empty pull request.
 //
 // Manual cancellation (-> CANCELLED) is legal from any non-terminal state
 // and is handled once in ValidateTransition rather than repeated per row.
@@ -68,7 +72,7 @@ var transitions = map[IssueState][]IssueState{
 	StateImplementing:      {StateNeedsInfo, StateValidating, StateFailed},
 	StateValidating:        {StateImplementing, StateReviewing, StateFailed},
 	StateReviewing:         {StateImplementing, StateCommitting, StateFailed},
-	StateCommitting:        {StatePRCreating},
+	StateCommitting:        {StatePRCreating, StateFailed},
 	StatePRCreating:        {StateCIPending},
 	StateCIPending:         {StateCIFailed, StateDone},
 	StateCIFailed:          {StateImplementing, StateFailed},

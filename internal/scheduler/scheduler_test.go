@@ -795,14 +795,15 @@ var alwaysUnsatisfied = scheduler.DependencyResolverFunc(func(context.Context, s
 	return false, nil
 })
 
-// TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers is the P2
-// fix's regression test: while "a" is still mid-Execute (in flight),
-// DependencyResolver.Satisfied errors for an unrelated Issue "c" (the
-// out-of-set-dependency case cmd/forge's completionResolver hits). Run must
-// not abandon "a": it cancels its internal context, waits for "a" to
-// finish, and returns "a"'s Result alongside the error rather than leaking
-// the goroutine or hanging.
-func TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers(t *testing.T) {
+// TestRun_DependencyCheckError_IsolatedToAffectedIssue is this ticket's
+// sibling-isolation regression test: while "a" is still mid-Execute (in
+// flight), DependencyResolver.Satisfied errors for an unrelated Issue "c"
+// (the out-of-set-dependency case cmd/forge's completionResolver hits, or a
+// transient infra error from a real resolver). Run must not treat this as
+// fatal to the whole batch: "c" alone is recorded with the error (and is
+// never dispatched to Executor.Execute), while "a" keeps running
+// undisturbed and finishes normally once released.
+func TestRun_DependencyCheckError_IsolatedToAffectedIssue(t *testing.T) {
 	issues := issueSet("a", "c")
 	issues["c"] = domain.Issue{ID: "c", Dependencies: []domain.Dependency{{IssueID: "c", DependsOnID: "x"}}}
 
@@ -835,20 +836,41 @@ func TestRun_DependencyCheckError_CancelsAndWaitsForInFlightWorkers(t *testing.T
 		t.Fatal("timed out waiting for a to start")
 	}
 
+	// "c"'s isolated dependency-check error must not interrupt "a", still
+	// gated mid-Execute — Run only returns once "a" is explicitly released
+	// and finishes on its own.
+	select {
+	case <-done:
+		t.Fatal("Run returned before \"a\" was released: the dependency-check error for \"c\" must not cancel siblings")
+	case <-time.After(50 * time.Millisecond):
+	}
+	exec.releaseOne()
+
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after a dependency-check error (goroutine leak / hang)")
+		t.Fatal("Run did not return after \"a\" finished (goroutine leak / hang)")
 	}
 
 	if runErr == nil || !strings.Contains(runErr.Error(), wantErrSubstring) {
 		t.Fatalf("Run err = %v, want it to mention %q", runErr, wantErrSubstring)
 	}
-	if _, ok := results["a"]; !ok {
-		t.Error(`results missing "a": the in-flight Worker must be waited for, not abandoned`)
+	aResult, ok := results["a"]
+	if !ok {
+		t.Fatal(`results missing "a"`)
 	}
-	if _, ok := results["c"]; ok {
-		t.Error(`results contains "c": it should never have been dispatched`)
+	if aResult.Err != nil {
+		t.Errorf(`results["a"].Err = %v, want nil: "a" must complete unaffected by "c"'s error`, aResult.Err)
+	}
+	if aResult.State != domain.StateReviewing {
+		t.Errorf(`results["a"].State = %s, want REVIEWING`, aResult.State)
+	}
+	cResult, ok := results["c"]
+	if !ok {
+		t.Fatal(`results missing "c"`)
+	}
+	if cResult.Err == nil || !strings.Contains(cResult.Err.Error(), wantErrSubstring) {
+		t.Errorf(`results["c"].Err = %v, want it to mention %q`, cResult.Err, wantErrSubstring)
 	}
 	if got := exec.CallCount("c"); got != 0 {
 		t.Errorf("CallCount(c) = %d, want 0", got)
