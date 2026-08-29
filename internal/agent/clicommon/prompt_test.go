@@ -39,3 +39,13 @@ func TestBuildPrompt_IncludesFeedbackWhenPresent(t *testing.T) {
 		t.Errorf("BuildPrompt() missing feedback, got:\n%s", prompt)
 	}
 }
+
+func TestBuildPrompt_InstructsTestDrivenDevelopment(t *testing.T) {
+	req := agent.AgentRequest{Issue: domain.Issue{ID: "1", State: domain.StateReady}}
+	prompt := BuildPrompt("Codex", req)
+	for _, want := range []string{"Test-Driven Development", "red", "green", "seam"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("BuildPrompt() missing TDD guidance %q, got:\n%s", want, prompt)
+		}
+	}
+}

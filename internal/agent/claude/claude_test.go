@@ -897,6 +897,18 @@ func TestBuildPrompt_OmitsRepositoryContextHeaderWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_InstructsTestDrivenDevelopment(t *testing.T) {
+	req := baseRequest()
+
+	prompt := buildPrompt(req)
+
+	for _, want := range []string{"Test-Driven Development", "red", "green", "seam"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing TDD guidance %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestDefaultRunner_BoundsUnboundedOutput(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
