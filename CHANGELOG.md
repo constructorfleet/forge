@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/constructorfleet/forge/compare/forge-v0.4.1...forge-v0.5.0) (2026-08-29)
+
+
+### Features
+
+* goal init: --from &lt;file&gt; to wrap an existing doc ([#107](https://github.com/constructorfleet/forge/issues/107)) ([6a8ea81](https://github.com/constructorfleet/forge/commit/6a8ea81e9e8dd42c87678597a3ab7f87c3dff0c2)), closes [#100](https://github.com/constructorfleet/forge/issues/100)
+
 ## [0.4.1](https://github.com/constructorfleet/forge/compare/forge-v0.4.0...forge-v0.4.1) (2026-08-29)
 
 
