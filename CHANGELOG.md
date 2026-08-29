@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/constructorfleet/forge/compare/forge-v0.2.0...forge-v0.3.0) (2026-08-29)
+
+
+### Features
+
+* **agent:** enforce result envelope via --json-schema ([#67](https://github.com/constructorfleet/forge/issues/67)) ([f7e4d93](https://github.com/constructorfleet/forge/commit/f7e4d93f94917b8be9068dc93ce7893609ca6ee4)), closes [#20](https://github.com/constructorfleet/forge/issues/20)
+
 ## [0.2.0](https://github.com/constructorfleet/forge/compare/forge-v0.1.0...forge-v0.2.0) (2026-08-29)
 
 
