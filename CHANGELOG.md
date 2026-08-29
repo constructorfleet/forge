@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/constructorfleet/forge/compare/forge-v0.6.0...forge-v0.7.0) (2026-08-29)
+
+
+### Features
+
+* [Feature Request]: `forge execute` Should Respect Issue Dependency Order ([#114](https://github.com/constructorfleet/forge/issues/114)) ([eddb707](https://github.com/constructorfleet/forge/commit/eddb70729401751a2ebeb5a9ab9c270965c8d4d8)), closes [#108](https://github.com/constructorfleet/forge/issues/108)
+
 ## [0.6.0](https://github.com/constructorfleet/forge/compare/forge-v0.5.0...forge-v0.6.0) (2026-08-29)
 
 
