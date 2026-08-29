@@ -19,6 +19,8 @@ import (
 
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/wayfinding"
 )
 
 // Runtime starts, resumes, and finishes Planning Executions, serializing
@@ -146,4 +148,60 @@ func (r *Runtime) Finish(ctx context.Context, featureID, executionID string, sta
 		return fmt.Errorf("planengine: release planning lease for feature %s: %w", featureID, err)
 	}
 	return nil
+}
+
+// ResumePlanningExecution resumes a paused Planning Execution by checking
+// for new human input on any NEEDS_HUMAN decisions and transitioning the
+// execution back to ACTIVE if any decision has new human comments.
+//
+// The tracker is used to fetch comments on the Feature's tracker issue.
+// Returns the updated PlanningExecution and a boolean indicating whether
+// any decision was resumed (i.e. new human input was found).
+func (r *Runtime) ResumePlanningExecution(ctx context.Context, executionID string, trk tracker.Tracker) (domain.PlanningExecution, bool, error) {
+	exec, err := r.Store.LoadPlanningExecution(ctx, executionID)
+	if err != nil {
+		return domain.PlanningExecution{}, false, fmt.Errorf("planengine: resume planning execution %s: %w", executionID, err)
+	}
+
+	if exec.Status != domain.PlanningStatusNeedsHuman {
+		// Not paused, nothing to resume
+		return exec, false, nil
+	}
+
+	// Get all decision checkpoints for this execution that are in NEEDS_HUMAN
+	checkpoints, err := r.Store.GetDecisionCheckpointsByExecution(ctx, executionID)
+	if err != nil {
+		return domain.PlanningExecution{}, false, fmt.Errorf("planengine: resume planning execution %s: load checkpoints: %w", executionID, err)
+	}
+
+	anyResumed := false
+	for _, checkpoint := range checkpoints {
+		// Only process checkpoints that haven't been resumed yet
+		if checkpoint.ResumedAt != nil {
+			continue
+		}
+
+		// Use a fake tracker that wraps the real tracker to match the ResumeDecisionTracker interface
+		resumeTracker := &planningResumeTracker{Tracker: trk}
+		result, err := wayfinding.ResumeDecision(ctx, r.Store, resumeTracker, executionID, checkpoint.DecisionID, r.Now)
+		if err != nil {
+			return domain.PlanningExecution{}, false, fmt.Errorf("planengine: resume decision %s: %w", checkpoint.DecisionID, err)
+		}
+		if result.Resumed {
+			anyResumed = true
+		}
+	}
+
+	// Reload the execution to get the updated status
+	exec, err = r.Store.LoadPlanningExecution(ctx, executionID)
+	if err != nil {
+		return domain.PlanningExecution{}, false, fmt.Errorf("planengine: resume planning execution %s: reload: %w", executionID, err)
+	}
+
+	return exec, anyResumed, nil
+}
+
+// planningResumeTracker adapts tracker.Tracker to wayfinding.ResumeDecisionTracker.
+type planningResumeTracker struct {
+	tracker.Tracker
 }

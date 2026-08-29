@@ -456,6 +456,10 @@ type Store interface {
 	// has been recorded.
 	GetDecisionCheckpoint(ctx context.Context, executionID, decisionID string) (DecisionCheckpoint, error)
 
+	// GetDecisionCheckpointsByExecution reloads all NEEDS_HUMAN checkpoints
+	// for a Planning Execution.
+	GetDecisionCheckpointsByExecution(ctx context.Context, executionID string) ([]DecisionCheckpoint, error)
+
 	// Close releases the underlying database connection(s).
 	Close() error
 }
