@@ -94,3 +94,18 @@ func TestAdapter_ExecuteSubprocessErrorIsFailedWithoutGoError(t *testing.T) {
 		t.Fatalf("Status = %v, want FAILED", res.Status)
 	}
 }
+
+func TestAdapter_SemanticProfileDeclaresNoNativeCapabilitiesViaMCP(t *testing.T) {
+	a := &Adapter{}
+
+	var profiler agent.SemanticProfiler = a
+	got := profiler.SemanticProfile()
+
+	want := agent.SemanticProfile{
+		Capabilities: agent.SemanticCapabilities{},
+		Channel:      agent.InjectionChannelMCP,
+	}
+	if got != want {
+		t.Fatalf("SemanticProfile() = %+v, want %+v", got, want)
+	}
+}
