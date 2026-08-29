@@ -42,6 +42,8 @@ func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue d
 	switch issue.State {
 	case domain.StateNeedsInfo:
 		return e.resumeNeedsInfoIssue(ctx, exec, issue)
+	case domain.StateNeedsReplan:
+		return e.resumeNeedsReplanIssue(ctx, exec, issue)
 	case domain.StateCIPending:
 		return e.resumeCIPending(ctx, exec.ID, issue.ID)
 	}
@@ -83,6 +85,25 @@ func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue d
 	default:
 		return issue, nil
 	}
+}
+
+// resumeNeedsReplanIssue is `forge resume`'s handling of an Issue parked by
+// a replan escalation (ticket 22): it is resumable only once a fresh plan
+// has been approved and the Feature unfrozen, which is exactly what
+// ResumeAfterReplan enforces. While the Feature is still frozen the Issue is
+// returned untouched — quiesced work takes no Worker claim and makes no
+// progress — and once it is not, the result is revalidated on its way back
+// to READY and resumption continues from there.
+func (e *Engine) resumeNeedsReplanIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (domain.Issue, error) {
+	resumed, err := e.ResumeAfterReplan(ctx, exec.ID, issue.ID)
+	if err != nil {
+		var frozen *FeatureFrozenError
+		if errors.As(err, &frozen) {
+			return issue, nil
+		}
+		return domain.Issue{}, err
+	}
+	return e.resumeIssue(ctx, exec, resumed)
 }
 
 func (e *Engine) resumeNeedsInfoIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (domain.Issue, error) {

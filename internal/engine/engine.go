@@ -129,6 +129,17 @@ type Engine struct {
 	// instance as Tracker.
 	NeedsInfoTracker NeedsInfoTracker
 
+	// PlanningLease starts the Planning Execution that takes the Feature
+	// planning lease when a Worker escalates REPLAN_REQUIRED (ticket 22).
+	// Optional like NeedsInfoTracker: nil still freezes the Feature — see
+	// handleReplanRequired, which sequences freeze strictly before lease.
+	PlanningLease PlanningLeaseAcquirer
+
+	// ReplanDecisions materializes a REPLAN_REQUIRED escalation as a created
+	// or reopened planning Decision (ticket 22). Optional like
+	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
+	ReplanDecisions ReplanDecisionRecorder
+
 	// Gates is the CommandRunner the Gate Runner (ticket 19,
 	// internal/gate) executes each configured Quality Gate's command
 	// through, once an Issue reaches IMPLEMENTED. New defaults it to
@@ -383,6 +394,13 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	// predating the planning compiler) is unaffected.
 	if err := tracker.ValidateExecutable(issue.ID, issue.Body); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: issue %s: %w", issueID, err)
+	}
+	// Replan freeze gate (ticket 22, acceptance item 2): an Issue whose
+	// Feature has been frozen by a REPLAN_REQUIRED escalation starts no new
+	// work. Checked before the Issue row is created and before any claim is
+	// taken, so a refused dispatch leaves nothing behind.
+	if err := e.guardFeatureFrozen(ctx, issue); err != nil {
+		return ExecuteResult{}, err
 	}
 	// Tracker adapters normalize only tracker-native fields (ID,
 	// Dependencies); Scope, State, and RetryBudget are execution-set
@@ -797,6 +815,9 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		return issue, true, nil
 	case agent.StatusNeedsInfo:
 		issue, err := e.handleNeedsInfo(ctx, executionID, issueID, workerRef(executionID, issueID), result)
+		return issue, false, err
+	case agent.StatusReplanRequired:
+		issue, err := e.handleReplanRequired(ctx, executionID, issueID, workerRef(executionID, issueID), issue, result)
 		return issue, false, err
 	case agent.StatusFailed:
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)

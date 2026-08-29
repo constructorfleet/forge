@@ -83,4 +83,21 @@ The normalized interface to an external issue tracker (GitHub, GitLab, etc.). Sc
 
 ## Issue states
 
-PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · FAILED · DONE · CANCELLED
+PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · NEEDS_REPLAN · FAILED · DONE · CANCELLED
+
+## Replan
+
+**Replan**:
+The conservative response to a Worker discovering that the plan governing its Issue is itself invalid. The Agent returns `REPLAN_REQUIRED` with a structured reason, evidence, affected requirements, and a suggested planning question; the reporting Issue enters **NEEDS_REPLAN**, whose only exits are back to READY or to CANCELLED.
+
+**Feature freeze**:
+On a replan, Forge freezes the Feature's *scheduling and integration* before it acquires the Feature planning lease. A frozen Feature admits no new Workers, and any Worker already in flight may finish to its safe suspension boundary (commit and push its own branch) but is refused at the step that would integrate against the invalidated plan — it is parked in NEEDS_REPLAN rather than killed. The freeze precedes the lease so a Feature is never left dispatching work against a plan already known to be invalid.
+
+**Replan Decision**:
+The trigger is materialized as a created — or, for a repeat escalation from the same Issue, reopened — Decision. A reopened Decision keeps its prior reasoning, records the trigger, and drops its approval; its content revision therefore moves, and every downstream artifact evaluates STALE purely by provenance comparison. There is no stored staleness bit anywhere.
+
+**Implemented facts**:
+Completed, merged work enters the PlanningContext as `implemented_facts[]`, each carrying the *old* ticket plan revision it was completed under. Completed work is fact: it is never auto-rolled-back, and a new plan is written around it. Work that merely finished mid-replan is parked in NEEDS_REPLAN, not DONE, so it never becomes a fact and never counts toward planning readiness.
+
+**Superseded**:
+Once a new plan is approved, the unstarted Issues it no longer contains are closed as superseded (CANCELLED, with an `issue.superseded` Event naming the superseding plan revision) — never recycled. Only then is the freeze lifted, so a new plan approval is genuinely required before frozen work resumes; each resumed result is revalidated rather than trusted for having merely finished.

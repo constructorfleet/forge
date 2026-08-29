@@ -128,6 +128,14 @@ const (
 	// StatusFailed means the Agent could not complete the Issue and no
 	// further automated progress is possible for this attempt.
 	StatusFailed AgentStatus = "FAILED"
+
+	// StatusReplanRequired means the Agent discovered that the plan
+	// governing this Issue is itself invalid — not that the Issue is hard,
+	// and not that a human needs to answer a question about it (that is
+	// StatusNeedsInfo). AgentResult.Replan describes what was discovered.
+	// This is a structural escalation: Forge freezes the Feature and
+	// reopens the planning decision rather than repairing the Issue.
+	StatusReplanRequired AgentStatus = "REPLAN_REQUIRED"
 )
 
 // NeedsInfoDetail describes, in structured form, what a StatusNeedsInfo
@@ -141,6 +149,30 @@ type NeedsInfoDetail struct {
 	Context string
 }
 
+// ReplanDetail describes, in structured form, why a StatusReplanRequired
+// result considers the governing plan invalid. Mirrors NeedsInfoDetail's
+// shape (a small, definitional payload the engine renders and persists
+// verbatim) but carries the extra structure a planning Decision needs to be
+// created or reopened from it.
+type ReplanDetail struct {
+	// Reason is the invalidity the Agent discovered, in one sentence.
+	Reason string
+
+	// Evidence is the concrete supporting detail — file paths, conflicting
+	// requirements, observed behavior — that makes Reason checkable rather
+	// than an assertion.
+	Evidence string
+
+	// AffectedRequirements lists the requirement IDs (as stamped on the
+	// Issue's Forge Provenance block) the Agent believes the invalidity
+	// reaches.
+	AffectedRequirements []string
+
+	// SuggestedQuestion is the planning question the Agent proposes the
+	// reopened Decision should answer.
+	SuggestedQuestion string
+}
+
 // TokenUsage is the optional token accounting an Agent backend may expose
 // for one invocation.
 type TokenUsage struct {
@@ -150,7 +182,8 @@ type TokenUsage struct {
 
 // AgentResult is the structured outcome of one Agent.Execute call.
 type AgentResult struct {
-	// Status is one of StatusImplemented, StatusNeedsInfo, or StatusFailed.
+	// Status is one of StatusImplemented, StatusNeedsInfo, StatusFailed, or
+	// StatusReplanRequired.
 	Status AgentStatus
 
 	// Summary is a human-readable description of what the Agent did or why
@@ -159,6 +192,9 @@ type AgentResult struct {
 
 	// NeedsInfo is populated only when Status is StatusNeedsInfo.
 	NeedsInfo *NeedsInfoDetail
+
+	// Replan is populated only when Status is StatusReplanRequired.
+	Replan *ReplanDetail
 
 	// Usage is populated only when the backend exposes token accounting for
 	// this invocation.

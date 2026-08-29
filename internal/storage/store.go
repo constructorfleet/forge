@@ -443,6 +443,36 @@ type Store interface {
 	// featureID. Releasing a missing lease is a no-op.
 	ReleaseFeaturePlanningLease(ctx context.Context, featureID string) error
 
+	// FreezeFeature records (or refreshes) a Feature's replan freeze
+	// (ticket 22): while it exists, no new Issue belonging to the Feature is
+	// admitted for execution and no in-flight Worker may integrate its work.
+	// Idempotent by feature_id, and deliberately independent of
+	// feature_planning_leases so the freeze can be persisted *before* the
+	// planning lease is acquired.
+	FreezeFeature(ctx context.Context, featureID, reason, triggeringIssueID string) error
+
+	// IsFeatureFrozen reports whether a Feature currently has a replan
+	// freeze, returning the freeze itself when it does. An empty featureID
+	// (an Issue with no Forge Provenance block) is never frozen.
+	IsFeatureFrozen(ctx context.Context, featureID string) (bool, FeatureFreeze, error)
+
+	// UnfreezeFeature removes a Feature's replan freeze, letting frozen work
+	// resume. Callers must only do this once a fresh plan has been approved
+	// and superseded Issues have been closed (see cmd/forge's approve
+	// tickets path). Unfreezing an unfrozen Feature is a no-op.
+	UnfreezeFeature(ctx context.Context, featureID string) error
+
+	// SaveReplanCheckpoint persists (inserting or replacing) the
+	// REPLAN_REQUIRED checkpoint for one Issue within an Execution: the
+	// structured trigger the Agent reported and which of the freeze /
+	// planning-lease / Decision side effects have already run, so the
+	// handling in internal/engine stays idempotent across repeats.
+	SaveReplanCheckpoint(ctx context.Context, checkpoint ReplanCheckpoint) error
+
+	// GetReplanCheckpoint reloads the replan checkpoint for one Issue within
+	// an Execution. Returns ErrNotFound if none has been recorded.
+	GetReplanCheckpoint(ctx context.Context, executionID, issueID string) (ReplanCheckpoint, error)
+
 	// SaveDecisionCheckpoint persists (inserting or replacing) the
 	// NEEDS_HUMAN checkpoint for one Decision within a Planning Execution:
 	// the question asked, the Decision provenance it arose from, when, and

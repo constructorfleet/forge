@@ -2,7 +2,7 @@ package domain
 
 import "fmt"
 
-// IssueState is one of the 16 states an Issue moves through over its
+// IssueState is one of the 17 states an Issue moves through over its
 // lifetime. See CONTEXT.md "Issue states" and IDEATION.md §15-16.
 type IssueState string
 
@@ -20,6 +20,7 @@ const (
 	StateCIPending         IssueState = "CI_PENDING"
 	StateCIFailed          IssueState = "CI_FAILED"
 	StateNeedsInfo         IssueState = "NEEDS_INFO"
+	StateNeedsReplan       IssueState = "NEEDS_REPLAN"
 	StateFailed            IssueState = "FAILED"
 	StateDone              IssueState = "DONE"
 	StateCancelled         IssueState = "CANCELLED"
@@ -63,20 +64,35 @@ func (e *InvalidTransitionError) Error() string {
 // transitions at all, including to CANCELLED. Manual retry from FAILED is
 // handled once in ValidateTransition rather than encoded here as an
 // ordinary workflow edge.
+//
+// NEEDS_REPLAN (ticket 22, conservative replanning) is reachable from two
+// places, and from those two only:
+//
+//   - IMPLEMENTING, when the Agent itself reports REPLAN_REQUIRED — the
+//     structural escalation NEEDS_INFO's IMPLEMENTING edge is modelled on.
+//   - COMMITTING, when the Feature was frozen while this Worker was still
+//     in flight: the Worker is allowed to finish committing (its safe
+//     suspension boundary) but is parked here instead of advancing to
+//     PR_CREATING, which would integrate work against the invalidated plan.
+//
+// Its only workflow exit is back to READY (plus the generic CANCELLED edge
+// every non-terminal state has, which is how an Issue absent from the newly
+// approved plan is closed as superseded).
 var transitions = map[IssueState][]IssueState{
 	StatePending:           {StateBlockedDependency, StateReady},
 	StateBlockedDependency: {StateReady},
 	StateReady:             {StateClaimed},
 	StateClaimed:           {StatePreparing},
 	StatePreparing:         {StateImplementing},
-	StateImplementing:      {StateNeedsInfo, StateValidating, StateFailed},
+	StateImplementing:      {StateNeedsInfo, StateNeedsReplan, StateValidating, StateFailed},
 	StateValidating:        {StateImplementing, StateReviewing, StateFailed},
 	StateReviewing:         {StateImplementing, StateCommitting, StateFailed},
-	StateCommitting:        {StatePRCreating, StateFailed},
+	StateCommitting:        {StatePRCreating, StateNeedsReplan, StateFailed},
 	StatePRCreating:        {StateCIPending},
 	StateCIPending:         {StateCIFailed, StateDone},
 	StateCIFailed:          {StateImplementing, StateFailed},
 	StateNeedsInfo:         {StateReady},
+	StateNeedsReplan:       {StateReady},
 }
 
 // ValidateTransition reports whether moving an Issue from `from` to `to` is

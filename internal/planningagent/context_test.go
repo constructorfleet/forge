@@ -158,3 +158,69 @@ func TestCompile_HumanInputsIndependentOfCaller(t *testing.T) {
 		t.Errorf("HumanInputs[k] = %q, want unaffected by caller mutation", pc.HumanInputs["k"])
 	}
 }
+
+// TestCompileWithFacts_FactsParticipateInContextRevision pins the
+// deliberate design call documented on PlanningContext.ContextRevision:
+// implemented facts are compiled input, so a cache keyed on
+// ContextRevision must not go stale-blind when new work lands.
+func TestCompileWithFacts_FactsParticipateInContextRevision(t *testing.T) {
+	repo := agent.RepositoryContext{BaseRevision: "abc123"}
+	artifacts := []planningagent.NamedArtifact{{ID: "goal", Artifact: goalArtifact("Ship it.")}}
+
+	bare, err := planningagent.Compile(repo, artifacts, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(bare.ImplementedFacts) != 0 {
+		t.Errorf("Compile must attach no facts, got %+v", bare.ImplementedFacts)
+	}
+
+	facts := []planningagent.ImplementedFact{
+		{IssueID: "2", Summary: "shipped storage", PlanRevision: "plan-rev-1"},
+		{IssueID: "1", Summary: "shipped auth", PlanRevision: "plan-rev-1", Requirements: []string{"REQ-1"}},
+	}
+	withFacts, err := planningagent.CompileWithFacts(repo, artifacts, nil, facts)
+	if err != nil {
+		t.Fatalf("CompileWithFacts: %v", err)
+	}
+	if withFacts.ContextRevision == bare.ContextRevision {
+		t.Fatal("implemented facts must change ContextRevision")
+	}
+
+	// Facts are normalized into a deterministic order, so caller ordering
+	// never perturbs the cache key.
+	if withFacts.ImplementedFacts[0].IssueID != "1" || withFacts.ImplementedFacts[1].IssueID != "2" {
+		t.Errorf("facts were not sorted by issue ID: %+v", withFacts.ImplementedFacts)
+	}
+	reordered, err := planningagent.CompileWithFacts(repo, artifacts, nil, []planningagent.ImplementedFact{facts[1], facts[0]})
+	if err != nil {
+		t.Fatalf("CompileWithFacts: %v", err)
+	}
+	if reordered.ContextRevision != withFacts.ContextRevision {
+		t.Error("ContextRevision must not depend on the order facts are supplied in")
+	}
+
+	// A fact recorded under a different plan revision is a different input.
+	facts[0].PlanRevision = "plan-rev-2"
+	moved, err := planningagent.CompileWithFacts(repo, artifacts, nil, facts)
+	if err != nil {
+		t.Fatalf("CompileWithFacts: %v", err)
+	}
+	if moved.ContextRevision == withFacts.ContextRevision {
+		t.Error("a fact's plan revision must participate in ContextRevision")
+	}
+}
+
+// TestCompileWithFacts_FactsIndependentOfCaller mirrors
+// TestCompile_HumanInputsIndependentOfCaller.
+func TestCompileWithFacts_FactsIndependentOfCaller(t *testing.T) {
+	facts := []planningagent.ImplementedFact{{IssueID: "1", Summary: "shipped"}}
+	pc, err := planningagent.CompileWithFacts(agent.RepositoryContext{}, nil, nil, facts)
+	if err != nil {
+		t.Fatalf("CompileWithFacts: %v", err)
+	}
+	facts[0].Summary = "mutated"
+	if pc.ImplementedFacts[0].Summary != "shipped" {
+		t.Errorf("ImplementedFacts[0].Summary = %q, want unaffected by caller mutation", pc.ImplementedFacts[0].Summary)
+	}
+}

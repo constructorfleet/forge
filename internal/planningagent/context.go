@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/planning"
@@ -29,10 +30,29 @@ type ArtifactView struct {
 	DerivedFrom []planning.DerivedFromEntry
 }
 
+// ImplementedFact is one piece of work already completed and merged for the
+// Feature, presented to a replanning contract as fact rather than as
+// proposal. Completed work is never rolled back by a replan (ticket 22,
+// acceptance item 3): a new plan is written *around* these facts, so the
+// planner must see them.
+//
+// PlanRevision is the ticket plan revision the work was completed under —
+// deliberately the *old* revision, not the one being planned now. It is what
+// lets a planner tell "this was built under the plan we are replacing" from
+// "this was built under the current plan", and it is sourced from the
+// Issue's own Forge Provenance stamp rather than from any planning file.
+type ImplementedFact struct {
+	IssueID      string
+	Summary      string
+	PlanRevision string
+	Requirements []string
+}
+
 // PlanningContext is the typed, normalized data a Phase 2 planning contract
 // is compiled against: the reused Phase 1 Repository Context, the Planning
 // Artifacts relevant to a Feature projected into typed views rather than raw
-// markdown, and free-form human inputs collected for this compilation. It is
+// markdown, free-form human inputs collected for this compilation, and any
+// already-implemented work the plan must be written around. It is
 // scheduler-agnostic by construction (ticket 12): it carries no methods and
 // knows nothing about how or when a caller invokes it.
 type PlanningContext struct {
@@ -43,11 +63,22 @@ type PlanningContext struct {
 	TicketPlan  *ArtifactView
 	HumanInputs map[string]string
 
+	// ImplementedFacts is the completed, merged work the Feature already
+	// has (see ImplementedFact). Empty for a Feature that has never been
+	// materialized, which is every pre-replan compilation.
+	ImplementedFacts []ImplementedFact
+
 	// ContextRevision is this PlanningContext's cache key: a hash of every
-	// compiled artifact's (kind, ID, content revision) plus the Repository
-	// Context's BaseRevision. Recompiling from unchanged sources always
-	// reproduces the same key; it changes if and only if a source revision
-	// changes, so callers can cache on it directly.
+	// compiled artifact's (kind, ID, content revision), every implemented
+	// fact, and the Repository Context's BaseRevision. Recompiling from
+	// unchanged sources always reproduces the same key; it changes if and
+	// only if a source revision changes, so callers can cache on it
+	// directly.
+	//
+	// Implemented facts participate deliberately: they are compiled input
+	// like any artifact, so a cache keyed on ContextRevision that ignored
+	// them would serve a planner a stale view of what has already shipped
+	// the moment new work merges.
 	ContextRevision string
 }
 
@@ -60,10 +91,22 @@ type PlanningContext struct {
 // and more than one artifact for a singleton kind (goal, spec, ticket-plan)
 // -- each would otherwise silently overwrite the last one compiled.
 func Compile(repo agent.RepositoryContext, artifacts []NamedArtifact, humanInputs map[string]string) (PlanningContext, error) {
+	return CompileWithFacts(repo, artifacts, humanInputs, nil)
+}
+
+// CompileWithFacts is Compile with the Feature's already-implemented work
+// attached (ticket 22, acceptance item 3). Facts are sorted by Issue ID and
+// folded into ContextRevision, so a replanning contract compiled after new
+// work merges never reuses a cache entry computed before it did.
+func CompileWithFacts(repo agent.RepositoryContext, artifacts []NamedArtifact, humanInputs map[string]string, facts []ImplementedFact) (PlanningContext, error) {
 	pc := PlanningContext{
-		Repository:  repo,
-		HumanInputs: cloneStringMap(humanInputs),
+		Repository:       repo,
+		HumanInputs:      cloneStringMap(humanInputs),
+		ImplementedFacts: append([]ImplementedFact(nil), facts...),
 	}
+	sort.Slice(pc.ImplementedFacts, func(i, j int) bool {
+		return pc.ImplementedFacts[i].IssueID < pc.ImplementedFacts[j].IssueID
+	})
 
 	type revEntry struct {
 		kind     string
@@ -134,6 +177,10 @@ func Compile(repo agent.RepositoryContext, artifacts []NamedArtifact, humanInput
 	h := sha256.New()
 	for _, r := range revisions {
 		fmt.Fprintf(h, "%s\x1f%s\x1f%s\x1e", r.kind, r.id, r.revision)
+	}
+	for _, f := range pc.ImplementedFacts {
+		fmt.Fprintf(h, "fact\x1f%s\x1f%s\x1f%s\x1f%s\x1e",
+			f.IssueID, f.PlanRevision, f.Summary, strings.Join(f.Requirements, ","))
 	}
 	fmt.Fprintf(h, "base\x1f%s\x1e", repo.BaseRevision)
 	pc.ContextRevision = hex.EncodeToString(h.Sum(nil))

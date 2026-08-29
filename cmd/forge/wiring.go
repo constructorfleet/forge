@@ -17,6 +17,8 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/planengine"
+	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/storage"
@@ -130,6 +132,13 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		return resolveBaseRevision(repoRoot, cfg.Git.Base)
 	})
 	eng.Ancestry = gitReachabilityChecker{repoRoot: repoRoot}
+	// Conservative replanning (ticket 22): a Worker reporting
+	// REPLAN_REQUIRED freezes its Feature, takes the Feature planning lease
+	// via the same planengine.Runtime `forge plan` uses, and records the
+	// trigger as a created/reopened Decision under
+	// .forge/features/<id>/decisions/.
+	eng.PlanningLease = planengine.New(store)
+	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{}}
 	if cfg.PullRequests.WatchCI {
 		sup := ci.New(store, trk, cfg, eng.BaseBranch)
 		sup.StatusTracker = trk

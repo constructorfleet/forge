@@ -93,6 +93,19 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return issue, nil
 	}
 
+	// The Feature may have been frozen by another Worker's REPLAN_REQUIRED
+	// escalation while this one was mid-flight. Committing and pushing its
+	// own branch above was safe; creating the pull request is the first step
+	// that integrates against the invalidated plan, so that is where a
+	// frozen Feature suspends the Worker (ticket 22, acceptance item 4).
+	issue, suspended, err := e.guardReplanIntegration(ctx, executionID, issueID, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if suspended {
+		return issue, nil
+	}
+
 	issue, err = e.transition(ctx, executionID, issueID, domain.StatePRCreating)
 	if err != nil {
 		return domain.Issue{}, err
