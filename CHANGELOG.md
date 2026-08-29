@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/constructorfleet/forge/compare/forge-v0.4.0...forge-v0.4.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **cancel:** forge cancel should handle dead process execution ([#72](https://github.com/constructorfleet/forge/issues/72)) ([0d14843](https://github.com/constructorfleet/forge/commit/0d14843a4df4b239254fd2fc8fa9e663649d70f7))
+
 ## [0.4.0](https://github.com/constructorfleet/forge/compare/forge-v0.3.0...forge-v0.4.0) (2026-08-29)
 
 
