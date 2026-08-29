@@ -296,6 +296,172 @@ func TestRunGoalInit_EditPostParseFailureKeepsAuthorEdits(t *testing.T) {
 	}
 }
 
+// TestRunGoalInit_FromWrapsExistingDoc confirms `--from <path>` adopts a
+// freeform doc's content, split into `##` sections, as a valid non-Stale
+// draft goal.md.
+func TestRunGoalInit_FromWrapsExistingDoc(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	notes := "Some intro prose.\n\n## Goal\n\nShip the thing.\n\n## Constraints\n\nMust ship by Friday.\n"
+	notesPath := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(notesPath, []byte(notes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--from", notesPath}); code != 0 {
+		t.Fatalf("runGoalInit --from = %d, want 0", code)
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Kind != planning.KindGoal {
+		t.Fatalf("Kind = %q, want %q", a.Kind, planning.KindGoal)
+	}
+	if a.State != "draft" {
+		t.Fatalf("State = %q, want draft", a.State)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+
+	wantSections := []planning.Section{
+		{Heading: "", Body: "Some intro prose."},
+		{Heading: "Goal", Body: "Ship the thing."},
+		{Heading: "Constraints", Body: "Must ship by Friday."},
+	}
+	if len(a.Sections) != len(wantSections) {
+		t.Fatalf("got %d sections, want %d: %+v", len(a.Sections), len(wantSections), a.Sections)
+	}
+	for i, want := range wantSections {
+		if a.Sections[i].Heading != want.Heading || a.Sections[i].Body != want.Body {
+			t.Errorf("section %d = %+v, want %+v", i, a.Sections[i], want)
+		}
+	}
+}
+
+// TestRunGoalInit_FromWithoutHeadings confirms a source doc with no `##`
+// headings is wrapped under a single "Goal" section rather than left
+// unlabeled.
+func TestRunGoalInit_FromWithoutHeadings(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	notesPath := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(notesPath, []byte("Just some freeform notes with no headings.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--from", notesPath}); code != 0 {
+		t.Fatalf("runGoalInit --from = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "foo", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Sections) != 1 {
+		t.Fatalf("got %d sections, want 1: %+v", len(a.Sections), a.Sections)
+	}
+	if a.Sections[0].Heading != "Goal" {
+		t.Fatalf("section heading = %q, want %q", a.Sections[0].Heading, "Goal")
+	}
+	if a.Sections[0].Body != "Just some freeform notes with no headings." {
+		t.Fatalf("section body = %q", a.Sections[0].Body)
+	}
+}
+
+// TestRunGoalInit_FromNoClobber confirms --from respects the same
+// no-clobber default as the blank skeleton.
+func TestRunGoalInit_FromNoClobber(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	notesPath := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(notesPath, []byte("## Goal\n\nFirst.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--from", notesPath}); code != 0 {
+		t.Fatalf("first runGoalInit --from = %d, want 0", code)
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--from", notesPath}); code == 0 {
+		t.Fatal("second runGoalInit --from without --force = 0, want non-zero")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("goal.md was modified by a no-clobber --from run")
+	}
+}
+
+// TestRunGoalInit_FromWithForce confirms --from composes with --force to
+// overwrite an existing goal.md.
+func TestRunGoalInit_FromWithForce(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "foo"}); code != 0 {
+		t.Fatalf("runGoalInit = %d, want 0", code)
+	}
+
+	notesPath := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(notesPath, []byte("## Goal\n\nAdopted content.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--from", notesPath, "--force"}); code != 0 {
+		t.Fatalf("runGoalInit --from --force = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "foo", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Sections) != 1 || a.Sections[0].Body != "Adopted content." {
+		t.Fatalf("--force did not overwrite with adopted content: %+v", a.Sections)
+	}
+}
+
+// TestRunGoalInit_FromMissingFile confirms a nonexistent --from path fails
+// cleanly without writing anything.
+func TestRunGoalInit_FromMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "foo", "--from", filepath.Join(dir, "missing.md")}); code == 0 {
+		t.Fatal("runGoalInit --from <missing file> = 0, want non-zero")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
+		t.Fatalf(".forge dir was created despite missing --from source, stat err = %v", err)
+	}
+}
+
 // TestRunGoalInit_ThenPlan confirms `forge plan`'s "no goal.md yet" branch
 // -- the one that returns cleanly without a goal -- is not taken once
 // `forge goal init` has run: loading the goal through the same

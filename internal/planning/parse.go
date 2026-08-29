@@ -55,6 +55,16 @@ func Parse(raw []byte) (*Artifact, error) {
 	}, nil
 }
 
+// ParseSections splits arbitrary markdown body text into `##` sections,
+// exactly as Parse does for the body of a Planning Artifact file. Any
+// content before the first `##` heading is kept as a leading Section with
+// an empty Heading; if there is none, it is omitted. Callers that need to
+// adopt freeform prose (e.g. `forge goal init --from`) use this to split it
+// into Sections before wrapping it in a metadata block.
+func ParseSections(body string) []Section {
+	return parseSections(body)
+}
+
 // parseSections splits body text into `##` sections. Any content before
 // the first `##` heading is kept as a leading Section with an empty
 // Heading; if there is none, it is omitted.
