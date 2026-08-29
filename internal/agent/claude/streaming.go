@@ -35,10 +35,13 @@ func boundedTranscriptField(s string) string {
 // (issue 36) — the real time the event occurred, used in preference to
 // Forge's parse-time clock so inter-event durations are meaningful.
 type streamLine struct {
-	Type      string         `json:"type"`
-	Message   *streamMessage `json:"message"`
-	Result    string         `json:"result"`
-	Timestamp string         `json:"timestamp"`
+	Type    string         `json:"type"`
+	Subtype string         `json:"subtype"`
+	IsError bool           `json:"is_error"`
+	Message *streamMessage `json:"message"`
+	Result  string         `json:"result"`
+	// Timestamp is the backend's own per-event clock (issue 36).
+	Timestamp string `json:"timestamp"`
 }
 
 type streamMessage struct {
@@ -79,6 +82,16 @@ type streamParser struct {
 	haveResult bool
 	parsedAny  bool
 	aborted    bool
+
+	// resultIsError and resultSubtype capture the terminal "result" line's
+	// is_error/subtype fields (issue 20/ticket 32): a CLI-level failure —
+	// e.g. an error subtype such as "error_max_turns" or
+	// "error_during_execution", or a permission-request the unattended run
+	// couldn't satisfy — is distinct from "the model's final text didn't
+	// conform to resultJSONSchema" and must be diagnosable as such by
+	// Execute, without waiting to attempt result parsing first.
+	resultIsError bool
+	resultSubtype string
 
 	// callNames maps a tool-use id to the tool's name, recorded when a
 	// TOOL_CALL is seen so its later TOOL_RESULT can be labelled with the
@@ -135,6 +148,8 @@ func (p *streamParser) consume(line string) {
 		p.parsedAny = true
 		p.resultText = sl.Result
 		p.haveResult = true
+		p.resultIsError = sl.IsError
+		p.resultSubtype = sl.Subtype
 	case "system":
 		p.parsedAny = true
 	}
@@ -152,6 +167,18 @@ func (p *streamParser) finalText() (string, bool) {
 		return p.resultText, true
 	}
 	return p.assistant.String(), true
+}
+
+// resultError reports whether the terminal "result" line the CLI emitted
+// was itself flagged as an error (is_error: true), and the subtype it
+// carried, if any. It only reflects a genuine stream-json result line
+// (p.aborted or a non-stream run both leave it false/""), so a
+// capture-abort or non-stream fallback never fabricates a spurious error.
+func (p *streamParser) resultError() (isError bool, subtype string) {
+	if p.aborted {
+		return false, ""
+	}
+	return p.resultIsError, p.resultSubtype
 }
 
 // reconstructedFinalText resolves the final text the same way the Adapter's

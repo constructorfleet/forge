@@ -8,24 +8,18 @@ import (
 )
 
 // resultContract is the instruction appended to every prompt telling Claude
-// Code how to signal its outcome back to Forge: a single fenced JSON block,
-// as the final thing it emits, matching structuredResult's shape.
-const resultContract = "## Required output format\n\n" +
-	"When you are done — whether you completed the work, need information " +
-	"from a human, or cannot proceed — emit exactly one fenced JSON code " +
-	"block as the LAST thing in your response, matching this shape:\n\n" +
-	"```json\n" +
-	"{\n" +
-	"  \"status\": \"IMPLEMENTED\" | \"NEEDS_INFO\" | \"FAILED\",\n" +
-	"  \"summary\": \"one paragraph describing what happened\",\n" +
-	"  \"needs_info\": {\n" +
-	"    \"question\": \"what you need answered (only if status is NEEDS_INFO)\",\n" +
-	"    \"context\": \"why the question arose (only if status is NEEDS_INFO)\"\n" +
-	"  }\n" +
-	"}\n" +
-	"```\n\n" +
-	"Omit \"needs_info\" unless status is \"NEEDS_INFO\". Do not emit more " +
-	"than one such block."
+// Code how to signal its outcome back to Forge. Since issue 20/ticket 32,
+// the envelope's shape (status/summary/needs_info/usage) is enforced by the
+// CLI itself via `--json-schema` (see resultJSONSchema in result.go) rather
+// than by prose here, so this is reduced to a pointer covering only what
+// the schema can't express: which status means what, and when to populate
+// needs_info.
+const resultContract = "## Result\n\n" +
+	"Report your outcome as \"status\": \"IMPLEMENTED\" once you have " +
+	"completed the work, \"NEEDS_INFO\" if you need information from a " +
+	"human before you can proceed, or \"FAILED\" if you cannot complete " +
+	"the work. Populate \"needs_info\" (with \"question\" and \"context\") " +
+	"only when status is \"NEEDS_INFO\"."
 
 // rules is the fixed set of workflow-mechanics boundaries every invocation
 // carries: the Agent does the engineering, Forge owns everything else (see

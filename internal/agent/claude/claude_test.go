@@ -2,9 +2,11 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -79,6 +81,144 @@ func TestExecute_ImplementedFromStructuredOutput(t *testing.T) {
 	}
 	if calls[0].dir != "/workspace/issue-1" {
 		t.Fatalf("dir = %q", calls[0].dir)
+	}
+}
+
+// TestExecute_ArgsIncludeJSONSchema is the red test for issue 20/ticket 32:
+// the CLI invocation must carry `--json-schema <schema>`, where <schema> is
+// a JSON Schema for the {status, summary, needs_info, usage} envelope, so
+// the CLI enforces the result's shape itself instead of Forge inferring it
+// from free-form output after the fact.
+func TestExecute_ArgsIncludeJSONSchema(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"status":"IMPLEMENTED","summary":"done"}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	if _, err := a.Execute(context.Background(), baseRequest()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+
+	schema := findFlagValue(t, calls[0].args, "--json-schema")
+
+	var decoded struct {
+		Type       string `json:"type"`
+		Properties struct {
+			Status struct {
+				Enum []string `json:"enum"`
+			} `json:"status"`
+			Summary struct {
+				Type string `json:"type"`
+			} `json:"summary"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(schema), &decoded); err != nil {
+		t.Fatalf("--json-schema value is not valid JSON: %v\nschema: %s", err, schema)
+	}
+	if decoded.Type != "object" {
+		t.Fatalf("schema type = %q, want object", decoded.Type)
+	}
+	wantEnum := []string{"IMPLEMENTED", "NEEDS_INFO", "FAILED"}
+	if !reflect.DeepEqual(decoded.Properties.Status.Enum, wantEnum) {
+		t.Fatalf("schema status enum = %v, want %v", decoded.Properties.Status.Enum, wantEnum)
+	}
+	if decoded.Properties.Summary.Type != "string" {
+		t.Fatalf("schema summary type = %q, want string", decoded.Properties.Summary.Type)
+	}
+	if !reflect.DeepEqual(decoded.Required, []string{"status", "summary"}) {
+		t.Fatalf("schema required = %v, want [status summary]", decoded.Required)
+	}
+}
+
+// findFlagValue fails t unless args contains flag immediately followed by a
+// value, and returns that value.
+func findFlagValue(t *testing.T, args []string, flag string) string {
+	t.Helper()
+	for i, a := range args {
+		if a == flag {
+			if i+1 >= len(args) {
+				t.Fatalf("args %v: %s has no value", args, flag)
+			}
+			return args[i+1]
+		}
+	}
+	t.Fatalf("args %v: missing %s", args, flag)
+	return ""
+}
+
+// TestExecute_SchemaConformingResultDecodesDirectly covers the case where
+// the CLI's `--json-schema` enforcement means the final text is already a
+// bare JSON object (no fenced ```json block, no surrounding prose) — the
+// shape parseStructuredResult was never designed to require.
+func TestExecute_SchemaConformingResultDecodesDirectly(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"status":"IMPLEMENTED","summary":"Added the feature.","usage":{"input_tokens":10,"output_tokens":5}}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", result.Status)
+	}
+	if result.Summary != "Added the feature." {
+		t.Fatalf("Summary = %q", result.Summary)
+	}
+	if result.Usage == nil || result.Usage.InputTokens != 10 || result.Usage.OutputTokens != 5 {
+		t.Fatalf("Usage = %+v, want input=10 output=5", result.Usage)
+	}
+}
+
+// TestExecute_SchemaConformingResultViaStreamJSON covers the composed path
+// (streamingArgs + jsonSchemaArgs): the terminal stream-json "result" line
+// carries the schema-conforming JSON directly in its "result" field, with
+// no fenced block wrapping it.
+func TestExecute_SchemaConformingResultViaStreamJSON(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Working on it."}]}}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":false,"result":"{\"status\":\"NEEDS_INFO\",\"summary\":\"Blocked.\",\"needs_info\":{\"question\":\"Which backend?\",\"context\":\"Two candidates.\"}}"}` + "\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusNeedsInfo {
+		t.Fatalf("Status = %q, want NEEDS_INFO", result.Status)
+	}
+	if result.NeedsInfo == nil || result.NeedsInfo.Question != "Which backend?" {
+		t.Fatalf("NeedsInfo = %+v, want question preserved", result.NeedsInfo)
+	}
+}
+
+// TestExecute_ErrorResultLineFailsDistinctly covers a CLI-level error
+// result (e.g. a permission-request the unattended run couldn't satisfy, or
+// any other error subtype) — it must be diagnosed distinctly from "no
+// structured result found", since there was never a result to decode.
+func TestExecute_ErrorResultLineFailsDistinctly(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"type":"result","subtype":"error_during_execution","is_error":true,"result":""}` + "\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusFailed {
+		t.Fatalf("Status = %q, want FAILED", result.Status)
+	}
+	if !strings.Contains(result.Summary, "CLI reported an error result") {
+		t.Fatalf("Summary = %q, want a distinct CLI-error diagnosis", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "error_during_execution") {
+		t.Fatalf("Summary = %q, want the error subtype captured", result.Summary)
+	}
+	if strings.Contains(result.Summary, "no structured result found") {
+		t.Fatalf("Summary = %q, want the CLI-error path distinct from the generic no-result diagnosis", result.Summary)
 	}
 }
 
