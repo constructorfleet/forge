@@ -117,6 +117,10 @@ The component that fulfils Semantic Navigation for a single agent invocation. Re
 **Source Location**:
 A normalized reference to a point in the source — a file path and line (optionally column and end position) — that an Agent can hand directly to a file read. The common output currency of Semantic Navigation: every location-returning capability resolves to one, so results flow straight into the Agent's normal reading regardless of which provider produced them.
 
+**Forge-managed Tool Surface**:
+The agent-facing tool set a Semantic Provider registers for a backend it fulfils Semantic Navigation for directly (the Codex path), as opposed to a backend with its own native tooling (Claude Code's `LSP` tool, left untouched). Consolidated to one tool per Semantic Capability rather than mirroring the underlying protocol 1:1, and gated per capability: a capability the underlying server didn't advertise is never registered, rather than registered and left to fail at call time. See ADR-0014.
+_Avoid_: Tool list, LSP tools (implies uniformity with Claude's native surface, which this is not)
+
 ## Issue states
 
 PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · NEEDS_REPLAN · FAILED · DONE · CANCELLED
