@@ -193,6 +193,105 @@ type StatusReflectionConfig struct {
 	Comment bool `yaml:"comment"`
 }
 
+// LSPConfig configures Forge's semantic-navigation (LSP) tooling surface
+// (issue #79 and the LSP Semantic Tooling map). It is a new top-level
+// section rather than nested under AgentConfig because it is cross-cutting
+// over both the execution and planning paths, not tied to one backend.
+//
+// The zero value (Enabled false, every map empty) must be fully safe and
+// inert: the capability-model, detection, and SemanticProvider tickets this
+// section feeds (#82-#84) are independent, still-evolving components, so
+// merely adding this config surface must not itself turn on any behavior.
+type LSPConfig struct {
+	// Enabled turns Forge's semantic-navigation tooling on. Opt-in
+	// (defaults false) rather than on-by-default, so "no lsp: section"
+	// degrades to exactly today's behavior.
+	Enabled bool `yaml:"enabled"`
+
+	// Servers maps a language identifier (as reported by
+	// RepositoryContext.Languages, see the Language & server detection
+	// ticket) to the Forge-managed language server command to run for it,
+	// consulted when capability/provider selection lands on
+	// forge-managed. Empty by default: v1 ships no server definitions
+	// pre-populated here — that population lives in the detection
+	// ticket's registry, not in this config's defaults.
+	Servers map[string]LSPServerConfig `yaml:"servers"`
+
+	// Extensions overrides the file-extension -> language mapping the
+	// detection ticket otherwise derives from repository manifests. Keys
+	// are extensions including the leading dot (e.g. ".mjs"); values are
+	// language identifiers matching Servers' keys.
+	Extensions map[string]string `yaml:"extensions"`
+
+	// Capabilities force-overrides individual semantic operations for one
+	// agent backend, keyed by backend/provider name (matching
+	// AgentConfig.Provider, e.g. "claude-code"), overriding that backend's
+	// static capability declaration (see the Capability model & backend
+	// declaration ticket). A field left nil within an entry means
+	// "unmodified" — only explicitly set fields override the backend's
+	// declaration.
+	Capabilities map[string]LSPCapabilityOverride `yaml:"capabilities"`
+
+	// Providers is the operator escape hatch selecting, per semantic
+	// capability (see LSPCapabilityOverride's field names), which provider
+	// fulfills it — "harness-native", "forge-managed", or "off". A
+	// capability absent from this map falls back to the SemanticProvider
+	// seam's own three-state selection policy; this map only overrides
+	// that default when an operator needs to force a specific choice.
+	Providers map[string]LSPProviderPreference `yaml:"providers"`
+}
+
+// LSPServerConfig is one Forge-managed language server definition.
+type LSPServerConfig struct {
+	Command []string `yaml:"command"`
+}
+
+// LSPCapabilityOverride force-sets individual semantic operations for one
+// agent backend. Field names mirror the capability model's fine-grained,
+// one-flag-per-operation shape. A nil pointer means "leave the backend's
+// static declaration unmodified"; only non-nil fields override it.
+type LSPCapabilityOverride struct {
+	Definition      *bool `yaml:"definition"`
+	References      *bool `yaml:"references"`
+	Implementations *bool `yaml:"implementations"`
+	Hover           *bool `yaml:"hover"`
+	DocumentSymbol  *bool `yaml:"document_symbol"`
+	WorkspaceSymbol *bool `yaml:"workspace_symbol"`
+	CallHierarchy   *bool `yaml:"call_hierarchy"`
+	TypeHierarchy   *bool `yaml:"type_hierarchy"`
+}
+
+// LSPProviderPreference selects which provider fulfills a semantic
+// capability, overriding the SemanticProvider seam's own selection policy.
+type LSPProviderPreference string
+
+const (
+	// LSPProviderForgeManaged forces Forge to start/own a language server
+	// for this capability rather than relying on harness-native tooling.
+	LSPProviderForgeManaged LSPProviderPreference = "forge-managed"
+	// LSPProviderHarnessNative forces use of the agent backend's own
+	// native tool for this capability, even if Forge could also manage a
+	// server for it.
+	LSPProviderHarnessNative LSPProviderPreference = "harness-native"
+	// LSPProviderOff disables this capability entirely, regardless of
+	// what the backend declares or what servers are detected.
+	LSPProviderOff LSPProviderPreference = "off"
+)
+
+// lspCapabilityFields is the fixed set of capability names
+// LSPCapabilityOverride and LSPConfig.Providers recognize, mirroring the
+// capability model's one-flag-per-operation shape (see LSPCapabilityOverride).
+var lspCapabilityFields = map[string]bool{
+	"definition":       true,
+	"references":       true,
+	"implementations":  true,
+	"hover":            true,
+	"document_symbol":  true,
+	"workspace_symbol": true,
+	"call_hierarchy":   true,
+	"type_hierarchy":   true,
+}
+
 // DependenciesConfig configures the escape-hatch Dependency Source. The
 // canonical source is the issue body's `## Dependencies` block; entries here
 // override it. See CONTEXT.md "Dependency Source" and ADR 0003. Keys and
@@ -223,6 +322,7 @@ type Config struct {
 	Agent            AgentConfig            `yaml:"agent"`
 	Dependencies     DependenciesConfig     `yaml:"dependencies"`
 	StatusReflection StatusReflectionConfig `yaml:"status_reflection"`
+	LSP              LSPConfig              `yaml:"lsp"`
 }
 
 // defaultCommitMessageTemplate is PullRequestsConfig.CommitMessageTemplate's

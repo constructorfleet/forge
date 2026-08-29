@@ -153,6 +153,39 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("status_reflection.in_progress_label", cfg.StatusReflection.InProgressLabel, "must not be empty when status_reflection.enabled is true"))
 	}
 
+	for lang, server := range cfg.LSP.Servers {
+		if strings.TrimSpace(lang) == "" {
+			errs = append(errs, fieldErr("lsp.servers", "", "language key must not be empty"))
+			continue
+		}
+		if len(server.Command) == 0 || strings.TrimSpace(server.Command[0]) == "" {
+			errs = append(errs, fieldErr(fmt.Sprintf("lsp.servers[%s].command", lang), "", "must not be empty"))
+		}
+	}
+
+	for ext, lang := range cfg.LSP.Extensions {
+		if !strings.HasPrefix(ext, ".") || strings.TrimSpace(ext) == "." {
+			errs = append(errs, fieldErr("lsp.extensions", ext, "extension key must start with a leading dot (e.g. \".mjs\")"))
+		}
+		if strings.TrimSpace(lang) == "" {
+			errs = append(errs, fieldErr(fmt.Sprintf("lsp.extensions[%s]", ext), lang, "language must not be empty"))
+		}
+	}
+
+	for capability, pref := range cfg.LSP.Providers {
+		if !lspCapabilityFields[capability] {
+			errs = append(errs, fieldErr("lsp.providers", capability, "unrecognized capability key"))
+			continue
+		}
+		switch pref {
+		case LSPProviderForgeManaged, LSPProviderHarnessNative, LSPProviderOff:
+			// recognized
+		default:
+			errs = append(errs, fieldErr(fmt.Sprintf("lsp.providers[%s]", capability), string(pref),
+				"unsupported provider preference; supported: forge-managed, harness-native, off"))
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}
