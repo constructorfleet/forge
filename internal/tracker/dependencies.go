@@ -21,17 +21,26 @@ var (
 	reHeader         = regexp.MustCompile(`(?i)^##\s+Dependencies\s*$`)
 	reNearMissHeader = regexp.MustCompile(`(?i)^##\s+Dependencies\b`)
 	reAnyHeading     = regexp.MustCompile(`^#`)
+	reThematicBreak  = regexp.MustCompile(`^(?:-{3,}|\*{3,}|_{3,})$`)
 	reLabel          = regexp.MustCompile(`(?i)^Depends on:\s*$`)
+	reNoneLine       = regexp.MustCompile(`(?i)^none[.!]?$`)
 	reInlineDepends  = regexp.MustCompile(`(?i)^Depends on:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$`)
-	reBullet         = regexp.MustCompile(`^-\s*#(\d+)\s*$`)
-	reIssueRef       = regexp.MustCompile(`#(\d+)`)
+	// A bullet is a single explicit issue ref, optionally followed by a
+	// human-readable parenthetical annotation (e.g. "- #96 (SaveGoal loader
+	// method)"). The annotation is descriptive text, not another dependency —
+	// the "#\d+" is still explicit, so accepting it requires no NLP inference.
+	reBullet   = regexp.MustCompile(`^-\s*#(\d+)\s*(?:\([^)]*\))?\s*$`)
+	reIssueRef = regexp.MustCompile(`#(\d+)`)
 )
 
 // ParseDependencyBlock extracts the list of prerequisite Issue IDs from the
 // canonical `## Dependencies` block in an issue body. It recognizes:
 //
 //   - `## Dependencies: None` — no Dependencies (returns an empty slice)
-//   - `## Dependencies` followed by a bullet list (`- #123`), optionally
+//   - `## Dependencies` followed by a bare `None` (or `None.`) line — same
+//     as the inline `None` form (returns an empty slice)
+//   - `## Dependencies` followed by a bullet list (`- #123`, optionally with
+//     a trailing parenthetical annotation like `- #123 (why)`), optionally
 //     preceded by a `Depends on:` label line
 //   - `## Dependencies` followed by an inline `Depends on: #123, #456` line
 //
@@ -74,7 +83,19 @@ func ParseDependencyBlock(body string) ([]string, error) {
 			if reAnyHeading.MatchString(t) {
 				break
 			}
+			// A Markdown thematic break ("---", "***", "___") closes the
+			// section just like the next heading does — it is structural
+			// markdown, not a dependency line, so stop consuming here.
+			if reThematicBreak.MatchString(t) {
+				break
+			}
 			switch {
+			case reNoneLine.MatchString(t):
+				// A bare "None" (or "None.") line inside the block is the
+				// natural body form of "## Dependencies\nNone." and means the
+				// same as "## Dependencies: None" — no prerequisites. Treat it
+				// as an explicit empty list rather than freeform text.
+				continue
 			case reLabel.MatchString(t):
 				continue
 			case reInlineDepends.MatchString(t):

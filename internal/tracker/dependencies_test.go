@@ -21,6 +21,18 @@ func TestParseDependencyBlock_BulletList(t *testing.T) {
 	}
 }
 
+func TestParseDependencyBlock_BulletWithAnnotation(t *testing.T) {
+	body := "## Dependencies\n- #96 (SaveGoal loader method)\n- #97 (feature-id validation)\n"
+
+	got, err := tracker.ParseDependencyBlock(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !equalSlices(got, []string{"96", "97"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestParseDependencyBlock_DependsOnLabelPlusList(t *testing.T) {
 	body := "## Dependencies\nDepends on:\n- #7\n"
 
@@ -47,6 +59,63 @@ func TestParseDependencyBlock_InlineDependsOn(t *testing.T) {
 
 func TestParseDependencyBlock_None(t *testing.T) {
 	body := "## Dependencies: None\n\nsome other text"
+
+	got, err := tracker.ParseDependencyBlock(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+}
+
+func TestParseDependencyBlock_NoneLineInBlock(t *testing.T) {
+	for _, body := range []string{
+		"## Dependencies\nNone.\n",
+		"## Dependencies\nNone\n",
+		"## Dependencies\nnone\n",
+		"## Dependencies\n\nNone.\n\n## Other\ntext",
+	} {
+		got, err := tracker.ParseDependencyBlock(body)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", body, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("body %q: got %v, want empty", body, got)
+		}
+	}
+}
+
+func TestParseDependencyBlock_ThematicBreakClosesBlock(t *testing.T) {
+	for _, body := range []string{
+		"## Dependencies\n- #123\n\n---\nmore prose",
+		"## Dependencies\n\n---\n\nUnrelated text",
+		"## Dependencies\nNone.\n\n***\n",
+		"## Dependencies\n- #7\n___\n",
+	} {
+		got, err := tracker.ParseDependencyBlock(body)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", body, err)
+		}
+		switch {
+		case strings.Contains(body, "#123"):
+			if !equalSlices(got, []string{"123"}) {
+				t.Fatalf("body %q: got %v", body, got)
+			}
+		case strings.Contains(body, "#7"):
+			if !equalSlices(got, []string{"7"}) {
+				t.Fatalf("body %q: got %v", body, got)
+			}
+		default:
+			if len(got) != 0 {
+				t.Fatalf("body %q: got %v, want empty", body, got)
+			}
+		}
+	}
+}
+
+func TestParseDependencyBlock_EmptyBlock(t *testing.T) {
+	body := "## Dependencies\n\n## Other Section\ntext"
 
 	got, err := tracker.ParseDependencyBlock(body)
 	if err != nil {
