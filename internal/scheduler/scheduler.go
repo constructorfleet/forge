@@ -187,7 +187,12 @@ type Scheduler struct {
 	// unsatisfiable. OnComplete must not call back into this Scheduler
 	// (e.g. Run) and should do only quick, non-blocking work, since it runs
 	// serialized against every other dispatched Issue's completion.
-	OnComplete func(issueID string, state domain.IssueState, err error)
+	//
+	// executionID is the Execution the completed Issue ran under (see
+	// ExecuteOutcome.ExecutionID) — wiring code needs it to resolve the
+	// Issue's resulting branch (workspace.Manager.BranchName(executionID,
+	// issueID)) for a dependent Issue's Workspace to be built on.
+	OnComplete func(issueID, executionID string, state domain.IssueState, err error)
 
 	// CIWatcher, if set, monitors any Issue whose Executor finishes in
 	// CI_PENDING. Its wait happens outside MaxParallel so the worker slot is
@@ -341,7 +346,7 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		// no-progress check can never observe this Issue as finished before
 		// e.g. a completion-driven DependencyResolver has learned about it.
 		if notifyComplete && s.OnComplete != nil {
-			s.OnComplete(issueID, outcome.State, err)
+			s.OnComplete(issueID, outcome.ExecutionID, outcome.State, err)
 		}
 	}
 	updateResult := func(issueID string, outcome ExecuteOutcome, err error) {

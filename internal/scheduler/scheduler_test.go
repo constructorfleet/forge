@@ -436,7 +436,7 @@ func TestRun_DependentIssueWaitsForCIWatchedPrerequisiteDone(t *testing.T) {
 	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 1)
 	sch.PollInterval = time.Millisecond
 	sch.CIWatcher = watcher
-	sch.OnComplete = func(issueID string, state domain.IssueState, err error) {
+	sch.OnComplete = func(issueID, _ string, state domain.IssueState, err error) {
 		if err != nil {
 			return
 		}
@@ -612,7 +612,7 @@ func TestRun_DependentIssueWaitsThenUsesUpdatedBase(t *testing.T) {
 	exec := &recordingExecutor{}
 	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, baseResolver, 2)
 	sch.PollInterval = 2 * time.Millisecond
-	sch.OnComplete = func(issueID string, _ domain.IssueState, err error) {
+	sch.OnComplete = func(issueID, _ string, _ domain.IssueState, err error) {
 		if issueID != "a" || err != nil {
 			return
 		}
@@ -702,7 +702,7 @@ func TestRun_PrerequisiteFailed_DependentRecordedUnsatisfiable(t *testing.T) {
 
 	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
 	sch.PollInterval = 2 * time.Millisecond
-	sch.OnComplete = func(issueID string, state domain.IssueState, err error) {
+	sch.OnComplete = func(issueID, _ string, state domain.IssueState, err error) {
 		if err != nil || state != domain.StateReviewing {
 			return // FAILED never satisfies a Dependency.
 		}
@@ -1196,7 +1196,7 @@ func TestRun_RealEngine_DependentIssueStartsFromMergedBase(t *testing.T) {
 		"21": {ID: "21", Dependencies: []domain.Dependency{{IssueID: "21", DependsOnID: "20"}}},
 	}}, scheduler.Adapt(eng), resolver, baseResolver, 2)
 	sch.PollInterval = 2 * time.Millisecond
-	sch.OnComplete = func(issueID string, _ domain.IssueState, err error) {
+	sch.OnComplete = func(issueID, _ string, _ domain.IssueState, err error) {
 		if issueID != "20" || err != nil {
 			return
 		}

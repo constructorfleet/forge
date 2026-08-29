@@ -520,3 +520,141 @@ func TestRebase_MissingWorkspaceReturnsErrNotFound(t *testing.T) {
 		t.Fatalf("Rebase err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestBranchName_MatchesCreate(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got := mgr.BranchName("exec1", "issue-42"); got != ws.Branch {
+		t.Errorf("BranchName = %q, want %q (matching Create's branch)", got, ws.Branch)
+	}
+}
+
+// commitFile is a small helper for Integrate's tests: it writes name with
+// contents to dir's working tree and commits it.
+func commitFile(t *testing.T, dir, name, contents, message string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	runGit(t, dir, "add", name)
+	runGit(t, dir, "commit", "-q", "-m", message)
+}
+
+func TestIntegrate_MergesMultipleDependencyBranchesCleanly(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	wsA, err := mgr.Create(context.Background(), "exec-a", "issue-a", base)
+	if err != nil {
+		t.Fatalf("Create issue-a: %v", err)
+	}
+	commitFile(t, wsA.Path, "a.txt", "from a\n", "issue-a work")
+
+	wsB, err := mgr.Create(context.Background(), "exec-b", "issue-b", base)
+	if err != nil {
+		t.Fatalf("Create issue-b: %v", err)
+	}
+	commitFile(t, wsB.Path, "b.txt", "from b\n", "issue-b work")
+
+	branch, err := mgr.Integrate(context.Background(), "issue-c", []string{wsA.Branch, wsB.Branch})
+	if err != nil {
+		t.Fatalf("Integrate: %v", err)
+	}
+	if branch != "forge/integration/issue-c" {
+		t.Errorf("Integrate branch = %q, want forge/integration/issue-c", branch)
+	}
+
+	wsC, err := mgr.Create(context.Background(), "exec-c", "issue-c", branch)
+	if err != nil {
+		t.Fatalf("Create issue-c from integration branch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wsC.Path, "a.txt")); err != nil {
+		t.Errorf("issue-c workspace missing issue-a's a.txt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wsC.Path, "b.txt")); err != nil {
+		t.Errorf("issue-c workspace missing issue-b's b.txt: %v", err)
+	}
+}
+
+func TestIntegrate_RecomputesFromScratchOnEachCall(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	wsA, err := mgr.Create(context.Background(), "exec-a", "issue-a", base)
+	if err != nil {
+		t.Fatalf("Create issue-a: %v", err)
+	}
+	commitFile(t, wsA.Path, "a.txt", "v1\n", "issue-a v1")
+
+	wsB, err := mgr.Create(context.Background(), "exec-b", "issue-b", base)
+	if err != nil {
+		t.Fatalf("Create issue-b: %v", err)
+	}
+	commitFile(t, wsB.Path, "b.txt", "from b\n", "issue-b work")
+
+	if _, err := mgr.Integrate(context.Background(), "issue-c", []string{wsA.Branch, wsB.Branch}); err != nil {
+		t.Fatalf("first Integrate: %v", err)
+	}
+
+	commitFile(t, wsA.Path, "a2.txt", "v2\n", "issue-a v2")
+
+	branch, err := mgr.Integrate(context.Background(), "issue-c", []string{wsA.Branch, wsB.Branch})
+	if err != nil {
+		t.Fatalf("second Integrate: %v", err)
+	}
+
+	head := strings.TrimSpace(runGit(t, root, "rev-parse", branch))
+	runGit(t, root, "merge-base", "--is-ancestor", strings.TrimSpace(runGit(t, wsA.Path, "rev-parse", "HEAD")), head)
+}
+
+func TestIntegrate_ConflictAbortsAndReportsPathsWithoutLeavingBranch(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	wsA, err := mgr.Create(context.Background(), "exec-a", "issue-a", base)
+	if err != nil {
+		t.Fatalf("Create issue-a: %v", err)
+	}
+	commitFile(t, wsA.Path, "README.md", "issue-a edit\n", "issue-a conflicting edit")
+
+	wsB, err := mgr.Create(context.Background(), "exec-b", "issue-b", base)
+	if err != nil {
+		t.Fatalf("Create issue-b: %v", err)
+	}
+	commitFile(t, wsB.Path, "README.md", "issue-b edit\n", "issue-b conflicting edit")
+
+	_, err = mgr.Integrate(context.Background(), "issue-c", []string{wsA.Branch, wsB.Branch})
+	if err == nil {
+		t.Fatal("Integrate: want a conflict error, got nil")
+	}
+	var conflictErr *ConflictError
+	if !errors.As(err, &conflictErr) {
+		t.Fatalf("Integrate err = %v (%T), want *ConflictError", err, err)
+	}
+	if conflictErr.Branch != wsB.Branch {
+		t.Errorf("ConflictError.Branch = %q, want %q", conflictErr.Branch, wsB.Branch)
+	}
+	if len(conflictErr.Paths) != 1 || conflictErr.Paths[0] != "README.md" {
+		t.Errorf("ConflictError.Paths = %v, want [README.md]", conflictErr.Paths)
+	}
+
+	if exists, err := mgr.branchExists(context.Background(), "forge/integration/issue-c"); err != nil {
+		t.Fatalf("branchExists: %v", err)
+	} else if exists {
+		t.Error("expected the partially-merged integration branch to be discarded after a conflict")
+	}
+}
+
+func TestIntegrate_RejectsFewerThanTwoBranches(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if _, err := mgr.Integrate(context.Background(), "issue-c", []string{base}); err == nil {
+		t.Fatal("Integrate with one branch: want error, got nil")
+	}
+}
