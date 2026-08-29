@@ -54,6 +54,10 @@ func (s *inMemoryStore) TransitionIssue(_ context.Context, _, _ string, to domai
 	return domain.Issue{State: to}, nil
 }
 
+func (s *inMemoryStore) GetIssue(context.Context, string, string) (domain.Issue, error) {
+	return domain.Issue{State: s.state}, nil
+}
+
 // countingTracker records how many times AddLabel/AddComment are called.
 type countingTracker struct {
 	labelCalls   int

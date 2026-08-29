@@ -57,6 +57,43 @@ func (s *stubTracker) GetPullRequestChecks(context.Context, int) ([]tracker.Pull
 	return append([]tracker.PullRequestCheck(nil), s.checkResponses[idx]...), nil
 }
 
+// fakeStatusTracker is a minimal statusreflect.Tracker double for ticket
+// 24's status-reflection signal.
+type fakeStatusTracker struct {
+	labels   map[string][]string
+	comments int
+}
+
+func newFakeStatusTracker() *fakeStatusTracker {
+	return &fakeStatusTracker{labels: map[string][]string{}}
+}
+
+func (f *fakeStatusTracker) AddLabel(_ context.Context, id, label string) error {
+	for _, l := range f.labels[id] {
+		if l == label {
+			return nil
+		}
+	}
+	f.labels[id] = append(f.labels[id], label)
+	return nil
+}
+
+func (f *fakeStatusTracker) RemoveLabel(_ context.Context, id, label string) error {
+	kept := f.labels[id][:0]
+	for _, l := range f.labels[id] {
+		if l != label {
+			kept = append(kept, l)
+		}
+	}
+	f.labels[id] = kept
+	return nil
+}
+
+func (f *fakeStatusTracker) AddComment(_ context.Context, _ string, _ string) (tracker.Comment, error) {
+	f.comments++
+	return tracker.Comment{}, nil
+}
+
 type sleepRecorder struct {
 	calls int
 }
@@ -160,6 +197,73 @@ func TestWait_AllRequiredChecksGreen_TransitionsToDone(t *testing.T) {
 	}
 	if sleep.calls != 1 {
 		t.Fatalf("sleep calls = %d, want 1", sleep.calls)
+	}
+}
+
+// TestWait_StatusReflectionEnabled_ClearsInReviewLabelOnDone covers ticket
+// 24's "PR opened -> in-progress cleared / in-review" checklist item for
+// the internal/ci half of the feature: Wait's precondition is an Issue
+// already in CI_PENDING (see Wait's doc comment), which
+// internal/statusreflect.Label maps to the in-review label already — so
+// reaching DONE must clear it, not leave it dangling.
+func TestWait_StatusReflectionEnabled_ClearsInReviewLabelOnDone(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-3", "25")
+
+	trk := &stubTracker{
+		mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+		checkResponses: [][]tracker.PullRequestCheck{
+			{{Name: "build", State: tracker.CheckSuccess}},
+		},
+	}
+
+	cfg := config.Default()
+	cfg.StatusReflection = config.StatusReflectionConfig{
+		Enabled:         true,
+		InProgressLabel: "in-progress",
+		InReviewLabel:   "in-review",
+		FailedLabel:     "failed",
+	}
+
+	supervisor := ci.New(store, trk, cfg, "main")
+	status := newFakeStatusTracker()
+	status.labels["25"] = []string{"in-review"} // as if engine already applied it at PR creation
+	supervisor.StatusTracker = status
+
+	state, err := supervisor.Wait(context.Background(), "exec-3", "25")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateDone {
+		t.Fatalf("state = %s, want DONE", state)
+	}
+	if labels := status.labels["25"]; len(labels) != 0 {
+		t.Errorf("labels = %v, want none (in-review cleared on DONE)", labels)
+	}
+}
+
+// TestWait_StatusReflectionDisabled_NoTrackerSideEffects pins the
+// default-off behavior for the internal/ci half of the feature.
+func TestWait_StatusReflectionDisabled_NoTrackerSideEffects(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-4", "26")
+
+	trk := &stubTracker{
+		mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+		checkResponses: [][]tracker.PullRequestCheck{
+			{{Name: "build", State: tracker.CheckSuccess}},
+		},
+	}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	status := newFakeStatusTracker()
+	supervisor.StatusTracker = status
+
+	if _, err := supervisor.Wait(context.Background(), "exec-4", "26"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if status.comments != 0 || len(status.labels["26"]) != 0 {
+		t.Errorf("status tracker touched = %+v, want no side effects (status_reflection disabled)", status)
 	}
 }
 

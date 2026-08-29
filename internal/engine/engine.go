@@ -28,6 +28,7 @@ import (
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
 	"github.com/Teagan42/forge/internal/review"
+	"github.com/Teagan42/forge/internal/statusreflect"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -123,6 +124,15 @@ type Engine struct {
 
 	// CIWaiter resumes CI monitoring for issues already in CI_PENDING.
 	CIWaiter CIWaiter
+
+	// StatusTracker is the subset of tracker.Tracker the status-reflection
+	// signal (ticket 24, internal/statusreflect) uses to add/remove labels
+	// and post a start comment as an Issue moves through active work. It is
+	// optional like NeedsInfoTracker/Reviewer/Publisher: nil (or
+	// Config.StatusReflection.Enabled false, the default) leaves every
+	// transition's tracker side effect a no-op — see transition, which
+	// calls statusreflect.Apply after every persisted state change.
+	StatusTracker statusreflect.Tracker
 
 	// BaseBranch is the plain branch name (e.g. "main") pull requests
 	// target, distinct from the base revision Workers resolve to a commit
@@ -858,13 +868,62 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 
 // transition moves issueID to state `to` via Store.TransitionIssue, wrapping
 // any error (including *domain.InvalidTransitionError, unwrappable via
-// errors.As) with the operation's context.
+// errors.As) with the operation's context. It is the single chokepoint
+// nearly every engine-driven transition passes through (the two exceptions,
+// internal/ci's own DONE/CI_FAILED transitions and forge resume's
+// NEEDS_INFO -> READY, reflect status independently or trivially need not —
+// see statusreflect.Label), which is why the ticket-24 in-progress/in-review
+// signal (internal/statusreflect) is applied here rather than at each
+// individual call site: transition reloads the Issue's current state before
+// persisting the new one specifically so it has an accurate `from` to hand
+// statusreflect.Apply.
 func (e *Engine) transition(ctx context.Context, executionID, issueID string, to domain.IssueState) (domain.Issue, error) {
+	from, err := e.Store.GetIssue(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: load current state: %w", issueID, to, err)
+	}
 	issue, err := e.Store.TransitionIssue(ctx, executionID, issueID, to)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
 	}
+	if err := statusreflect.Apply(ctx, e.StatusTracker, e.Config.StatusReflection, issueID, from.State, to); err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
+	}
+	if err := e.postStatusStartComment(ctx, executionID, issueID, from.State, to); err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
+	}
 	return issue, nil
+}
+
+// postStatusStartComment posts the ticket-24 status-reflection start
+// comment (internal/statusreflect) exactly once per (executionID, issueID),
+// guarded by a persisted storage.StatusSignalCheckpoint rather than
+// statusreflect.Apply's stateless from/to comparison: unlike the label
+// swap, AddComment has no tracker-side dedup key, so a retried or resumed
+// READY -> CLAIMED transition must consult local state to avoid posting a
+// second comment (the same reasoning as handleNeedsInfo's CommentPosted
+// checkpoint — see storage.StatusSignalCheckpoint's doc comment).
+func (e *Engine) postStatusStartComment(ctx context.Context, executionID, issueID string, from, to domain.IssueState) error {
+	if !statusreflect.IsStartTransition(e.Config.StatusReflection, from, to) || e.StatusTracker == nil {
+		return nil
+	}
+
+	checkpoint, err := e.Store.GetStatusSignalCheckpoint(ctx, executionID, issueID)
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("load status signal checkpoint for issue %s: %w", issueID, err)
+	}
+	if err == nil && checkpoint.CommentPosted {
+		return nil
+	}
+
+	if _, err := e.StatusTracker.AddComment(ctx, issueID, statusreflect.StartComment()); err != nil {
+		return fmt.Errorf("post status start comment on issue %s: %w", issueID, err)
+	}
+	return e.Store.SaveStatusSignalCheckpoint(ctx, storage.StatusSignalCheckpoint{
+		ExecutionID:   executionID,
+		IssueID:       issueID,
+		CommentPosted: true,
+	})
 }
 
 // appendEvent records an informational Event (distinct from the
@@ -916,9 +975,9 @@ func (e *Engine) failOut(ctx context.Context, executionID, issueID string, origE
 	if cancelled {
 		target = domain.StateCancelled
 	}
-	if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, target); err != nil {
+	if _, err := e.transition(ctx, executionID, issueID, target); err != nil {
 		if target != domain.StateCancelled {
-			if _, err := e.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCancelled); err != nil {
+			if _, err := e.transition(ctx, executionID, issueID, domain.StateCancelled); err != nil {
 				errs = append(errs, fmt.Errorf("engine: drive issue %s to a terminal state: %w", issueID, err))
 			}
 		} else {

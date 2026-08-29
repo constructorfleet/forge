@@ -90,6 +90,22 @@ func (f *fakeTracker) AddHumanComment(id, author, body string, at time.Time) {
 	f.comments[id] = append(f.comments[id], tracker.Comment{Author: author, Body: body, CreatedAt: at})
 }
 
+// RemoveLabel idempotently ensures label is not set on id, mirroring
+// tracker.FakeTracker's RemoveLabel — needed by engine.Engine.StatusTracker
+// (ticket 24, internal/statusreflect).
+func (f *fakeTracker) RemoveLabel(_ context.Context, id string, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.labels[id][:0]
+	for _, l := range f.labels[id] {
+		if l != label {
+			kept = append(kept, l)
+		}
+	}
+	f.labels[id] = kept
+	return nil
+}
+
 func (f *fakeTracker) Labels(id string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

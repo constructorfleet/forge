@@ -39,7 +39,7 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 			continue
 		}
 		if issue.State != domain.StateCancelled {
-			if _, err := e.Store.TransitionIssue(ctx, executionID, issue.ID, domain.StateCancelled); err != nil {
+			if _, err := e.transition(ctx, executionID, issue.ID, domain.StateCancelled); err != nil {
 				reloaded, getErr := e.Store.GetIssue(ctx, executionID, issue.ID)
 				if getErr != nil {
 					return storage.ExecutionState{}, fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
