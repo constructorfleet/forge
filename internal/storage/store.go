@@ -323,6 +323,47 @@ type Store interface {
 	// within an Execution. Returns ErrNotFound if none has been recorded.
 	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (NeedsInfoCheckpoint, error)
 
+	// CreatePlanningExecution persists a new Planning Execution (ticket 11's
+	// runtime container for `forge plan`, scoped to a Feature rather than
+	// coding Issues).
+	CreatePlanningExecution(ctx context.Context, exec domain.PlanningExecution) error
+
+	// LoadPlanningExecution reloads a single Planning Execution by ID.
+	LoadPlanningExecution(ctx context.Context, executionID string) (domain.PlanningExecution, error)
+
+	// ListPlanningExecutionsByFeature reloads every Planning Execution
+	// recorded for featureID, ordered by start time.
+	ListPlanningExecutionsByFeature(ctx context.Context, featureID string) ([]domain.PlanningExecution, error)
+
+	// UpdatePlanningStatus persists a Planning Execution's current runtime
+	// Status (ACTIVE/NEEDS_HUMAN/NEEDS_APPROVAL/FAILED/COMPLETE). Stage and
+	// artifact freshness are deliberately not part of this call: they are
+	// derived from the Feature's Planning Artifacts on disk
+	// (internal/planning) every time they're needed, never persisted.
+	UpdatePlanningStatus(ctx context.Context, executionID string, status domain.PlanningStatus) error
+
+	// ClaimFeaturePlanningLease records a Planning Execution's lease on
+	// featureID, enforcing at most one active Planning Execution per
+	// Feature. Returns ErrPlanningLeaseHeld (unwrappable to
+	// *PlanningLeaseConflictError) if featureID already has an active
+	// lease, via a database constraint rather than a read-then-write check
+	// that would race. Implementation Issue claims (workers) are a separate
+	// table and are unaffected by Feature planning leases.
+	ClaimFeaturePlanningLease(ctx context.Context, featureID, executionID string) error
+
+	// FeaturePlanningLease reloads the active planning lease for featureID.
+	// Returns ErrNotFound if no active lease exists.
+	FeaturePlanningLease(ctx context.Context, featureID string) (PlanningLease, error)
+
+	// UpdatePlanningLeaseOwner records the OS process ID currently owning
+	// the active planning lease for featureID, the lease analogue of
+	// UpdateWorkerOwner.
+	UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int) error
+
+	// ReleaseFeaturePlanningLease removes the active planning lease for
+	// featureID. Releasing a missing lease is a no-op.
+	ReleaseFeaturePlanningLease(ctx context.Context, featureID string) error
+
 	// Close releases the underlying database connection(s).
 	Close() error
 }
