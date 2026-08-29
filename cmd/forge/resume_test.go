@@ -17,7 +17,10 @@ func TestRunResume_ReconcilesReadyExecution(t *testing.T) {
 	runGit(t, repoRoot, "remote", "add", "origin", "git@github.com:acme/widgets.git")
 
 	cfgPath := filepath.Join(repoRoot, ".forge.yaml")
-	if err := os.WriteFile(cfgPath, []byte("version: 1\nagent:\n  provider: fake\ntracker:\n  skip_auth_preflight: true\n"), 0o644); err != nil {
+	// pull_requests.enabled: false leaves the commit/PR seam (Publisher/
+	// PRTracker) unwired, so this hermetic test drives the full state
+	// machine to its COMMITTING resting state without a live GitHub remote.
+	if err := os.WriteFile(cfgPath, []byte("version: 1\nagent:\n  provider: fake\ntracker:\n  skip_auth_preflight: true\npull_requests:\n  enabled: false\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -77,7 +80,7 @@ func TestRunResume_ReconcilesReadyExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.State != domain.StateReviewing {
-		t.Fatalf("persisted state = %s, want REVIEWING", issue.State)
+	if issue.State != domain.StateCommitting {
+		t.Fatalf("persisted state = %s, want COMMITTING", issue.State)
 	}
 }

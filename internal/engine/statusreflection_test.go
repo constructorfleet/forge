@@ -82,11 +82,12 @@ func TestExecute_StatusReflection_AppliesInProgressLabelAndStartComment(t *testi
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// No Reviewer/Publisher configured, so this run rests in REVIEWING
-	// (ticket 20's predecessor behavior) — still within the in-progress
-	// range (statusreflect.Label).
-	if result.Issue.State != domain.StateReviewing {
-		t.Fatalf("final state = %s, want REVIEWING", result.Issue.State)
+	// No Reviewer configured, so review auto-approves to COMMITTING; no
+	// Publisher/PRTracker configured, so runCommitAndPR no-ops and the run
+	// rests in COMMITTING — still within the in-progress range
+	// (statusreflect.Label).
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
 	}
 
 	if labels := trk.Labels("1"); len(labels) != 1 || labels[0] != "in-progress" {

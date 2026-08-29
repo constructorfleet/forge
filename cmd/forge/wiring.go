@@ -108,15 +108,22 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// be injectable, not a production-ready reviewer backend; wiring a real
 	// one is deferred to a later ticket.
 	eng.Diff = gitDiffProducer{}
-	// eng.Publisher/eng.PRTracker (ticket 22) are wired unconditionally,
-	// unlike Reviewer: Engine treats them as a single all-or-nothing seam
-	// (see runCommitAndPR) and a production Publisher/PRCreator exists
-	// today, so there is no "not built yet" reason to leave COMMITTING a
-	// resting state the way REVIEWING was left before a production
-	// Reviewer existed.
-	eng.Publisher = gitPublisher{locks: locks}
-	// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
-	eng.PRTracker = trk
+	// eng.Publisher/eng.PRTracker (ticket 22) are Engine's single
+	// all-or-nothing commit/PR seam (see runCommitAndPR): with both wired,
+	// an approved (or, with no Reviewer, auto-approved) Issue is committed,
+	// pushed, and opened as a PR; with neither, COMMITTING is a resting
+	// state. A production Publisher/PRCreator exists today, so they are
+	// wired whenever pull-request publication is enabled — the default.
+	// Honoring cfg.PullRequests.Enabled here gives operators a real
+	// off-switch (commit locally? no — the seam is all-or-nothing, so
+	// disabled means the run rests at COMMITTING having only validated) and
+	// lets hermetic tests exercise the full state machine without a live
+	// GitHub remote.
+	if cfg.PullRequests.Enabled {
+		eng.Publisher = gitPublisher{locks: locks}
+		// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
+		eng.PRTracker = trk
+	}
 	// trk also implements statusreflect.Tracker (AddLabel/RemoveLabel/
 	// AddComment) in full; wired unconditionally like NeedsInfoTracker/
 	// PRTracker above, since the ticket-24 signal itself defaults to off

@@ -994,7 +994,18 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 // what the Agent changed on disk.
 func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, gateResults []gate.Result) (domain.Issue, review.Verdict, []review.Finding, error) {
 	if e.Reviewer == nil {
-		return issue, review.VerdictApproved, nil, nil
+		// No Reviewer configured: auto-approve once Quality Gates have
+		// passed and advance to COMMITTING, exactly as an explicit
+		// VerdictApproved does below. Without this transition the Issue
+		// would rest at REVIEWING and Execute's `issue.State ==
+		// StateCommitting` guard would skip runCommitAndPR entirely —
+		// leaving validated work uncommitted and no PR opened even when a
+		// production Publisher/PRTracker is wired (the cmd/forge case,
+		// which intentionally leaves Reviewer nil). runCommitAndPR itself
+		// still no-ops when Publisher/PRTracker are nil, so this stays a
+		// resting state for callers that wire neither.
+		issue, err := e.transition(ctx, executionID, issueID, domain.StateCommitting)
+		return issue, review.VerdictApproved, nil, err
 	}
 	if e.Diff == nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: Reviewer is set but Diff (DiffProducer) is nil for issue %s", issueID)

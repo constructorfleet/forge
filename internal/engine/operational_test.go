@@ -51,16 +51,16 @@ func TestRetryIssue_RerunsFailedIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RetryIssue: %v", err)
 	}
-	if retried.State != domain.StateReviewing {
-		t.Fatalf("retried state = %s, want REVIEWING", retried.State)
+	if retried.State != domain.StateCommitting {
+		t.Fatalf("retried state = %s, want COMMITTING", retried.State)
 	}
 
 	issue, err := te.store.GetIssue(ctx, result.ExecutionID, "61")
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.State != domain.StateReviewing {
-		t.Fatalf("persisted state = %s, want REVIEWING", issue.State)
+	if issue.State != domain.StateCommitting {
+		t.Fatalf("persisted state = %s, want COMMITTING", issue.State)
 	}
 }
 
@@ -138,8 +138,8 @@ func TestRetryIssue_ResetsExhaustedRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RetryIssue: %v", err)
 	}
-	if retried.State != domain.StateReviewing {
-		t.Fatalf("retried state = %s, want REVIEWING", retried.State)
+	if retried.State != domain.StateCommitting {
+		t.Fatalf("retried state = %s, want COMMITTING", retried.State)
 	}
 
 	issue, err = te.store.GetIssue(ctx, result.ExecutionID, "64")
