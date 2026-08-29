@@ -248,16 +248,26 @@ func (f *fakeTrackerForResume) AddComment(_ context.Context, id, body string) (t
 	return c, nil
 }
 
-func (f *fakeTrackerForResume) AddLabel(_ context.Context, _, _ string) error   { return nil }
+func (f *fakeTrackerForResume) AddLabel(_ context.Context, _, _ string) error    { return nil }
 func (f *fakeTrackerForResume) RemoveLabel(_ context.Context, _, _ string) error { return nil }
 func (f *fakeTrackerForResume) GetIssue(_ context.Context, _ string) (domain.Issue, error) {
 	return domain.Issue{}, storage.ErrNotFound
 }
-func (f *fakeTrackerForResume) GetIssues(_ context.Context, _ []string) ([]domain.Issue, error) { return nil, nil }
-func (f *fakeTrackerForResume) GetMergeRequirements(_ context.Context, _ string) (tracker.MergeRequirements, error) { return tracker.MergeRequirements{}, nil }
-func (f *fakeTrackerForResume) GetPullRequestChecks(_ context.Context, _ int) ([]tracker.PullRequestCheck, error) { return nil, nil }
-func (f *fakeTrackerForResume) CreatePullRequest(_ context.Context, _ tracker.PullRequestRequest) (tracker.PullRequest, error) { return tracker.PullRequest{}, nil }
-func (f *fakeTrackerForResume) CreateIssue(_ context.Context, _ tracker.IssueRequest) (tracker.CreatedIssue, error) { return tracker.CreatedIssue{}, nil }
+func (f *fakeTrackerForResume) GetIssues(_ context.Context, _ []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (f *fakeTrackerForResume) GetMergeRequirements(_ context.Context, _ string) (tracker.MergeRequirements, error) {
+	return tracker.MergeRequirements{}, nil
+}
+func (f *fakeTrackerForResume) GetPullRequestChecks(_ context.Context, _ int) ([]tracker.PullRequestCheck, error) {
+	return nil, nil
+}
+func (f *fakeTrackerForResume) CreatePullRequest(_ context.Context, _ tracker.PullRequestRequest) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, nil
+}
+func (f *fakeTrackerForResume) CreateIssue(_ context.Context, _ tracker.IssueRequest) (tracker.CreatedIssue, error) {
+	return tracker.CreatedIssue{}, nil
+}
 func (f *fakeTrackerForResume) Capabilities() tracker.Capabilities { return tracker.Capabilities{} }
 
 func TestResumePlanningExecution_ResumesWhenNewHumanComment(t *testing.T) {
