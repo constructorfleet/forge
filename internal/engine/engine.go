@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
 	"github.com/Teagan42/forge/internal/review"
+	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/statusreflect"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -211,6 +213,21 @@ type Engine struct {
 	// the Repository Context (internal/repocontext) and as the root
 	// Workspaces are created under.
 	RepoRoot string
+
+	// Semantic is the SemanticProvider seam (internal/semantic) fulfilling
+	// Semantic Navigation for each Issue's Agent calls. Optional: nil (the
+	// default from New) leaves every AgentRequest.Semantic at its zero
+	// value, exactly today's behavior — cmd/forge wires a production
+	// semantic.Provider bound to the configured Agent backend. See
+	// prepareSemantic/augmentSemantic/teardownSemantic in semantic.go.
+	Semantic semantic.Provider
+
+	// semanticSessions holds the one semantic.Session per (executionID,
+	// issueID) prepareSemantic creates, reused across that Issue's repair
+	// loop by augmentSemantic and released by teardownSemantic. A sync.Map
+	// rather than a plain map because Engine is shared across concurrently
+	// executing Issues (ticket 26 scheduling).
+	semanticSessions sync.Map
 
 	// Now and NewExecutionID are seams for deterministic tests; New sets
 	// both to real implementations (time.Now, uuid.NewString).
@@ -474,6 +491,13 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: create workspace for issue %s: %w", issueID, err)
 	}
+	// Prepare is called immediately after Workspaces.Create, once per
+	// Issue: the resulting Session is reused across every Agent call in
+	// this Issue's repair loop (see executeAgent's augmentSemantic call).
+	// The success path has no symmetric cleanup, so defer is mandatory
+	// here rather than at whatever point the Issue eventually rests.
+	e.prepareSemantic(ctx, execution.ID, issueID, ws.Path, repoCtx)
+	defer e.teardownSemantic(execution.ID, issueID)
 	if err := e.Store.RecordWorkspace(ctx, execution.ID, ws); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: persist workspace for issue %s: %w", issueID, err)
 	}
@@ -549,6 +573,12 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
+	// RepairCIFailure is a fresh top-level entry point (a Worker resuming
+	// after a CI failure, potentially in a new process), so it prepares its
+	// own Session for this repair, reused across whatever repair iterations
+	// follow, exactly like ExecuteInExecution's call above.
+	e.prepareSemantic(ctx, executionID, issueID, ws.Path, repoCtx)
+	defer e.teardownSemantic(executionID, issueID)
 
 	feedback, err := e.latestCIFeedback(ctx, executionID, issueID)
 	if err != nil {
@@ -767,6 +797,12 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		Policy:        agent.WorkflowPolicy{},
 		Feedback:      feedback,
 	}
+	// Augment applies this Issue's Session (if one was prepared) before the
+	// request is otherwise finalized, so both the telemetry byte count
+	// below and the Agent itself see the same, fully-assembled request. A
+	// no-op when e.Semantic was never wired or prepareSemantic was never
+	// called for this Issue.
+	req = e.augmentSemantic(executionID, issueID, req)
 	contextBytes, err := agent.ContextSizeBytes(req)
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: encode agent request for issue %s telemetry: %w", issueID, err)

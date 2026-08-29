@@ -30,7 +30,7 @@ var claudeSemanticProfile = agent.SemanticProfile{
 	Capabilities: agent.SemanticCapabilities{
 		Definition:      true,
 		References:      true,
-		Implementation:  true,
+		Implementations: true,
 		Hover:           true,
 		DocumentSymbol:  true,
 		WorkspaceSymbol: true,

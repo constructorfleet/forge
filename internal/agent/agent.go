@@ -52,6 +52,13 @@ type AgentRequest struct {
 	// keeps measuring only the context handed to the Agent, not this
 	// output-only seam.
 	Transcript TranscriptSink `json:"-"`
+
+	// Semantic is the backend-neutral Semantic Navigation descriptor a
+	// SemanticProvider seam (internal/semantic) attaches via
+	// Session.Augment before Execute is called. Zero value means no
+	// semantic navigation, the pre-existing behavior for every Agent call
+	// before this field existed.
+	Semantic SemanticDescriptor
 }
 
 // RepositoryContext is relatively stable information shared across all

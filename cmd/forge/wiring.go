@@ -21,6 +21,7 @@ import (
 	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/scheduler"
+	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
@@ -98,6 +99,12 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	}
 
 	eng := engine.New(store, trk, wsMgr, ag, cfg, repoRoot)
+	// eng.Semantic (issue #126) is wired unconditionally, like
+	// Publisher/PRTracker below: the SemanticProvider seam degrades to
+	// fully inert on its own whenever cfg.LSP.Enabled is false (the
+	// default) or ag declares no agent.SemanticProfile, so there is no
+	// "not built yet" reason to leave it unset.
+	eng.Semantic = semantic.NewProvider(ag, lspToSemanticConfig(cfg.LSP, cfg.Agent.Provider))
 	// trk implements tracker.Tracker in full, a superset of both
 	// engine.IssueFetcher (Tracker, above) and engine.NeedsInfoTracker.
 	eng.NeedsInfoTracker = trk
@@ -157,6 +164,38 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		eng.CIWaiter = sup
 	}
 	return eng, nil
+}
+
+// lspToSemanticConfig translates the repository's `lsp` config section
+// (config.LSPConfig) into semantic.Config, the shape internal/semantic
+// actually consumes. internal/semantic deliberately imports nothing from
+// internal/config (it sits below internal/engine and stays a leaf), so this
+// translation — including flattening LSPConfig.Capabilities, which is keyed
+// by backend/provider name, down to the single override that applies to
+// cfg.Agent.Provider (the one backend this Engine runs) — lives here
+// instead.
+func lspToSemanticConfig(lsp config.LSPConfig, agentProvider string) semantic.Config {
+	providers := make(map[string]semantic.ProviderPreference, len(lsp.Providers))
+	for capability, pref := range lsp.Providers {
+		providers[capability] = semantic.ProviderPreference(pref)
+	}
+
+	override := lsp.Capabilities[agentProvider]
+
+	return semantic.Config{
+		Enabled:   lsp.Enabled,
+		Providers: providers,
+		Override: semantic.CapabilityOverride{
+			Definition:      override.Definition,
+			References:      override.References,
+			Implementations: override.Implementations,
+			Hover:           override.Hover,
+			DocumentSymbol:  override.DocumentSymbol,
+			WorkspaceSymbol: override.WorkspaceSymbol,
+			CallHierarchy:   override.CallHierarchy,
+			TypeHierarchy:   override.TypeHierarchy,
+		},
+	}
 }
 
 func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot string) *engine.Engine {

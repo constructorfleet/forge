@@ -46,3 +46,11 @@ func TestSemanticProfiler_TypeAssertionFailsWhenNotImplemented(t *testing.T) {
 		t.Fatalf("FakeAgent unexpectedly implements SemanticProfiler; a backend declaring no profile must be inert")
 	}
 }
+
+func TestAgentRequest_SemanticZeroValueIsInert(t *testing.T) {
+	var req agent.AgentRequest
+
+	if len(req.Semantic.MCPServers) != 0 || len(req.Semantic.NativeServers) != 0 {
+		t.Errorf("zero-value AgentRequest.Semantic = %+v, want both lists empty", req.Semantic)
+	}
+}
