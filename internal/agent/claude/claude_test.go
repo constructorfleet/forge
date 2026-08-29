@@ -82,6 +82,54 @@ func TestExecute_ImplementedFromStructuredOutput(t *testing.T) {
 	}
 }
 
+func TestExecute_DefaultPermissionModeIsBypassPermissions(t *testing.T) {
+	var calls []recordedCall
+	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	if _, err := a.Execute(context.Background(), baseRequest()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	assertContainsPermissionMode(t, calls[0].args, "bypassPermissions")
+}
+
+func TestExecute_ExplicitPermissionModeIsPassedThrough(t *testing.T) {
+	var calls []recordedCall
+	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil), PermissionMode: "plan"}
+
+	if _, err := a.Execute(context.Background(), baseRequest()); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	assertContainsPermissionMode(t, calls[0].args, "plan")
+}
+
+// assertContainsPermissionMode fails t unless args contains
+// "--permission-mode" immediately followed by want.
+func assertContainsPermissionMode(t *testing.T, args []string, want string) {
+	t.Helper()
+	for i, a := range args {
+		if a == "--permission-mode" {
+			if i+1 >= len(args) {
+				t.Fatalf("args %v: --permission-mode has no value", args)
+			}
+			if args[i+1] != want {
+				t.Fatalf("--permission-mode = %q, want %q", args[i+1], want)
+			}
+			return
+		}
+	}
+	t.Fatalf("args %v: missing --permission-mode", args)
+}
+
 func TestExecute_NeedsInfoWithReasonAndQuestions(t *testing.T) {
 	var calls []recordedCall
 	stdout := "```json\n" +

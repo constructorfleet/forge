@@ -46,6 +46,16 @@ const maxCapturedOutputLen = 4 * maxDiagnosticLen
 // without an interactive session.
 const claudePrintFlag = "-p"
 
+// defaultPermissionMode is the `--permission-mode` value used when an
+// Adapter's PermissionMode is unset (ticket 30, "Agent runs need a
+// non-interactive permission mode"). Execute runs Claude Code as an
+// unattended subprocess — nothing can answer an interactive tool-use
+// permission prompt — so the default must not be a mode that can ever
+// block on one. bypassPermissions auto-approves every tool call, relying
+// on the Issue's Workspace (an isolated Git worktree) as the safety
+// boundary instead.
+const defaultPermissionMode = "bypassPermissions"
+
 // streamingArgs requests Claude Code's per-turn streaming JSON output
 // (ticket 28): one JSON object per line — assistant messages, tool calls,
 // tool results, and a terminal "result" line — instead of only the final
@@ -94,6 +104,12 @@ type Adapter struct {
 	// defaultRunner. Defaults to "claude" if empty.
 	Executable string
 
+	// PermissionMode sets Claude Code's `--permission-mode` flag, so tool
+	// calls made during an unattended Execute run don't stall on an
+	// interactive permission prompt nothing can answer. Defaults to
+	// defaultPermissionMode ("bypassPermissions") when empty.
+	PermissionMode string
+
 	// ExtraEnvPassthrough lists additional environment variable NAMES to
 	// forward to the subprocess beyond the base allowlist and
 	// defaultAuthEnvVars. Use this to opt in to cloud-specific credentials
@@ -128,7 +144,12 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		runner = a.defaultRunner()
 	}
 
-	args := append([]string{claudePrintFlag}, streamingArgs...)
+	permissionMode := a.PermissionMode
+	if permissionMode == "" {
+		permissionMode = defaultPermissionMode
+	}
+	args := []string{claudePrintFlag, "--permission-mode", permissionMode}
+	args = append(args, streamingArgs...)
 	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, args, prompt, env)
 
 	// finalText is the reconstructed equivalent of what `-p` alone would

@@ -384,7 +384,7 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 		})
 		return fake, nil
 	case "claude-code", "":
-		return &claude.Adapter{}, nil
+		return &claude.Adapter{PermissionMode: string(cfg.Agent.PermissionMode)}, nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}
