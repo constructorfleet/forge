@@ -31,6 +31,7 @@ Commands:
   cancel <execution-id>    Stop an active Execution and mark running work CANCELLED
   retry <execution>/<issue> Retry a FAILED Issue within its Execution
   resume <execution-id>    Reconcile and continue an incomplete Execution
+  goal init <feature-id>   Create a skeleton .forge/features/<feature-id>/goal.md
   plan <feature-id>        Run the planning compiler pipeline for a Feature
   approve <feature-id> spec   Approve a Specification at its current revision
   approve <feature-id> tickets  Approve a Ticket Plan at its current revision
@@ -68,6 +69,8 @@ func run(args []string) int {
 		return runRetry(rest)
 	case "resume":
 		return runResume(rest)
+	case "goal":
+		return runGoalInit(rest)
 	case "plan":
 		return runPlan(rest)
 	case "materialize":
