@@ -1,0 +1,207 @@
+package ticketplan
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/planning"
+	"github.com/Teagan42/forge/internal/planningagent"
+)
+
+func makeTestTicketPlanPC() planningagent.PlanningContext {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	decisions := []*planning.Artifact{
+		{
+			Kind:     planning.KindDecision,
+			Revision: "dec-rev",
+			Sections: []planning.Section{{Heading: "Question", Body: "Which storage?"}, {Heading: "Outcome", Body: "SQLite"}},
+		},
+	}
+
+	spec := &planning.Artifact{
+		Kind:     planning.KindSpec,
+		Revision: "spec-rev",
+		Sections: []planning.Section{
+			{Heading: "Context", Body: "A widget builder using SQLite"},
+			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable\nREQ-002: Widget must be testable"},
+			{Heading: "Non-Goals", Body: "Not building a gadget"},
+		},
+		DerivedFrom: []planning.DerivedFromEntry{
+			{Kind: planning.KindGoal, ID: "goal", Revision: "goal-rev"},
+			{Kind: planning.KindDecision, ID: "001-storage", Revision: "dec-rev"},
+			{Kind: "repository", ID: "repository", Revision: "repo-rev"},
+		},
+	}
+
+	artifacts := []planningagent.NamedArtifact{
+		{ID: "goal", Artifact: goal},
+		{ID: "001-storage", Artifact: decisions[0]},
+		{ID: "spec", Artifact: spec},
+	}
+
+	pc, err := planningagent.Compile(agent.RepositoryContext{BaseRevision: "base-rev"}, artifacts, nil)
+	if err != nil {
+		panic(err)
+	}
+	return pc
+}
+
+func TestTicketPlanGeneration(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully", "All unit tests pass"],
+				"dependencies": []
+			},
+			{
+				"key": "TKT-002",
+				"objective": "Add widget integration tests",
+				"requirements": ["REQ-002"],
+				"acceptance_criteria": ["Integration tests pass", "Coverage > 80%"],
+				"dependencies": ["TKT-001"]
+			}
+		]
+	}`+"\n```\n")
+
+	res, err := Generate(context.Background(), backend, pc)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if len(res.Tickets) != 2 {
+		t.Fatalf("len(tickets) = %d, want 2", len(res.Tickets))
+	}
+
+	if res.Tickets[0].Key != "TKT-001" {
+		t.Errorf("tickets[0].key = %q, want TKT-001", res.Tickets[0].Key)
+	}
+	if res.Tickets[0].Objective != "Implement widget builder core" {
+		t.Errorf("tickets[0].objective = %q", res.Tickets[0].Objective)
+	}
+	if len(res.Tickets[0].Requirements) != 1 || res.Tickets[0].Requirements[0] != "REQ-001" {
+		t.Errorf("tickets[0].requirements = %v, want [REQ-001]", res.Tickets[0].Requirements)
+	}
+	if len(res.Tickets[0].AcceptanceCriteria) != 2 {
+		t.Errorf("tickets[0].acceptance_criteria = %v, want 2 items", res.Tickets[0].AcceptanceCriteria)
+	}
+	if len(res.Tickets[0].Dependencies) != 0 {
+		t.Errorf("tickets[0].dependencies = %v, want empty", res.Tickets[0].Dependencies)
+	}
+
+	if res.Tickets[1].Key != "TKT-002" {
+		t.Errorf("tickets[1].key = %q, want TKT-002", res.Tickets[1].Key)
+	}
+	if len(res.Tickets[1].Dependencies) != 1 || res.Tickets[1].Dependencies[0] != "TKT-001" {
+		t.Errorf("tickets[1].dependencies = %v, want [TKT-001]", res.Tickets[1].Dependencies)
+	}
+}
+
+func TestTicketPlanGenerationValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		wantErr bool
+	}{
+		{
+			name:    "empty_tickets",
+			json:    `{"tickets":[]}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing_key",
+			json:    `{"tickets":[{"objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid_key_format",
+			json:    `{"tickets":[{"key":"TKT-1","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "key_out_of_sequence",
+			json:    `{"tickets":[{"key":"TKT-002","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing_objective",
+			json:    `{"tickets":[{"key":"TKT-001","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty_objective",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing_requirements",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty_requirements",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":[],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid_requirement_id",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-1"],"acceptance_criteria":["ac"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing_acceptance_criteria",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty_acceptance_criteria",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":[],"dependencies":[]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid_dependency_format",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":["001-storage"]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "self_dependency",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":["TKT-001"]}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "valid",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[]},{"key":"TKT-002","objective":"obj2","requirements":["REQ-002"],"acceptance_criteria":["ac2"],"dependencies":["TKT-001"]}]}`,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pc := makeTestTicketPlanPC()
+			backend := planningagent.NewFakeBackend()
+			backend.ProgramResult("ticket-plan-generation", "```json\n"+tt.json+"\n```\n")
+
+			_, err := Generate(context.Background(), backend, pc)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}

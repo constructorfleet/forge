@@ -10,6 +10,7 @@ import (
 	"github.com/Teagan42/forge/internal/spec"
 	"github.com/Teagan42/forge/internal/specgeneration"
 	"github.com/Teagan42/forge/internal/specreview"
+	"github.com/Teagan42/forge/internal/ticketplan"
 )
 
 type SpecEngine struct {
@@ -26,6 +27,7 @@ type ArtifactLoader interface {
 	LoadDecisions(ctx context.Context, featureID string) (map[string]*planning.Artifact, error)
 	SaveSpec(ctx context.Context, featureID string, spec *planning.Artifact) error
 	LoadSpec(ctx context.Context, featureID string) (*planning.Artifact, error)
+	SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error
 }
 
 type ReviewRepairBudget struct {
@@ -264,10 +266,111 @@ func renderSpecForRepair(specArtifact *planning.Artifact) string {
 	return out
 }
 
+// GenerateTicketPlan generates a ticket plan from an approved specification.
+func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, loader ArtifactLoader) error {
+	// Load the approved spec
+	specArtifact, err := loader.LoadSpec(ctx, featureID)
+	if err != nil {
+		return fmt.Errorf("specengine: load spec: %w", err)
+	}
+	if specArtifact == nil {
+		return fmt.Errorf("specengine: no spec found for feature %s", featureID)
+	}
+	if specArtifact.Kind != planning.KindSpec {
+		return fmt.Errorf("specengine: artifact is not a specification")
+	}
+	if specArtifact.State != "approved" && specArtifact.ApprovedRevision == "" {
+		return fmt.Errorf("specengine: specification is not approved")
+	}
+
+	// Load goal and decisions for context
+	goalArtifact, err := loader.LoadGoal(ctx, featureID)
+	if err != nil {
+		return fmt.Errorf("specengine: load goal: %w", err)
+	}
+
+	decisions, err := loader.LoadDecisions(ctx, featureID)
+	if err != nil {
+		return fmt.Errorf("specengine: load decisions: %w", err)
+	}
+
+	// Extract requirement IDs from spec
+	specReqIDs := spec.ExtractRequirementIDs(specArtifact.Sections[1].Body) // Requirements section
+
+	// Compile planning context with spec
+	artifacts := []planningagent.NamedArtifact{
+		{ID: "goal", Artifact: goalArtifact},
+	}
+	for id, dec := range decisions {
+		artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
+	}
+	artifacts = append(artifacts, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
+	pc, err := planningagent.Compile(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil)
+	if err != nil {
+		return fmt.Errorf("specengine: compile planning context: %w", err)
+	}
+
+	// Generate ticket plan
+	tpResult, err := ticketplan.Generate(ctx, e.Backend, pc)
+	if err != nil {
+		return fmt.Errorf("specengine: generate ticket plan: %w", err)
+	}
+
+	// Build ticket plan artifact
+	tpArtifact := &planning.Artifact{
+		Kind:     planning.KindTicketPlan,
+		Sections: make([]planning.Section, 0, len(tpResult.Tickets)),
+	}
+
+	for _, t := range tpResult.Tickets {
+		body := fmt.Sprintf("### Objective\n%s\n\n### Requirements\n", t.Objective)
+		for _, req := range t.Requirements {
+			body += fmt.Sprintf("%s\n", req)
+		}
+		body += "\n### Acceptance Criteria\n"
+		for _, ac := range t.AcceptanceCriteria {
+			body += fmt.Sprintf("- %s\n", ac)
+		}
+		body += "\n### Dependencies\n"
+		if len(t.Dependencies) == 0 {
+			body += "None"
+		} else {
+			for _, dep := range t.Dependencies {
+				body += fmt.Sprintf("%s\n", dep)
+			}
+		}
+		tpArtifact.Sections = append(tpArtifact.Sections, planning.Section{
+			Heading: fmt.Sprintf("Ticket: %s", t.Key),
+			Body:    body,
+		})
+	}
+
+	// DerivedFrom: spec + repository
+	tpArtifact.DerivedFrom = []planning.DerivedFromEntry{
+		{Kind: planning.KindSpec, ID: "spec", Revision: specArtifact.Revision},
+		{Kind: "repository", ID: "repository", Revision: pc.ContextRevision},
+	}
+
+	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
+
+	// Deterministic validation
+	if err := ticketplan.ValidateTicketPlanDeterministic(tpArtifact, specReqIDs, specArtifact.Revision, pc.ContextRevision); err != nil {
+		return fmt.Errorf("specengine: ticket plan deterministic validation failed: %w", err)
+	}
+
+	// Save ticket plan
+	if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
+		return fmt.Errorf("specengine: save ticket plan: %w", err)
+	}
+
+	return nil
+}
+
 type fakeLoader struct {
-	goal      *planning.Artifact
-	decisions map[string]*planning.Artifact
-	spec      *planning.Artifact
+	goal       *planning.Artifact
+	decisions  map[string]*planning.Artifact
+	spec       *planning.Artifact
+	ticketPlan *planning.Artifact
 }
 
 func (f *fakeLoader) LoadGoal(ctx context.Context, featureID string) (*planning.Artifact, error) {
@@ -288,4 +391,9 @@ func (f *fakeLoader) SaveSpec(ctx context.Context, featureID string, spec *plann
 
 func (f *fakeLoader) LoadSpec(ctx context.Context, featureID string) (*planning.Artifact, error) {
 	return f.spec, nil
+}
+
+func (f *fakeLoader) SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error {
+	f.ticketPlan = tp
+	return nil
 }

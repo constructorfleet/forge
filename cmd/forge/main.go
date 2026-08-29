@@ -220,6 +220,14 @@ func runPlan(args []string) int {
 		}
 	}
 
+	if untilStage == "tickets" {
+		if err := specEngine.GenerateTicketPlan(ctx, featureID, &fileArtifactLoader{featureID: featureID}); err != nil {
+			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stdout, "ticket-plan.md generated for feature %s\n", featureID)
+	}
+
 	return 0
 }
 
@@ -361,4 +369,14 @@ func (f *fileArtifactLoader) LoadSpec(ctx context.Context, featureID string) (*p
 		return nil, err
 	}
 	return planning.Parse(data)
+}
+
+func (f *fileArtifactLoader) SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error {
+	dir := filepath.Join(".forge", "features", featureID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "ticket-plan.md")
+	data := planning.Render(tp)
+	return os.WriteFile(path, data, 0o644)
 }
