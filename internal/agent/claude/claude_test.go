@@ -593,6 +593,21 @@ func TestTruncate_LeavesShortStringUnchanged(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_IncludesIssueTitleAndBody(t *testing.T) {
+	req := baseRequest()
+	req.Issue.Title = "The agent prompt must carry the Issue's title and body"
+	req.Issue.Body = "Acceptance: the prompt renders the Issue's full description, not just its ID."
+
+	prompt := buildPrompt(req)
+
+	if !strings.Contains(prompt, req.Issue.Title) {
+		t.Fatalf("prompt missing Issue Title:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, req.Issue.Body) {
+		t.Fatalf("prompt missing Issue Body:\n%s", prompt)
+	}
+}
+
 func TestBuildPrompt_OmitsRepositoryContextHeaderWhenEmpty(t *testing.T) {
 	req := baseRequest()
 	req.Repository = agent.RepositoryContext{}

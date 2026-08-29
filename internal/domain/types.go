@@ -31,6 +31,7 @@ type Issue struct {
 	ID           string
 	ExecutionID  string
 	Title        string
+	Body         string
 	State        IssueState
 	Scope        IssueScope
 	Dependencies []Dependency

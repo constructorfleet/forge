@@ -29,6 +29,9 @@ func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
 	if issue.Title != "Do the thing" {
 		t.Fatalf("got Title %q, want %q", issue.Title, "Do the thing")
 	}
+	if issue.Body != "desc\n\n## Dependencies\n- #1\n- #2\n" {
+		t.Fatalf("got Body %q, want the raw issue body", issue.Body)
+	}
 	if len(issue.Dependencies) != 2 {
 		t.Fatalf("got %d dependencies, want 2: %+v", len(issue.Dependencies), issue.Dependencies)
 	}

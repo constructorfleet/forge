@@ -38,10 +38,7 @@ const rules = "## Rules\n\n" +
 
 // buildPrompt renders req into the prompt piped to Claude Code on stdin. It
 // draws on whatever the normalized Issue and Repository/Policy context
-// currently carry (see internal/agent.AgentRequest); as later tickets
-// (e.g. the tracker adapter and Repository Context compiler) enrich those
-// types with issue title/body/acceptance-criteria fields, this function
-// should be extended to surface them.
+// currently carry (see internal/agent.AgentRequest).
 func buildPrompt(req agent.AgentRequest) string {
 	var b strings.Builder
 
@@ -49,6 +46,9 @@ func buildPrompt(req agent.AgentRequest) string {
 
 	b.WriteString("## Issue\n\n")
 	fmt.Fprintf(&b, "- ID: %s\n", req.Issue.ID)
+	if req.Issue.Title != "" {
+		fmt.Fprintf(&b, "- Title: %s\n", req.Issue.Title)
+	}
 	fmt.Fprintf(&b, "- State: %s\n", req.Issue.State)
 	if len(req.Issue.Dependencies) > 0 {
 		b.WriteString("- Depends on: ")
@@ -63,6 +63,12 @@ func buildPrompt(req agent.AgentRequest) string {
 		b.WriteString("- Depends on: none\n")
 	}
 	b.WriteString("\n")
+
+	if req.Issue.Body != "" {
+		b.WriteString("### Description\n\n")
+		b.WriteString(req.Issue.Body)
+		b.WriteString("\n\n")
+	}
 
 	if hasRepositoryContext(req.Repository) {
 		b.WriteString("## Repository Context\n\n")
