@@ -292,6 +292,33 @@ func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
 	return trk, nil
 }
 
+// verifyTrackerAuth runs the configured tracker's authentication preflight,
+// if it has one, before `forge execute`/`forge resume` do any
+// side-effecting work (opening the state store, creating a workspace,
+// invoking an agent, or transitioning an Issue). Two escape hatches exist
+// for contexts that legitimately need no tracker credential: a Tracker
+// implementation that needs no credential (e.g. a fake/offline tracker)
+// simply doesn't implement tracker.AuthPreflighter, so the type assertion
+// below fails and this is a no-op; alternatively cfg.Tracker.SkipAuthPreflight
+// opts out without even constructing a tracker.
+func verifyTrackerAuth(ctx context.Context, cfg config.Config, repoRoot string) error {
+	if cfg.Tracker.SkipAuthPreflight {
+		return nil
+	}
+	trk, err := buildTracker(cfg, repoRoot)
+	if err != nil {
+		return err
+	}
+	preflighter, ok := interface{}(trk).(tracker.AuthPreflighter)
+	if !ok {
+		return nil
+	}
+	if err := preflighter.VerifyAuth(ctx); err != nil {
+		return fmt.Errorf("forge: tracker authentication preflight failed: %w", err)
+	}
+	return nil
+}
+
 // gitReachabilityChecker is the production github.GitReachabilityChecker:
 // it shells out to `git merge-base --is-ancestor` against the primary
 // checkout at repoRoot, the same pattern resolveBaseRevision uses for

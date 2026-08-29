@@ -156,6 +156,18 @@ type Tracker interface {
 	Capabilities() Capabilities
 }
 
+// AuthPreflighter is an optional capability a Tracker adapter implements
+// when it needs a credential and can verify it cheaply up front. cmd/forge
+// type-asserts for this interface and, when present, calls VerifyAuth
+// before any side-effecting work begins (opening the state store, creating
+// a workspace, invoking an agent, or transitioning an Issue). A Tracker
+// that needs no credential (e.g. a fake/offline tracker) simply does not
+// implement AuthPreflighter — the type assertion fails and the preflight
+// is silently skipped, which is the escape hatch such contexts need.
+type AuthPreflighter interface {
+	VerifyAuth(ctx context.Context) error
+}
+
 // RateLimitError is returned by a Tracker implementation when a request is
 // rejected because the tracker's API rate limit has been exhausted. It is
 // tracker-agnostic so scheduler-facing code can detect and react to rate

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent/claude"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/tracker/github"
 )
 
 // runGit and newTempRepo delegate to internal/gittest, the shared fixture
@@ -166,5 +168,51 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 				t.Errorf("buildAgent(%q) = %T, want *claude.Adapter", tc.provider, ag)
 			}
 		})
+	}
+}
+
+func TestVerifyTrackerAuth_MissingTokenErrorsBeforeAnyRequest(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+
+	cfg := config.Default()
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+
+	if err := verifyTrackerAuth(context.Background(), cfg, root); !errors.Is(err, github.ErrMissingToken) {
+		t.Fatalf("verifyTrackerAuth: want github.ErrMissingToken, got %v", err)
+	}
+
+	// No side effects: verifyTrackerAuth runs before openStore, so nothing
+	// should have created the state database.
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("expected no state database to be created, stat error = %v", err)
+	}
+}
+
+func TestVerifyTrackerAuth_NoOriginRemoteErrors(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "a-token")
+
+	root, _ := newTempRepo(t)
+	cfg := config.Default()
+
+	if err := verifyTrackerAuth(context.Background(), cfg, root); err == nil {
+		t.Fatal("verifyTrackerAuth: want error without an 'origin' remote, got nil")
+	}
+}
+
+func TestVerifyTrackerAuth_SkipAuthPreflightIsAnEscapeHatch(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+
+	root, _ := newTempRepo(t)
+	// Deliberately no 'origin' remote either: SkipAuthPreflight must skip
+	// buildTracker entirely, not just the network call, so this context
+	// has zero dependency on a resolvable tracker.
+	cfg := config.Default()
+	cfg.Tracker.SkipAuthPreflight = true
+
+	if err := verifyTrackerAuth(context.Background(), cfg, root); err != nil {
+		t.Fatalf("verifyTrackerAuth with SkipAuthPreflight: want nil, got %v", err)
 	}
 }

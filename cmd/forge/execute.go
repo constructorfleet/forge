@@ -44,6 +44,11 @@ func runExecute(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
+		return 1
+	}
+
 	store, err := openStore(ctx, *dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
