@@ -471,6 +471,76 @@ func (m *Manager) Cleanup(ctx context.Context, executionID, issueID string) erro
 	})
 }
 
+// Rebase moves the Workspace's branch for executionID/issueID onto newBase,
+// in place — unlike Create's idempotent-reuse behavior (see its doc
+// comment), this actually moves an existing branch's tip, so a retried
+// Issue's Worker (ticket 29) can pick up a newer base without a
+// Cleanup+Create round trip that would discard any commits already made in
+// the Workspace.
+//
+// A conflict-free rebase moves the branch and returns (nil, nil). A rebase
+// that hits a conflict is aborted — the Workspace is left exactly as it was
+// before Rebase was called — and its conflicting paths are returned instead
+// of an error: a rebase conflict is an expected, caller-actionable outcome
+// here, not an infrastructure failure.
+func (m *Manager) Rebase(ctx context.Context, executionID, issueID, newBase string) ([]string, error) {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return nil, err
+	}
+
+	var conflicts []string
+	err := m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+
+		path := m.path(executionID, issueID)
+		if _, ok, err := m.lookupWorktree(ctx, path); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("workspace: rebase issue %s onto %s: %w", issueID, newBase, ErrNotFound)
+		}
+
+		if _, rebaseErr := m.runGit(ctx, path, "rebase", "--", newBase); rebaseErr != nil {
+			paths, err := m.conflictedPaths(ctx, path)
+			if err != nil {
+				return err
+			}
+			if len(paths) == 0 {
+				// Not a conflict (e.g. newBase does not resolve). Best-effort
+				// abort in case a rebase was nonetheless left in progress,
+				// then surface the original failure.
+				_, _, _ = m.runner.Run(ctx, path, "rebase", "--abort")
+				return rebaseErr
+			}
+			if _, err := m.runGit(ctx, path, "rebase", "--abort"); err != nil {
+				return fmt.Errorf("workspace: abort conflicted rebase for issue %s onto %s: %w", issueID, newBase, err)
+			}
+			conflicts = paths
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return conflicts, nil
+}
+
+// conflictedPaths lists paths with unresolved merge conflicts ("U" unmerged
+// status) in the Workspace at path.
+func (m *Manager) conflictedPaths(ctx context.Context, path string) ([]string, error) {
+	out, err := m.runGit(ctx, path, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths, nil
+}
+
 func (m *Manager) withGitMetadataLock(ctx context.Context, fn func() error) error {
 	if m.locker == nil {
 		return fn()

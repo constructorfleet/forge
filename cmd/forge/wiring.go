@@ -121,6 +121,15 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// via cfg.StatusReflection.Enabled (see statusreflect.Apply).
 	eng.StatusTracker = trk
 	eng.BaseBranch = baseBranchName(cfg.Git.Base)
+	// eng.TargetTip/eng.Ancestry (ticket 29) are wired unconditionally,
+	// like Publisher/PRTracker above: refreshing a retried Issue's base
+	// forward is always safe (it only ever adds already-merged commits),
+	// so there is no "not built yet" reason to leave RetryIssue on its
+	// pre-ticket-29 reuse-the-recorded-base behavior.
+	eng.TargetTip = engine.TargetTipResolverFunc(func(context.Context) (string, error) {
+		return resolveBaseRevision(repoRoot, cfg.Git.Base)
+	})
+	eng.Ancestry = gitReachabilityChecker{repoRoot: repoRoot}
 	if cfg.PullRequests.WatchCI {
 		sup := ci.New(store, trk, cfg, eng.BaseBranch)
 		sup.StatusTracker = trk

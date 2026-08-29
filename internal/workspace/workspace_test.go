@@ -416,3 +416,107 @@ func TestCreate_ConcurrentDistinctIssuesAllSucceed(t *testing.T) {
 		}
 	}
 }
+
+// TestRebase_MovesForwardCleanly is ticket 29's core Workspace-level case: a
+// retried Worker's branch has one commit of its own, the target branch
+// advanced with an unrelated commit in the meantime, and Rebase moves the
+// Workspace's branch onto that new tip without conflict.
+func TestRebase_MovesForwardCleanly(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "worker.txt"), []byte("worker change\n"), 0o644); err != nil {
+		t.Fatalf("write worker.txt: %v", err)
+	}
+	runGit(t, ws.Path, "add", "worker.txt")
+	runGit(t, ws.Path, "commit", "-q", "-m", "worker commit")
+
+	// Advance the target branch in the primary checkout with an unrelated
+	// commit, simulating another Issue's PR merging while this one was
+	// FAILED.
+	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("unrelated\n"), 0o644); err != nil {
+		t.Fatalf("write unrelated.txt: %v", err)
+	}
+	runGit(t, root, "add", "unrelated.txt")
+	runGit(t, root, "commit", "-q", "-m", "unrelated advance")
+	newBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	conflicts, err := mgr.Rebase(context.Background(), "exec1", "issue-42", newBase)
+	if err != nil {
+		t.Fatalf("Rebase: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none", conflicts)
+	}
+
+	// merge-base --is-ancestor exits non-zero (failing the test via runGit)
+	// if newBase is not an ancestor of the rebased branch's new HEAD.
+	runGit(t, ws.Path, "merge-base", "--is-ancestor", newBase, "HEAD")
+	if _, err := os.Stat(filepath.Join(ws.Path, "unrelated.txt")); err != nil {
+		t.Fatalf("worktree missing unrelated.txt after rebase onto new base: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "worker.txt")); err != nil {
+		t.Fatalf("worktree lost its own commit's worker.txt after rebase: %v", err)
+	}
+}
+
+// TestRebase_ConflictAbortsAndReportsPaths confirms a rebase conflict is
+// surfaced as conflicting paths, not an error, and leaves the Workspace
+// exactly as it was (branch tip unmoved, no rebase left in progress) so a
+// subsequent retry attempt starts clean.
+func TestRebase_ConflictAbortsAndReportsPaths(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "README.md"), []byte("worker edit\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, ws.Path, "add", "README.md")
+	runGit(t, ws.Path, "commit", "-q", "-m", "worker edit")
+	originalHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("conflicting target edit\n"), 0o644); err != nil {
+		t.Fatalf("write README.md on target: %v", err)
+	}
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-q", "-m", "conflicting target edit")
+	newBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	conflicts, err := mgr.Rebase(context.Background(), "exec1", "issue-42", newBase)
+	if err != nil {
+		t.Fatalf("Rebase: %v", err)
+	}
+	if len(conflicts) != 1 || conflicts[0] != "README.md" {
+		t.Fatalf("conflicts = %v, want [README.md]", conflicts)
+	}
+
+	head := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+	if head != originalHead {
+		t.Fatalf("HEAD after aborted rebase = %s, want unchanged %s", head, originalHead)
+	}
+	status := runGit(t, ws.Path, "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("workspace not clean after aborted rebase: %q", status)
+	}
+}
+
+// TestRebase_MissingWorkspaceReturnsErrNotFound confirms Rebase reports the
+// same ErrNotFound sentinel Validate does for a Workspace that was never
+// created, rather than a raw git error.
+func TestRebase_MissingWorkspaceReturnsErrNotFound(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	_, err := mgr.Rebase(context.Background(), "exec1", "never-created", base)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Rebase err = %v, want ErrNotFound", err)
+	}
+}
