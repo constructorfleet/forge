@@ -1,0 +1,188 @@
+package main
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/Teagan42/forge/internal/planning"
+)
+
+// TestRunGoalInit_CreatesValidSkeleton is the core acceptance criterion:
+// `forge goal init foo` on a clean repo must produce a goal.md that is
+// kind: goal, state: draft, has a non-empty revision, carries the four
+// required sections, and is not Stale (revision matches a fresh
+// recomputation of its own content).
+func TestRunGoalInit_CreatesValidSkeleton(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "foo"}); code != 0 {
+		t.Fatalf("runGoalInit = %d, want 0", code)
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Kind != planning.KindGoal {
+		t.Fatalf("Kind = %q, want %q", a.Kind, planning.KindGoal)
+	}
+	if a.State != "draft" {
+		t.Fatalf("State = %q, want draft", a.State)
+	}
+	if a.Revision == "" {
+		t.Fatal("Revision is empty, want non-empty")
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+	if len(a.DerivedFrom) != 0 {
+		t.Fatalf("DerivedFrom = %v, want empty (goal is a pipeline root)", a.DerivedFrom)
+	}
+	if a.ApprovedRevision != "" || a.ApprovedBy != "" || a.ApprovedAt != "" {
+		t.Fatal("approval fields must be empty on a fresh skeleton")
+	}
+
+	wantHeadings := []string{"Goal", "Context", "Constraints", "Success Criteria"}
+	if len(a.Sections) != len(wantHeadings) {
+		t.Fatalf("got %d sections, want %d: %+v", len(a.Sections), len(wantHeadings), a.Sections)
+	}
+	for i, h := range wantHeadings {
+		if a.Sections[i].Heading != h {
+			t.Errorf("section %d heading = %q, want %q", i, a.Sections[i].Heading, h)
+		}
+		if a.Sections[i].Body == "" {
+			t.Errorf("section %d (%s) has empty body, want placeholder prose", i, h)
+		}
+	}
+	for _, h := range wantHeadings {
+		if h == "Non-Goals" {
+			t.Fatal("skeleton must not include a Non-Goals section")
+		}
+	}
+}
+
+// TestRunGoalInit_NoClobber confirms that re-running without --force exits
+// non-zero and leaves the existing file byte-identical.
+func TestRunGoalInit_NoClobber(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "foo"}); code != 0 {
+		t.Fatalf("first runGoalInit = %d, want 0", code)
+	}
+
+	path := filepath.Join(dir, ".forge", "features", "foo", "goal.md")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo"}); code == 0 {
+		t.Fatal("second runGoalInit without --force = 0, want non-zero")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("goal.md was modified by a no-clobber run")
+	}
+}
+
+// TestRunGoalInit_ForceOverwrites confirms --force overwrites an existing
+// goal.md and re-stamps a fresh draft rather than preserving approval state.
+func TestRunGoalInit_ForceOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	featureDir := filepath.Join(dir, ".forge", "features", "foo")
+	if err := os.MkdirAll(featureDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := &planning.Artifact{
+		Kind:  planning.KindGoal,
+		State: "approved",
+		Sections: []planning.Section{
+			{Heading: "Goal", Body: "hand-written goal"},
+		},
+	}
+	existing.Revision = planning.ComputeRevision(existing)
+	existing.ApprovedRevision = existing.Revision
+	existing.ApprovedBy = "someone"
+	existing.ApprovedAt = "2026-01-01T00:00:00Z"
+	if err := os.WriteFile(filepath.Join(featureDir, "goal.md"), planning.Render(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runGoalInit([]string{"init", "foo", "--force"}); code != 0 {
+		t.Fatalf("runGoalInit --force = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(featureDir, "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.State != "draft" {
+		t.Fatalf("State = %q, want draft after --force", a.State)
+	}
+	if a.ApprovedRevision != "" || a.ApprovedBy != "" || a.ApprovedAt != "" {
+		t.Fatal("--force must not preserve approval fields")
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("re-stamped artifact is Stale: ComputeRevision = %q, Revision = %q", got, a.Revision)
+	}
+	if len(a.Sections) != 4 || a.Sections[0].Body == "hand-written goal" {
+		t.Fatal("--force must overwrite with a fresh skeleton, not preserve old content")
+	}
+}
+
+// TestRunGoalInit_RejectsUnsafeFeatureID confirms unsafe feature-ids are
+// rejected before any filesystem write.
+func TestRunGoalInit_RejectsUnsafeFeatureID(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "../escape"}); code == 0 {
+		t.Fatal("runGoalInit with unsafe feature-id = 0, want non-zero")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
+		t.Fatalf(".forge dir was created despite invalid feature-id, stat err = %v", err)
+	}
+}
+
+// TestRunGoalInit_ThenPlan confirms `forge plan`'s "no goal.md yet" branch
+// -- the one that returns cleanly without a goal -- is not taken once
+// `forge goal init` has run: loading the goal through the same
+// fileArtifactLoader forge plan uses must now succeed with a valid,
+// non-Stale Artifact.
+func TestRunGoalInit_ThenPlan(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "widget"}); code != 0 {
+		t.Fatalf("runGoalInit = %d, want 0", code)
+	}
+
+	loader := &fileArtifactLoader{featureID: "widget"}
+	goal, err := loader.LoadGoal(context.Background(), "widget")
+	if err != nil {
+		t.Fatalf("LoadGoal: %v", err)
+	}
+	if planning.ComputeRevision(goal) != goal.Revision {
+		t.Fatal("loaded goal is Stale; forge plan would treat it as invalid compiler input")
+	}
+}
