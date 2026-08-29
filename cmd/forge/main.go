@@ -16,8 +16,10 @@ import (
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
+	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/specengine"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/ticketplan"
 )
 
 const helpText = `forge - deterministic orchestration for software-engineering agents
@@ -215,6 +217,17 @@ func runPlan(args []string) int {
 	backend := planningagent.NewFakeBackend()
 
 	specEngine := specengine.NewSpecEngine(backend)
+	// Replanning writes a new spec/ticket plan *around* work that already
+	// shipped (ticket 22, acceptance item 3): completed Issues enter the
+	// PlanningContext as implemented facts carrying the old ticket plan
+	// revision they were built under, and are never rolled back. On a
+	// Feature's first plan this is simply empty.
+	facts, err := replan.GatherImplementedFacts(ctx, store, featureID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge plan: gather implemented facts: %v\n", err)
+		return 1
+	}
+	specEngine.ImplementedFacts = facts
 
 	if untilStage == "spec" || untilStage == "tickets" {
 		if err := specEngine.GenerateSpec(ctx, featureID, &fileArtifactLoader{featureID: featureID}); err != nil {
@@ -382,7 +395,54 @@ func runApproveTickets(args []string) int {
 	}
 
 	fmt.Fprintf(os.Stdout, "ticket-plan.md approved for feature %s at revision %s\n", featureID, currentRev[:16])
+
+	if err := resumeFrozenFeature(ctx, store, featureID, currentRev, tpArtifact); err != nil {
+		fmt.Fprintf(os.Stderr, "forge approve tickets: %v\n", err)
+		return 1
+	}
 	return 0
+}
+
+// resumeFrozenFeature is acceptance item 5's approval-side half: once a new
+// Ticket Plan is approved, the Issues the old plan produced that this one no
+// longer contains — and that never started — are closed as superseded, and
+// only then is the Feature's replan freeze lifted so frozen work can resume.
+// A Feature that is not frozen (the ordinary, non-replan approval) is left
+// entirely alone.
+func resumeFrozenFeature(ctx context.Context, store storage.Store, featureID, planRevision string, plan *planning.Artifact) error {
+	// Checked before the plan is parsed so an ordinary approval of a
+	// never-frozen Feature is completely unaffected by replanning — it does
+	// not even have to satisfy the ticket parser.
+	frozen, _, err := store.IsFeatureFrozen(ctx, featureID)
+	if err != nil {
+		return fmt.Errorf("check replan freeze: %w", err)
+	}
+	if !frozen {
+		return nil
+	}
+
+	tickets, err := ticketplan.ParseTicketPlan(plan)
+	if err != nil {
+		return fmt.Errorf("parse approved ticket plan: %w", err)
+	}
+	planned := make([]string, 0, len(tickets))
+	for _, t := range tickets {
+		planned = append(planned, t.Key)
+	}
+
+	superseded, err := replan.ResumeFeature(ctx, store, featureID, planRevision, planned)
+	if errors.Is(err, replan.ErrNotFrozen) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, id := range superseded {
+		fmt.Fprintf(os.Stdout, "issue %s closed as superseded by the new ticket plan\n", id)
+	}
+	fmt.Fprintf(os.Stdout, "feature %s unfrozen; work may resume against the approved plan\n", featureID)
+	return nil
 }
 
 type fileArtifactLoader struct {
@@ -427,6 +487,19 @@ func (f *fileArtifactLoader) LoadDecisions(ctx context.Context, featureID string
 		decisions[id] = artifact
 	}
 	return decisions, nil
+}
+
+// SaveDecision writes one Decision Artifact back to
+// .forge/features/<feature>/decisions/<id>.md, creating the directory if
+// this is the Feature's first Decision. It is what makes fileArtifactLoader
+// satisfy replan.DecisionStore, so a REPLAN_REQUIRED escalation can
+// create/reopen a Decision on disk (ticket 22).
+func (f *fileArtifactLoader) SaveDecision(ctx context.Context, featureID, decisionID string, decision *planning.Artifact) error {
+	dir := filepath.Join(".forge", "features", featureID, "decisions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, decisionID+".md"), planning.Render(decision), 0o644)
 }
 
 func (f *fileArtifactLoader) SaveSpec(ctx context.Context, featureID string, spec *planning.Artifact) error {

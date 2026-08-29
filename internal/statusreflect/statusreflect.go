@@ -39,10 +39,11 @@ const startComment = "Forge has started work on this issue."
 
 // Label returns the tracker label state should carry under cfg, or "" if
 // state carries no status-reflection label at all: PENDING,
-// BLOCKED_DEPENDENCY, and READY (not yet claimed); NEEDS_INFO (composes
-// with the existing blocked label applied by internal/engine's
-// handleNeedsInfo rather than fighting it — see Apply's doc comment); and
-// the terminal DONE/CANCELLED states.
+// BLOCKED_DEPENDENCY, and READY (not yet claimed); NEEDS_INFO and
+// NEEDS_REPLAN (both compose with the existing blocked label applied by
+// internal/engine's handleNeedsInfo/handleReplanRequired rather than
+// fighting it — see Apply's doc comment); and the terminal DONE/CANCELLED
+// states.
 func Label(cfg config.StatusReflectionConfig, state domain.IssueState) string {
 	switch state {
 	case domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,

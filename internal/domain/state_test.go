@@ -40,6 +40,10 @@ func legalTransitions() []struct {
 		{domain.StateCIFailed, domain.StateImplementing},
 		{domain.StateCIFailed, domain.StateFailed},
 		{domain.StateNeedsInfo, domain.StateReady},
+		{domain.StateImplementing, domain.StateNeedsReplan},
+		{domain.StateCommitting, domain.StateNeedsReplan},
+		{domain.StateNeedsReplan, domain.StateReady},
+		{domain.StateNeedsReplan, domain.StateCancelled},
 		{domain.StateFailed, domain.StateReady},
 		// Manual cancellation is reachable from every non-terminal state.
 		{domain.StatePending, domain.StateCancelled},
@@ -58,8 +62,12 @@ func legalTransitions() []struct {
 	}
 }
 
-func TestAllSixteenStatesAreDefined(t *testing.T) {
-	want := []domain.IssueState{
+// allStates is every IssueState the state machine defines, in lifecycle
+// order. One list rather than a copy per test, so adding a state (e.g.
+// NEEDS_REPLAN, ticket 22) is a single edit that every exhaustive test
+// picks up.
+func allStates() []domain.IssueState {
+	return []domain.IssueState{
 		domain.StatePending,
 		domain.StateBlockedDependency,
 		domain.StateReady,
@@ -73,12 +81,17 @@ func TestAllSixteenStatesAreDefined(t *testing.T) {
 		domain.StateCIPending,
 		domain.StateCIFailed,
 		domain.StateNeedsInfo,
+		domain.StateNeedsReplan,
 		domain.StateFailed,
 		domain.StateDone,
 		domain.StateCancelled,
 	}
-	if len(want) != 16 {
-		t.Fatalf("test setup error: expected 16 states, got %d", len(want))
+}
+
+func TestAllSeventeenStatesAreDefined(t *testing.T) {
+	want := allStates()
+	if len(want) != 17 {
+		t.Fatalf("test setup error: expected 17 states, got %d", len(want))
 	}
 	seen := make(map[domain.IssueState]bool)
 	for _, s := range want {
@@ -144,13 +157,7 @@ func TestIllegalTransitionsAreRejected(t *testing.T) {
 
 func TestTerminalStatesHaveNoOutgoingTransitions(t *testing.T) {
 	terminal := []domain.IssueState{domain.StateDone, domain.StateCancelled}
-	all := []domain.IssueState{
-		domain.StatePending, domain.StateBlockedDependency, domain.StateReady,
-		domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
-		domain.StateValidating, domain.StateReviewing, domain.StateCommitting,
-		domain.StatePRCreating, domain.StateCIPending, domain.StateCIFailed,
-		domain.StateNeedsInfo, domain.StateFailed, domain.StateDone, domain.StateCancelled,
-	}
+	all := allStates()
 	for _, from := range terminal {
 		for _, to := range all {
 			if err := domain.ValidateTransition(from, to); err == nil {
@@ -162,13 +169,7 @@ func TestTerminalStatesHaveNoOutgoingTransitions(t *testing.T) {
 
 func TestFailedOnlyAllowsManualRetry(t *testing.T) {
 	allowed := map[domain.IssueState]bool{domain.StateReady: true}
-	all := []domain.IssueState{
-		domain.StatePending, domain.StateBlockedDependency, domain.StateReady,
-		domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
-		domain.StateValidating, domain.StateReviewing, domain.StateCommitting,
-		domain.StatePRCreating, domain.StateCIPending, domain.StateCIFailed,
-		domain.StateNeedsInfo, domain.StateFailed, domain.StateDone, domain.StateCancelled,
-	}
+	all := allStates()
 	for _, to := range all {
 		err := domain.ValidateTransition(domain.StateFailed, to)
 		if allowed[to] {
@@ -183,19 +184,58 @@ func TestFailedOnlyAllowsManualRetry(t *testing.T) {
 	}
 }
 
+// TestNeedsReplanOnlyExitsAreReadyAndCancelled pins acceptance item 1: the
+// NEEDS_REPLAN state a REPLAN_REQUIRED escalation parks an Issue in has
+// exactly two exits — back to READY once a fresh plan is approved, or
+// CANCELLED when the Issue is superseded by that plan.
+func TestNeedsReplanOnlyExitsAreReadyAndCancelled(t *testing.T) {
+	allowed := map[domain.IssueState]bool{
+		domain.StateReady:     true,
+		domain.StateCancelled: true,
+	}
+	for _, to := range allStates() {
+		err := domain.ValidateTransition(domain.StateNeedsReplan, to)
+		if allowed[to] {
+			if err != nil {
+				t.Fatalf("NEEDS_REPLAN -> %s should be legal, got %v", to, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("NEEDS_REPLAN -> %s should be rejected", to)
+		}
+	}
+}
+
+// TestNeedsReplanIsReachableOnlyFromImplementingAndCommitting pins the two
+// entry points: the Agent's own structural escalation (IMPLEMENTING) and the
+// integration gate an in-flight Worker hits after committing (COMMITTING).
+func TestNeedsReplanIsReachableOnlyFromImplementingAndCommitting(t *testing.T) {
+	allowed := map[domain.IssueState]bool{
+		domain.StateImplementing: true,
+		domain.StateCommitting:   true,
+	}
+	for _, from := range allStates() {
+		err := domain.ValidateTransition(from, domain.StateNeedsReplan)
+		if allowed[from] {
+			if err != nil {
+				t.Fatalf("%s -> NEEDS_REPLAN should be legal, got %v", from, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s -> NEEDS_REPLAN should be rejected", from)
+		}
+	}
+}
+
 func TestIsTerminal(t *testing.T) {
 	terminal := map[domain.IssueState]bool{
 		domain.StateDone:      true,
 		domain.StateCancelled: true,
 		domain.StateFailed:    true,
 	}
-	all := []domain.IssueState{
-		domain.StatePending, domain.StateBlockedDependency, domain.StateReady,
-		domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
-		domain.StateValidating, domain.StateReviewing, domain.StateCommitting,
-		domain.StatePRCreating, domain.StateCIPending, domain.StateCIFailed,
-		domain.StateNeedsInfo, domain.StateFailed, domain.StateDone, domain.StateCancelled,
-	}
+	all := allStates()
 	for _, s := range all {
 		want := terminal[s]
 		if got := s.IsTerminal(); got != want {
