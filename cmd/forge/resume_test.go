@@ -17,7 +17,7 @@ func TestRunResume_ReconcilesReadyExecution(t *testing.T) {
 	runGit(t, repoRoot, "remote", "add", "origin", "git@github.com:acme/widgets.git")
 
 	cfgPath := filepath.Join(repoRoot, ".forge.yaml")
-	if err := os.WriteFile(cfgPath, []byte("version: 1\nagent:\n  provider: fake\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("version: 1\nagent:\n  provider: fake\ntracker:\n  skip_auth_preflight: true\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

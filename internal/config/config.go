@@ -21,6 +21,14 @@ import (
 // TrackerConfig identifies the issue tracker backing an Execution.
 type TrackerConfig struct {
 	Type string `yaml:"type"`
+
+	// SkipAuthPreflight opts a context that legitimately needs no tracker
+	// credential (e.g. an offline dry run against a tracker the Execution
+	// never actually calls) out of `forge execute`/`forge resume`'s startup
+	// authentication preflight (see cmd/forge's verifyTrackerAuth). Default
+	// false: the preflight runs, and a missing/invalid credential aborts
+	// before any side-effecting work begins.
+	SkipAuthPreflight bool `yaml:"skip_auth_preflight"`
 }
 
 // GitConfig configures the base revision, branch naming, and Workspace

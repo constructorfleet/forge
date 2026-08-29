@@ -124,8 +124,16 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 		return nil, rlErr
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &AuthenticationError{Path: fullURL}
+	}
+
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, &NotFoundError{Path: fullURL}
+	}
+
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, &AuthorizationError{Path: fullURL}
 	}
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
@@ -231,4 +239,32 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("github: validation failed: %s: %s", e.Path, e.Body)
+}
+
+// AuthenticationError is returned when the GitHub API responds 401
+// (Unauthorized) — the credential Client sent (or, more commonly, failed
+// to send because GITHUB_TOKEN is unset) was not accepted at all. Exported
+// so a startup auth preflight (see VerifyAuth) can report "unauthenticated"
+// distinctly from "authenticated but forbidden" (AuthorizationError) or
+// "not found" (NotFoundError).
+type AuthenticationError struct {
+	Path string
+}
+
+func (e *AuthenticationError) Error() string {
+	return fmt.Sprintf("github: unauthenticated: %s: check that %s is set to a valid token", e.Path, tokenEnvVar)
+}
+
+// AuthorizationError is returned when the GitHub API responds a plain 403
+// (Forbidden) that rateLimitError did not classify as a rate limit — the
+// request reached GitHub and was authenticated, but the credential lacks
+// permission for the resource. Exported so VerifyAuth and other callers
+// can distinguish "reachable but unauthorized" from AuthenticationError's
+// "unauthenticated" via errors.As.
+type AuthorizationError struct {
+	Path string
+}
+
+func (e *AuthorizationError) Error() string {
+	return fmt.Sprintf("github: forbidden: %s: the credential is authenticated but not authorized for this resource", e.Path)
 }
