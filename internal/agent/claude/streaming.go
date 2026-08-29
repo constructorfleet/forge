@@ -42,6 +42,13 @@ type streamLine struct {
 	Result  string         `json:"result"`
 	// Timestamp is the backend's own per-event clock (issue 36).
 	Timestamp string `json:"timestamp"`
+	// Model, CWD, and SessionID are carried on the leading "system"/"init"
+	// line (issue 36) and folded into a summary TranscriptEvent so a
+	// transcript's first recorded event is the run's actual start, not an
+	// orphaned mid-run tool result.
+	Model     string `json:"model"`
+	CWD       string `json:"cwd"`
+	SessionID string `json:"session_id"`
 }
 
 type streamMessage struct {
@@ -152,7 +159,36 @@ func (p *streamParser) consume(line string) {
 		p.resultSubtype = sl.Subtype
 	case "system":
 		p.parsedAny = true
+		p.emitSystemInit(sl, ts)
 	}
+}
+
+// emitSystemInit emits a summary TranscriptEvent for the stream's leading
+// "system"/"init" line (issue 36): the transcript's captured turn sequence
+// must start at the run's actual beginning, not at whatever the first
+// tool call happens to be, and re-deriving the CLI's full init payload
+// isn't necessary for that — a compact summary is enough to anchor the
+// timeline and record which model/session produced it.
+func (p *streamParser) emitSystemInit(sl streamLine, ts time.Time) {
+	if sl.Subtype != "init" {
+		return
+	}
+	summary := "session initialized"
+	if sl.Model != "" {
+		summary += " model=" + sl.Model
+	}
+	if sl.CWD != "" {
+		summary += " cwd=" + sl.CWD
+	}
+	if sl.SessionID != "" {
+		summary += " session_id=" + sl.SessionID
+	}
+	p.emit(agent.TranscriptEvent{
+		Type:      agent.TranscriptEventMessage,
+		Role:      "system",
+		Text:      boundedTranscriptField(summary),
+		Timestamp: ts,
+	})
 }
 
 // finalText returns the reconstructed final response text and whether the
