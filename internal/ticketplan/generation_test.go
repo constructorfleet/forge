@@ -2,6 +2,7 @@ package ticketplan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -163,6 +164,63 @@ func TestTicketPlanGenerationWithEstimates(t *testing.T) {
 	}
 }
 
+func TestTicketPlanGenerationWithImplementationContext(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully"],
+				"dependencies": [],
+				"implementation_context": ["internal/widget/builder.go: extend Build() with the new option"]
+			}
+		]
+	}`+"\n```\n")
+
+	res, err := Generate(context.Background(), backend, pc)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if len(res.Tickets[0].ImplementationContext) != 1 {
+		t.Fatalf("implementation_context = %v, want 1 item", res.Tickets[0].ImplementationContext)
+	}
+	if res.Tickets[0].ImplementationContext[0] != "internal/widget/builder.go: extend Build() with the new option" {
+		t.Errorf("implementation_context[0] = %q", res.Tickets[0].ImplementationContext[0])
+	}
+}
+
+func TestRenderTicketBodyIncludesImplementationContext(t *testing.T) {
+	t.Run("with entries", func(t *testing.T) {
+		body := RenderTicketBody(TicketGenResult{
+			Key:                   "TKT-001",
+			Objective:             "Do the thing",
+			Requirements:          []string{"REQ-001"},
+			AcceptanceCriteria:    []string{"It works"},
+			ImplementationContext: []string{"internal/widget/builder.go: extend Build()"},
+		})
+		if !strings.Contains(body, "### Implementation Context\n- internal/widget/builder.go: extend Build()") {
+			t.Errorf("body missing implementation context section: %q", body)
+		}
+	})
+
+	t.Run("without entries", func(t *testing.T) {
+		body := RenderTicketBody(TicketGenResult{
+			Key:                "TKT-001",
+			Objective:          "Do the thing",
+			Requirements:       []string{"REQ-001"},
+			AcceptanceCriteria: []string{"It works"},
+		})
+		if !strings.Contains(body, "### Implementation Context\nNone") {
+			t.Errorf("body missing None placeholder: %q", body)
+		}
+	})
+}
+
 func TestTicketPlanGenerationValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -252,6 +310,16 @@ func TestTicketPlanGenerationValidation(t *testing.T) {
 		{
 			name:    "empty_estimate_size",
 			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"estimate":{"size":""}}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "valid_with_implementation_context",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"implementation_context":["internal/widget/builder.go: extend Build()"]}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "empty_implementation_context_entry",
+			json:    `{"tickets":[{"key":"TKT-001","objective":"obj","requirements":["REQ-001"],"acceptance_criteria":["ac"],"dependencies":[],"implementation_context":[""]}]}`,
 			wantErr: true,
 		},
 	}

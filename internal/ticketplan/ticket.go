@@ -9,12 +9,13 @@ import (
 const TicketKeyPrefix = "TKT-"
 
 type Ticket struct {
-	Key                string
-	Objective          string
-	Requirements       []string
-	AcceptanceCriteria []string
-	Dependencies       []string
-	Estimate           *planning.TicketEstimate
+	Key                   string
+	Objective             string
+	Requirements          []string
+	AcceptanceCriteria    []string
+	Dependencies          []string
+	ImplementationContext []string
+	Estimate              *planning.TicketEstimate
 }
 
 func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
@@ -88,6 +89,24 @@ func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
 		}
 		if len(ticket.AcceptanceCriteria) == 0 {
 			return nil, errMissingAcceptanceCriteria(key)
+		}
+
+		// Parse Implementation Context (optional)
+		icStart := strings.Index(body, "### Implementation Context")
+		if icStart != -1 {
+			icEnd := findNextHeading(body, icStart)
+			icBody := strings.TrimSpace(body[icStart+len("### Implementation Context") : icEnd])
+			if icBody != "" && !strings.EqualFold(icBody, "None") {
+				for _, line := range strings.Split(icBody, "\n") {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "-") || strings.HasPrefix(line, "*") {
+						note := strings.TrimSpace(line[1:])
+						if note != "" {
+							ticket.ImplementationContext = append(ticket.ImplementationContext, note)
+						}
+					}
+				}
+			}
 		}
 
 		// Parse Dependencies
