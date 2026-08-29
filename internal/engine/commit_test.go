@@ -134,13 +134,18 @@ func TestExecute_CommitAndPR_AdvancesToCIPending(t *testing.T) {
 		t.Fatalf("final state = %s, want CI_PENDING", result.Issue.State)
 	}
 
-	// Commit used the default template: "{title}\n\nRefs #{issue}".
+	// Commit used the default template: "{type}: {title}\n\n{body}\n\nRefs
+	// #{issue}" — Conventional Commits header, a body, and the issue id at
+	// the end (ticket 78).
 	if len(pub.commitCalls) != 1 {
 		t.Fatalf("got %d commit calls, want 1", len(pub.commitCalls))
 	}
-	wantMsg := "Add widget support\n\nRefs #40"
-	if pub.commitCalls[0].message != wantMsg {
-		t.Errorf("commit message = %q, want %q", pub.commitCalls[0].message, wantMsg)
+	msg := pub.commitCalls[0].message
+	if !strings.HasPrefix(msg, "feat: Add widget support\n\n") {
+		t.Errorf("commit message = %q, want it to start with a Conventional Commits header", msg)
+	}
+	if !strings.HasSuffix(msg, "\n\nRefs #40") {
+		t.Errorf("commit message = %q, want it to end with the issue id", msg)
 	}
 
 	// Push targeted the Workspace's branch.
@@ -157,8 +162,13 @@ func TestExecute_CommitAndPR_AdvancesToCIPending(t *testing.T) {
 	if req.Base != "main" {
 		t.Errorf("PR Base = %q, want %q", req.Base, "main")
 	}
-	if req.Title != "Add widget support" {
-		t.Errorf("PR Title = %q, want %q", req.Title, "Add widget support")
+	if req.Title != "feat: Add widget support" {
+		t.Errorf("PR Title = %q, want %q", req.Title, "feat: Add widget support")
+	}
+	for _, section := range []string{"## Summary", "## Why", "## What Was Changed", "## How it Was Tested"} {
+		if !strings.Contains(req.Body, section) {
+			t.Errorf("PR Body = %q, want it to contain section %q", req.Body, section)
+		}
 	}
 	if !strings.Contains(req.Body, "Closes #40") {
 		t.Errorf("PR Body = %q, want it to contain %q", req.Body, "Closes #40")

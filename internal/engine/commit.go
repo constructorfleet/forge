@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -42,8 +44,45 @@ type PRCreator interface {
 // config.PullRequestsConfig.CommitMessageTemplate's own default. Engine
 // falls back to this literal (rather than requiring every caller to build
 // its Config via config.Default()) so a zero-value config.Config still
-// renders a sensible commit message.
-const defaultCommitMessageTemplate = "{title}\n\nRefs #{issue}"
+// renders a sensible commit message. It renders a Conventional Commits
+// header ({type}: {title}), a wrapped body describing the change, and a
+// trailing issue reference (ticket 78's acceptance criteria).
+const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}"
+
+// commitMessageWrapWidth is the column at which commit message and pull
+// request body prose is wrapped (ticket 78's "wrap at 80 characters"
+// acceptance criterion).
+const commitMessageWrapWidth = 80
+
+// conventionalCommitHeader matches a Conventional Commits header line:
+// type[(scope)][!]: description. Used to detect an Issue Title that already
+// carries its own conventional-commit prefix, so commitMessage/prTitle
+// don't double-prefix it.
+var conventionalCommitHeader = regexp.MustCompile(`^[a-z]+(\([a-zA-Z0-9_./-]+\))?!?: .+`)
+
+// conventionalCommitTypeKeywords maps keywords that may appear in an
+// Issue's Title or Body to the Conventional Commits type they imply. Checked
+// in order; the first match wins. This is a best-effort heuristic — Forge's
+// Issue model (CONTEXT.md "Issue") carries no explicit change-type field, so
+// the type is inferred from the text an Agent/human already wrote.
+var conventionalCommitTypeKeywords = []struct {
+	keyword string
+	ctype   string
+}{
+	{"fix", "fix"},
+	{"bug", "fix"},
+	{"doc", "docs"},
+	{"refactor", "refactor"},
+	{"test", "test"},
+	{"perf", "perf"},
+	{"chore", "chore"},
+	{"cleanup", "chore"},
+}
+
+// defaultConventionalCommitType is used when no keyword in
+// conventionalCommitTypeKeywords matches the Issue's Title/Body: most Forge
+// Issues implement new functionality, so "feat" is the safest default.
+const defaultConventionalCommitType = "feat"
 
 // runCommitAndPR implements ticket 22's COMMITTING and PR_CREATING stages,
 // entered once Review approves an implementation (or, with no Reviewer
@@ -65,7 +104,11 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return issue, nil
 	}
 
-	message := e.commitMessage(issue)
+	summary, err := e.agentSummary(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	message := e.commitMessage(issue, summary)
 	sha, err := e.Publisher.Commit(ctx, ws.Path, message)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issueID, err)
@@ -115,7 +158,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		Base:  e.BaseBranch,
 		Head:  ws.Branch,
 		Title: prTitle(issue),
-		Body:  prBody(issue),
+		Body:  prBody(issue, summary),
 	})
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: create pull request for issue %s: %w", issueID, err)
@@ -169,45 +212,164 @@ func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, worke
 	return issue, true, err
 }
 
+// agentSummary recovers the implementing Agent's human-readable summary
+// (agent.AgentResult.Summary) from the "agent.result" Event invokeAgent
+// appends (see engine.go's appendEvent call), so the commit/PR message
+// built well after that Agent invocation returned can still describe what
+// it actually did. Empty if no "agent.result" Event was recorded (e.g. a
+// test double that skips event appending) or its summary was blank.
+func (e *Engine) agentSummary(ctx context.Context, executionID, issueID string) (string, error) {
+	events, err := e.Store.EventsByIssue(ctx, executionID, issueID)
+	if err != nil {
+		return "", fmt.Errorf("engine: load events for issue %s: %w", issueID, err)
+	}
+	var summary string
+	for _, evt := range events {
+		if evt.Type != "agent.result" {
+			continue
+		}
+		var payload struct {
+			Summary string `json:"summary"`
+		}
+		if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+			continue
+		}
+		if strings.TrimSpace(payload.Summary) != "" {
+			summary = payload.Summary
+		}
+	}
+	return summary, nil
+}
+
 // commitMessage renders e.Config.PullRequests.CommitMessageTemplate (or
-// defaultCommitMessageTemplate, if unset) against issue's {title}/{issue}
-// placeholders.
-func (e *Engine) commitMessage(issue domain.Issue) string {
+// defaultCommitMessageTemplate, if unset) against issue's
+// {type}/{title}/{body}/{issue} placeholders (ticket 78: commit messages
+// must be Conventional Commits formatted, wrap at 80 columns, and carry a
+// title, a body, and the issue id at the end).
+func (e *Engine) commitMessage(issue domain.Issue, summary string) string {
 	tmpl := e.Config.PullRequests.CommitMessageTemplate
 	if tmpl == "" {
 		tmpl = defaultCommitMessageTemplate
 	}
-	return renderIssueTemplate(tmpl, issue)
+	return renderIssueTemplate(tmpl, issue, summary)
 }
 
-// prTitle is the pull request's title: the Issue's Title, falling back to
-// a generic "Issue #<id>" label for a tracker adapter that doesn't
-// populate Title.
+// prTitle is the pull request's title: the Issue's Title, Conventional
+// Commits-prefixed unless it already carries its own prefix (e.g. an Issue
+// titled "fix: nil panic on empty diff"), falling back to a generic "Issue
+// #<id>" label for a tracker adapter that doesn't populate Title.
 func prTitle(issue domain.Issue) string {
-	if issue.Title != "" {
-		return issue.Title
+	title := issue.Title
+	if title == "" {
+		title = "Issue #" + issue.ID
 	}
-	return "Issue #" + issue.ID
+	if conventionalCommitHeader.MatchString(title) {
+		return title
+	}
+	return conventionalCommitType(issue) + ": " + title
 }
 
-// prBody renders the pull request description: a one-line summary, a
-// validation checklist (Quality Gates and Review both already passed by
-// the time runCommitAndPR runs — the resting-state doc comments on
-// runQualityGates/runReview establish that invariant), and the `Closes
-// #<number>` issue reference GitHub uses to auto-close the Issue on merge.
-func prBody(issue domain.Issue) string {
+// conventionalCommitType infers the Conventional Commits type implied by
+// issue's Title/Body via conventionalCommitTypeKeywords, defaulting to
+// defaultConventionalCommitType.
+func conventionalCommitType(issue domain.Issue) string {
+	haystack := strings.ToLower(issue.Title + " " + issue.Body)
+	for _, kw := range conventionalCommitTypeKeywords {
+		if strings.Contains(haystack, kw.keyword) {
+			return kw.ctype
+		}
+	}
+	return defaultConventionalCommitType
+}
+
+// changeDescription is the free-form prose describing what changed, shared
+// by the commit body and the PR's "Why"/"What Was Changed" sections: the
+// Agent's own summary of its work when available, falling back to the
+// Issue's Body (its description), and finally a generic sentence so the
+// commit/PR are never left with an empty section.
+func changeDescription(issue domain.Issue, summary string) string {
+	if strings.TrimSpace(summary) != "" {
+		return strings.TrimSpace(summary)
+	}
+	if strings.TrimSpace(issue.Body) != "" {
+		return strings.TrimSpace(issue.Body)
+	}
+	return fmt.Sprintf("Implements the requirements described in issue #%s.", issue.ID)
+}
+
+// prBody renders the pull request description with the sections ticket 78
+// requires: Summary, Why, What Was Changed, How it Was Tested, and the
+// `Closes #<number>` issue reference GitHub uses to auto-close the Issue on
+// merge. Quality Gates and Review have both already passed by the time
+// runCommitAndPR runs — the resting-state doc comments on
+// runQualityGates/runReview establish that invariant — so "How it Was
+// Tested" reports that checklist rather than re-deriving it.
+func prBody(issue domain.Issue, summary string) string {
+	description := wrapText(changeDescription(issue, summary), commitMessageWrapWidth)
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "Implements #%s: %s\n\n", issue.ID, prTitle(issue))
-	b.WriteString("## Validation\n\n")
+	b.WriteString("## Summary\n\n")
+	b.WriteString(description)
+	b.WriteString("\n\n## Why\n\n")
+	fmt.Fprintf(&b, "Addresses issue #%s: %s\n\n", issue.ID, prTitle(issue))
+	b.WriteString("## What Was Changed\n\n")
+	b.WriteString(description)
+	b.WriteString("\n\n## How it Was Tested\n\n")
 	b.WriteString("- [x] Quality Gates passed\n")
 	b.WriteString("- [x] Review approved\n\n")
 	fmt.Fprintf(&b, "Closes #%s\n", issue.ID)
 	return b.String()
 }
 
-// renderIssueTemplate replaces the {title} and {issue} placeholders in
-// tmpl with issue.Title and issue.ID respectively.
-func renderIssueTemplate(tmpl string, issue domain.Issue) string {
-	r := strings.NewReplacer("{title}", issue.Title, "{issue}", issue.ID)
+// renderIssueTemplate replaces the {type}, {title}, {body}, and {issue}
+// placeholders in tmpl with the inferred Conventional Commits type,
+// issue.Title, a wrapped change description, and issue.ID respectively.
+func renderIssueTemplate(tmpl string, issue domain.Issue, summary string) string {
+	r := strings.NewReplacer(
+		"{type}", conventionalCommitType(issue),
+		"{title}", issue.Title,
+		"{body}", wrapText(changeDescription(issue, summary), commitMessageWrapWidth),
+		"{issue}", issue.ID,
+	)
 	return r.Replace(tmpl)
+}
+
+// wrapText word-wraps text to width columns, preserving existing blank
+// lines (paragraph breaks) rather than collapsing them, so multi-paragraph
+// Agent summaries/Issue bodies keep their structure (ticket 78's "wrap at
+// 80 characters" acceptance criterion).
+func wrapText(text string, width int) string {
+	paragraphs := strings.Split(text, "\n\n")
+	wrapped := make([]string, len(paragraphs))
+	for i, p := range paragraphs {
+		wrapped[i] = wrapParagraph(p, width)
+	}
+	return strings.Join(wrapped, "\n\n")
+}
+
+// wrapParagraph word-wraps a single paragraph (no blank lines) to width
+// columns.
+func wrapParagraph(p string, width int) string {
+	words := strings.Fields(p)
+	if len(words) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	lineLen := 0
+	for i, w := range words {
+		switch {
+		case i == 0:
+			b.WriteString(w)
+			lineLen = len(w)
+		case lineLen+1+len(w) > width:
+			b.WriteString("\n")
+			b.WriteString(w)
+			lineLen = len(w)
+		default:
+			b.WriteString(" ")
+			b.WriteString(w)
+			lineLen += 1 + len(w)
+		}
+	}
+	return b.String()
 }

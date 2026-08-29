@@ -309,7 +309,11 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 	if e.Publisher == nil || e.PRTracker == nil {
 		return issue, nil
 	}
-	sha, err := e.Publisher.Commit(ctx, ws.Path, e.commitMessage(issue))
+	summary, err := e.agentSummary(ctx, executionID, issue.ID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	sha, err := e.Publisher.Commit(ctx, ws.Path, e.commitMessage(issue, summary))
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issue.ID, err)
 	}
@@ -317,7 +321,7 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 		Base:  e.BaseBranch,
 		Head:  ws.Branch,
 		Title: prTitle(issue),
-		Body:  prBody(issue),
+		Body:  prBody(issue, summary),
 	})
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: create pull request for issue %s: %w", issue.ID, err)

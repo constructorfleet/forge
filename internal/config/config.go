@@ -76,8 +76,10 @@ type PullRequestsConfig struct {
 	WatchCI bool `yaml:"watch_ci"`
 	// CommitMessageTemplate templates the commit message the COMMITTING
 	// stage's Publisher commits validated work with (ticket 22), using the
-	// {title} and {issue} placeholders (the Issue's Title and ID). Default:
-	// "{title}\n\nRefs #{issue}".
+	// {type}, {title}, {body}, and {issue} placeholders (the inferred
+	// Conventional Commits type, the Issue's Title, a wrapped change
+	// description, and the Issue's ID). Default:
+	// "{type}: {title}\n\n{body}\n\nRefs #{issue}".
 	CommitMessageTemplate string `yaml:"commit_message_template"`
 }
 
@@ -224,9 +226,10 @@ type Config struct {
 }
 
 // defaultCommitMessageTemplate is PullRequestsConfig.CommitMessageTemplate's
-// default value. See internal/engine's runCommitAndPR (ticket 22) for the
-// {title}/{issue} placeholder rendering.
-const defaultCommitMessageTemplate = "{title}\n\nRefs #{issue}"
+// default value. See internal/engine's runCommitAndPR (ticket 22) and
+// commitMessage (ticket 78) for the {type}/{title}/{body}/{issue}
+// placeholder rendering.
+const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}"
 
 // defaultAgentTimeout is AgentConfig.Timeout's default: generous enough for
 // a genuinely long-running (but progressing) agent turn, since Timeout is a
