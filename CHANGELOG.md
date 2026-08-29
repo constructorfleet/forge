@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/constructorfleet/forge/compare/forge-v0.8.0...forge-v0.9.0) (2026-08-29)
+
+
+### Features
+
+* Language & server detection (registry + Detected Servers) ([#129](https://github.com/constructorfleet/forge/issues/129)) ([288b8bb](https://github.com/constructorfleet/forge/commit/288b8bb4f23b8606854197e758c7cebf46f6a1c4)), closes [#122](https://github.com/constructorfleet/forge/issues/122)
+
 ## [0.8.0](https://github.com/constructorfleet/forge/compare/forge-v0.7.1...forge-v0.8.0) (2026-08-29)
 
 
