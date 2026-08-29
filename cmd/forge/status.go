@@ -38,6 +38,18 @@ func runStatus(args []string) int {
 		return 2
 	}
 
+	// A single argument naming a Feature (one with a
+	// .forge/features/<id> Planning Artifact directory) is `forge status
+	// <feature-id>`, ticket 21's planning-side status view -- distinct from
+	// `forge status <execution-id>` below, which reads an Execution's
+	// coding-side state. The two ID spaces don't collide in practice
+	// (Execution IDs are UUIDs; Feature IDs are operator-chosen slugs), so
+	// this is resolved by which directory actually exists on disk rather
+	// than by a separate subcommand.
+	if fs.NArg() == 1 && !*transcript && isFeatureID(fs.Arg(0)) {
+		return runFeatureStatus(fs.Arg(0), *dbPath)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
