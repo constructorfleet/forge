@@ -660,12 +660,14 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		}
 	}
 
+	recorder := agent.NewTranscriptRecorder()
 	req := agent.AgentRequest{
 		WorkspacePath: workspacePath,
 		Issue:         issue,
 		Repository:    repoCtx,
 		Policy:        agent.WorkflowPolicy{},
 		Feedback:      feedback,
+		Transcript:    recorder,
 	}
 	contextBytes, err := agent.ContextSizeBytes(req)
 	if err != nil {
@@ -692,9 +694,15 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		run.InputTokens = &inputTokens
 		run.OutputTokens = &outputTokens
 	}
-	if recordErr := e.Store.RecordAgentRun(ctx, run); recordErr != nil {
+	agentRunID, recordErr := e.Store.RecordAgentRun(ctx, run)
+	if recordErr != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: record agent run for issue %s: %w", issueID, recordErr)
 	}
+	// Transcript persistence is best-effort per ticket 28: a storage
+	// failure here is a durability gap for this attempt's transcript, not
+	// a reason to fail the Issue — the AgentRun and its {status, summary}
+	// envelope are already durably recorded above regardless.
+	_ = e.Store.RecordTranscriptEvents(ctx, executionID, issueID, agentRunID, toStorageTranscriptEvents(recorder.Events()))
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
 	}
@@ -717,6 +725,28 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 	default:
 		return domain.Issue{}, false, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
 	}
+}
+
+// toStorageTranscriptEvents translates agent.TranscriptEvents (this
+// package's Agent-facing capture type) into storage.TranscriptEvents (the
+// persisted shape), the same translation convention GateRun/ReviewRun
+// document: storage has no dependency on internal/agent, so the engine
+// converts between the two.
+func toStorageTranscriptEvents(events []agent.TranscriptEvent) []storage.TranscriptEvent {
+	out := make([]storage.TranscriptEvent, len(events))
+	for i, event := range events {
+		out[i] = storage.TranscriptEvent{
+			Seq:        event.Seq,
+			Type:       string(event.Type),
+			Role:       event.Role,
+			Text:       event.Text,
+			ToolName:   event.ToolName,
+			ToolInput:  event.ToolInput,
+			ToolOutput: event.ToolOutput,
+			OccurredAt: event.Timestamp,
+		}
+	}
+	return out
 }
 
 // runQualityGates runs the Issue's configured Quality Gates (ticket 19,

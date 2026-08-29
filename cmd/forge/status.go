@@ -10,19 +10,31 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/storage"
 )
 
-// runStatus implements `forge status <execution-id>`: a pure read of
-// whatever `forge execute` (or any other Engine caller) already persisted —
-// the Execution, every Issue recorded against it, and its full Event log.
+// runStatus implements `forge status [execution-id] [issue-id]`: a pure
+// read of whatever `forge execute` (or any other Engine caller) already
+// persisted — the Execution, every Issue recorded against it, its full
+// Event log, and (with --transcript) one Issue's Agent transcript across
+// every attempt (ticket 28).
 func runStatus(args []string) int {
 	fs := flag.NewFlagSet("forge status", flag.ContinueOnError)
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")
+	transcript := fs.Bool("transcript", false, "print the Agent transcript for <execution-id> <issue-id> instead of status")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() > 1 {
-		fmt.Fprintln(os.Stderr, "forge status: expected zero or one argument, [execution-id]")
+	if fs.NArg() > 2 {
+		fmt.Fprintln(os.Stderr, "forge status: expected zero, one, or two arguments, [execution-id] [issue-id]")
+		return 2
+	}
+	if *transcript && fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "forge status: --transcript requires both <execution-id> and <issue-id>")
+		return 2
+	}
+	if !*transcript && fs.NArg() == 2 {
+		fmt.Fprintln(os.Stderr, "forge status: <issue-id> is only valid with --transcript")
 		return 2
 	}
 
@@ -38,6 +50,16 @@ func runStatus(args []string) int {
 
 	// Status is a pure read: it needs only Store, not the tracker,
 	// Workspace manager, or Agent buildEngine would otherwise wire up.
+	if *transcript {
+		events, err := engine.LoadTranscript(ctx, store, fs.Arg(0), fs.Arg(1))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
+			return 1
+		}
+		printTranscript(os.Stdout, events)
+		return 0
+	}
+
 	if fs.NArg() == 0 {
 		summaries, err := engine.ListActiveExecutions(ctx, store)
 		if err != nil {
@@ -57,6 +79,23 @@ func runStatus(args []string) int {
 
 	printStatus(os.Stdout, report)
 	return 0
+}
+
+// printTranscript renders one Issue's captured Agent transcript
+// (ticket 28), ordered chronologically across every attempt (AgentRun).
+func printTranscript(w io.Writer, events []storage.TranscriptEvent) {
+	fmt.Fprintf(w, "transcript (%d events):\n", len(events))
+	for _, event := range events {
+		ts := event.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
+		switch event.Type {
+		case "TOOL_CALL":
+			fmt.Fprintf(w, "  %s  run=%d  tool_call   %s  input=%s\n", ts, event.AgentRunID, event.ToolName, event.ToolInput)
+		case "TOOL_RESULT":
+			fmt.Fprintf(w, "  %s  run=%d  tool_result %s  output=%s\n", ts, event.AgentRunID, event.ToolName, event.ToolOutput)
+		default:
+			fmt.Fprintf(w, "  %s  run=%d  %-11s %s: %s\n", ts, event.AgentRunID, strings.ToLower(event.Type), event.Role, event.Text)
+		}
+	}
 }
 
 func printExecutionSummaries(w io.Writer, summaries []engine.ExecutionSummary) {

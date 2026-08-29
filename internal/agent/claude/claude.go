@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/textcap"
@@ -44,6 +45,15 @@ const maxCapturedOutputLen = 4 * maxDiagnosticLen
 // prompt from stdin, prints its final response to stdout, and exits
 // without an interactive session.
 const claudePrintFlag = "-p"
+
+// streamingArgs requests Claude Code's per-turn streaming JSON output
+// (ticket 28): one JSON object per line — assistant messages, tool calls,
+// tool results, and a terminal "result" line — instead of only the final
+// response text. Execute reconstructs the same final text `-p` alone would
+// have printed from this stream (see parseStreamTranscript) and, when
+// req.Transcript is set, emits a TranscriptEvent for each recognized line
+// along the way.
+var streamingArgs = []string{"--output-format", "stream-json", "--verbose"}
 
 // allowedEnvVars is the fixed base allowlist of environment variables
 // passed to the Claude Code subprocess. The Agent's environment is
@@ -93,6 +103,11 @@ type Adapter struct {
 	// in the base allowlist, defaultAuthEnvVars, or ExtraEnvPassthrough is
 	// excluded, regardless of what's set in Forge's own environment.
 	ExtraEnvPassthrough []string
+
+	// Now timestamps TranscriptEvents as Execute parses them out of the
+	// streamed output (ticket 28). Defaults to time.Now when nil; tests
+	// inject a fixed clock for deterministic assertions.
+	Now func() time.Time
 }
 
 // Execute implements agent.Agent. It builds a prompt from req, invokes
@@ -113,29 +128,36 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		runner = a.defaultRunner()
 	}
 
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, []string{claudePrintFlag}, prompt, env)
+	args := append([]string{claudePrintFlag}, streamingArgs...)
+	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, args, prompt, env)
+
+	// finalText is the reconstructed equivalent of what `-p` alone would
+	// have printed (see extractFinalText); every downstream use of the raw
+	// stdout capture below is replaced with it so transcript capture is
+	// transparent to existing diagnostics and result parsing.
+	finalText := a.extractFinalText(stdout, req.Transcript)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return agent.AgentResult{
 			Status:  agent.StatusFailed,
-			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: cancelled: %v", ctxErr), stdout, stderr),
+			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: cancelled: %v", ctxErr), finalText, stderr),
 		}, fmt.Errorf("claude adapter: cancelled: %w", ctxErr)
 	}
 
 	if err != nil {
 		return agent.AgentResult{
 			Status:  agent.StatusFailed,
-			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: subprocess error: %v", err), stdout, stderr),
+			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: subprocess error: %v", err), finalText, stderr),
 		}, nil
 	}
 
-	res, ok := parseStructuredResult(stdout)
+	res, ok := parseStructuredResult(finalText)
 	if !ok {
 		return agent.AgentResult{
 			Status: agent.StatusFailed,
 			Summary: diagnosticSummary(
 				fmt.Sprintf("claude adapter: no structured result found in output (exit code %d)", exitCode),
-				stdout, stderr,
+				finalText, stderr,
 			),
 		}, nil
 	}
@@ -173,6 +195,37 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 			Summary: diagnosticSummary(fmt.Sprintf("claude adapter: unrecognized status %q", res.Status), stdout, stderr),
 		}, nil
 	}
+}
+
+// extractFinalText recovers the final response text from stdout — the
+// same text `-p` alone would have printed — by parsing it as
+// `--output-format stream-json --verbose` output, and, when sink is
+// non-nil, emitting a TranscriptEvent for every message/tool call/tool
+// result it recognizes along the way (ticket 28).
+//
+// Parsing is entirely best-effort: any failure to recognize the stream —
+// including a panic from a malformed line this code doesn't anticipate —
+// falls back to treating stdout itself as the final text, exactly matching
+// this Adapter's pre-transcript behavior, so a streaming-parse bug can
+// never change an Issue's outcome (ticket 28's degrade-gracefully
+// requirement).
+func (a *Adapter) extractFinalText(stdout string, sink agent.TranscriptSink) (finalText string) {
+	finalText = stdout
+	defer func() {
+		if r := recover(); r != nil {
+			finalText = stdout
+		}
+	}()
+
+	now := a.Now
+	if now == nil {
+		now = time.Now
+	}
+	text, ok := parseStreamTranscript(stdout, sink, now)
+	if !ok {
+		return stdout
+	}
+	return text
 }
 
 func toTokenUsage(in *usageFields) *agent.TokenUsage {

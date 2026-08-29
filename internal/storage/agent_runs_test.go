@@ -44,8 +44,12 @@ func TestRecordAgentRun_PersistsAndAppendsEvent(t *testing.T) {
 		InputTokens:  &inputTokens,
 		OutputTokens: &outputTokens,
 	}
-	if err := store.RecordAgentRun(ctx, run); err != nil {
+	runID, err := store.RecordAgentRun(ctx, run)
+	if err != nil {
 		t.Fatalf("RecordAgentRun: %v", err)
+	}
+	if runID <= 0 {
+		t.Fatalf("RecordAgentRun returned id = %d, want positive", runID)
 	}
 
 	runs, err := store.AgentRunsByIssue(ctx, "exec-agent", "issue-agent")
@@ -112,7 +116,7 @@ func TestAgentRunsByExecution_ReturnsRunsAcrossIssuesInInsertionOrder(t *testing
 	}
 
 	for _, issueID := range []string{"issue-a", "issue-b"} {
-		if err := store.RecordAgentRun(ctx, storage.AgentRun{
+		if _, err := store.RecordAgentRun(ctx, storage.AgentRun{
 			ExecutionID:  "exec-agent-2",
 			IssueID:      issueID,
 			Backend:      "claude-code",

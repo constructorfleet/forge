@@ -44,6 +44,14 @@ type AgentRequest struct {
 	// rejections, or CI failures, so a repair iteration can address them.
 	// Empty on the first attempt.
 	Feedback []Feedback
+
+	// Transcript, if non-nil, receives TranscriptEvents (messages, tool
+	// calls, tool results) as this invocation progresses (ticket 28).
+	// Optional: nil means no capture, matching every Agent's behavior
+	// before this field existed. Excluded from JSON so ContextSizeBytes
+	// keeps measuring only the context handed to the Agent, not this
+	// output-only seam.
+	Transcript TranscriptSink `json:"-"`
 }
 
 // RepositoryContext is relatively stable information shared across all

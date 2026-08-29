@@ -95,6 +95,7 @@ type StatusStore interface {
 	CIRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.CIRun, error)
 	WorkerClaim(ctx context.Context, executionID, issueID string) (storage.WorkerClaim, error)
 	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]storage.PullRequest, error)
+	TranscriptEventsByIssue(ctx context.Context, executionID, issueID string) ([]storage.TranscriptEvent, error)
 }
 
 func ListActiveExecutions(ctx context.Context, store StatusStore) ([]ExecutionSummary, error) {
@@ -149,6 +150,19 @@ func LoadStatus(ctx context.Context, store StatusStore, executionID string) (Sta
 		return StatusReport{}, err
 	}
 	return StatusReport{Execution: state.Execution, Issues: issues, Telemetry: telemetry, Events: events}, nil
+}
+
+// LoadTranscript reloads every TranscriptEvent recorded for one Issue
+// (ticket 28's read surface), across every AgentRun attempt, in
+// chronological order — a pure read over whatever the Agent Adapter's
+// best-effort capture already persisted, exactly as LoadStatus is a pure
+// read over the rest of an Execution's state.
+func LoadTranscript(ctx context.Context, store StatusStore, executionID, issueID string) ([]storage.TranscriptEvent, error) {
+	events, err := store.TranscriptEventsByIssue(ctx, executionID, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("engine: load transcript for issue %s/%s: %w", executionID, issueID, err)
+	}
+	return events, nil
 }
 
 func buildIssueStatuses(ctx context.Context, store StatusStore, state storage.ExecutionState, events []storage.Event) ([]IssueStatus, error) {
