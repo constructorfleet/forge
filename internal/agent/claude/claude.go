@@ -20,6 +20,32 @@ import (
 )
 
 var _ agent.Agent = (*Adapter)(nil)
+var _ agent.SemanticProfiler = (*Adapter)(nil)
+
+// claudeSemanticProfile is the v1 baseline Semantic Profile for Claude
+// Code: it exposes every Semantic Capability natively except
+// TypeHierarchy, and Forge fills that gap through a language-server
+// plugin Claude Code loads (see CONTEXT.md "Injection Channel").
+var claudeSemanticProfile = agent.SemanticProfile{
+	Capabilities: agent.SemanticCapabilities{
+		Definition:      true,
+		References:      true,
+		Implementation:  true,
+		Hover:           true,
+		DocumentSymbol:  true,
+		WorkspaceSymbol: true,
+		CallHierarchy:   true,
+		TypeHierarchy:   false,
+	},
+	Channel: agent.InjectionChannelLSPPlugin,
+}
+
+// SemanticProfile declares Claude Code's native Semantic Capabilities and
+// Injection Channel (see CONTEXT.md "Semantic Profile"), implementing
+// agent.SemanticProfiler.
+func (a *Adapter) SemanticProfile() agent.SemanticProfile {
+	return claudeSemanticProfile
+}
 
 // Runner executes one Claude Code invocation: args are passed on the
 // command line, stdin carries the prompt, dir is the working directory

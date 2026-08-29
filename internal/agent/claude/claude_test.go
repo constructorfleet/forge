@@ -937,3 +937,27 @@ func TestDefaultRunner_BoundsUnboundedOutput(t *testing.T) {
 }
 
 var _ agent.Agent = (*Adapter)(nil)
+
+func TestAdapter_SemanticProfileDeclaresAllButTypeHierarchyViaLSPPlugin(t *testing.T) {
+	a := &Adapter{}
+
+	var profiler agent.SemanticProfiler = a
+	got := profiler.SemanticProfile()
+
+	want := agent.SemanticProfile{
+		Capabilities: agent.SemanticCapabilities{
+			Definition:      true,
+			References:      true,
+			Implementation:  true,
+			Hover:           true,
+			DocumentSymbol:  true,
+			WorkspaceSymbol: true,
+			CallHierarchy:   true,
+			TypeHierarchy:   false,
+		},
+		Channel: agent.InjectionChannelLSPPlugin,
+	}
+	if got != want {
+		t.Fatalf("SemanticProfile() = %+v, want %+v", got, want)
+	}
+}

@@ -14,6 +14,23 @@ import (
 )
 
 var _ agent.Agent = (*Adapter)(nil)
+var _ agent.SemanticProfiler = (*Adapter)(nil)
+
+// codexSemanticProfile is the v1 baseline Semantic Profile for Codex: it
+// exposes no Semantic Capabilities natively, so Forge fills every
+// capability through a Model Context Protocol server (see CONTEXT.md
+// "Injection Channel").
+var codexSemanticProfile = agent.SemanticProfile{
+	Capabilities: agent.SemanticCapabilities{},
+	Channel:      agent.InjectionChannelMCP,
+}
+
+// SemanticProfile declares Codex's native Semantic Capabilities and
+// Injection Channel (see CONTEXT.md "Semantic Profile"), implementing
+// agent.SemanticProfiler.
+func (a *Adapter) SemanticProfile() agent.SemanticProfile {
+	return codexSemanticProfile
+}
 
 // Runner executes one Codex CLI invocation. See clicommon.Runner for the
 // full contract; aliased here so callers configuring an Adapter don't need
