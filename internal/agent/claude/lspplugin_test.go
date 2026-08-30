@@ -88,6 +88,85 @@ func TestExecute_WithNativeServers_WritesLSPPluginAndAppendsPluginDirFlag(t *tes
 	}
 }
 
+// TestBuildLSPServerConfig_PythonServer_SplitsCommandAndArgsAndMapsExtensions
+// is this ticket's (#154) core red test for the command/args split bug:
+// pyright-langserver's registry Command is multi-token
+// (["pyright-langserver", "--stdio"]); pre-#154 buildLSPServerConfig joined
+// it into one non-PATH-resolvable "command" string. It must instead emit
+// the bare binary as "command" and the rest as "args", plus the python
+// extensionToLanguage entries (.py, .pyi) from the adapter-local table.
+func TestBuildLSPServerConfig_PythonServer_SplitsCommandAndArgsAndMapsExtensions(t *testing.T) {
+	config := buildLSPServerConfig([]agent.NativeServer{
+		{Language: "python", Command: []string{"pyright-langserver", "--stdio"}},
+	})
+
+	entry, ok := config["pyright-langserver"]
+	if !ok {
+		t.Fatalf("config = %+v, want a %q entry", config, "pyright-langserver")
+	}
+	if entry.Command != "pyright-langserver" {
+		t.Errorf("Command = %q, want %q", entry.Command, "pyright-langserver")
+	}
+	if len(entry.Args) != 1 || entry.Args[0] != "--stdio" {
+		t.Errorf("Args = %+v, want [\"--stdio\"]", entry.Args)
+	}
+	want := map[string]string{".py": "python", ".pyi": "python"}
+	if len(entry.ExtensionToLanguage) != len(want) {
+		t.Errorf("ExtensionToLanguage = %+v, want %+v", entry.ExtensionToLanguage, want)
+	}
+	for ext, lang := range want {
+		if entry.ExtensionToLanguage[ext] != lang {
+			t.Errorf("ExtensionToLanguage[%q] = %q, want %q", ext, entry.ExtensionToLanguage[ext], lang)
+		}
+	}
+}
+
+// TestBuildLSPServerConfig_JavaScriptServer_MapsAnthropicMultiExtensionIDs
+// covers the "javascript" registry key's full Anthropic .lsp.json language
+// ID fan-out: .ts/.mts/.cts -> typescript, .tsx -> typescriptreact,
+// .js/.mjs/.cjs -> javascript, .jsx -> javascriptreact.
+func TestBuildLSPServerConfig_JavaScriptServer_MapsAnthropicMultiExtensionIDs(t *testing.T) {
+	config := buildLSPServerConfig([]agent.NativeServer{
+		{Language: "javascript", Command: []string{"typescript-language-server", "--stdio"}},
+	})
+
+	entry, ok := config["typescript-language-server"]
+	if !ok {
+		t.Fatalf("config = %+v, want a %q entry", config, "typescript-language-server")
+	}
+	want := map[string]string{
+		".ts":  "typescript",
+		".tsx": "typescriptreact",
+		".mts": "typescript",
+		".cts": "typescript",
+		".js":  "javascript",
+		".jsx": "javascriptreact",
+		".mjs": "javascript",
+		".cjs": "javascript",
+	}
+	if len(entry.ExtensionToLanguage) != len(want) {
+		t.Errorf("ExtensionToLanguage = %+v, want %+v", entry.ExtensionToLanguage, want)
+	}
+	for ext, lang := range want {
+		if entry.ExtensionToLanguage[ext] != lang {
+			t.Errorf("ExtensionToLanguage[%q] = %q, want %q", ext, entry.ExtensionToLanguage[ext], lang)
+		}
+	}
+}
+
+// TestBuildLSPServerConfig_UnknownLanguage_SkipsServer asserts the skip
+// rule change: a server is skipped only because the adapter has no
+// extension table for its Language, not via any single-ext lookup.
+func TestBuildLSPServerConfig_UnknownLanguage_SkipsServer(t *testing.T) {
+	config := buildLSPServerConfig([]agent.NativeServer{
+		{Language: "ruby", Command: []string{"solargraph", "stdio"}},
+	})
+
+	if len(config) != 0 {
+		t.Errorf("config = %+v, want empty: \"ruby\" has no extensionToLanguage table entry", config)
+	}
+}
+
 // isWithin reports whether target is a descendant of dir.
 func isWithin(target, dir string) bool {
 	rel, err := filepath.Rel(dir, target)

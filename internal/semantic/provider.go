@@ -131,6 +131,15 @@ func buildDescriptor(profile agent.SemanticProfile, cfg Config, servers []Detect
 		}
 	}
 
+	// The native-LSP channel provisions its detected servers independent of
+	// any capability gap: Claude drives its own fixed native-LSP operation
+	// set regardless of what servers are available, so "lacks an op" and
+	// "needs a server" are separate questions on this channel. Provisioning
+	// here depends only on the channel and whether anything was detected.
+	if profile.Channel == agent.InjectionChannelLSPPlugin && len(servers) > 0 {
+		needNative = true
+	}
+
 	var descriptor agent.SemanticDescriptor
 	if needNative {
 		for _, s := range servers {

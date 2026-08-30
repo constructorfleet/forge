@@ -17,12 +17,35 @@ import (
 // running against it at a time.
 const lspPluginDirName = ".forge-claude-lsp-plugin"
 
-// languageFileExtensions maps a Detected Server's Language (as populated by
-// the Language Server Registry, internal/lsp) to the file extension Claude
-// Code's `.lsp.json` uses to route files to it. v1 has exactly one entry,
-// matching the registry's only built-in server.
-var languageFileExtensions = map[string]string{
-	"go": ".go",
+// extensionToLanguage maps a Detected Server's Language (as populated by
+// the Language Server Registry, internal/lsp) to the file extension ->
+// Anthropic language ID table Claude Code's `.lsp.json` uses to route files
+// to it. These are Claude's own `.lsp.json` vocabulary (e.g.
+// "typescriptreact" for `.tsx`), not the registry's language keys, and so
+// live here rather than in internal/lsp (see ADR 0016). A server whose
+// Language has no entry here is skipped when building `.lsp.json` — Claude
+// Code has no way to route files to it without one.
+var extensionToLanguage = map[string]map[string]string{
+	"go": {
+		".go": "go",
+	},
+	"rust": {
+		".rs": "rust",
+	},
+	"python": {
+		".py":  "python",
+		".pyi": "python",
+	},
+	"javascript": {
+		".ts":  "typescript",
+		".tsx": "typescriptreact",
+		".mts": "typescript",
+		".cts": "typescript",
+		".js":  "javascript",
+		".jsx": "javascriptreact",
+		".mjs": "javascript",
+		".cjs": "javascript",
+	},
 }
 
 // lspPluginManifest is the minimal Claude Code plugin manifest
@@ -38,28 +61,33 @@ type lspPluginManifest struct {
 // `LSP` tool should launch, and which file extensions route to it.
 type lspServerEntry struct {
 	Command             string            `json:"command"`
+	Args                []string          `json:"args,omitempty"`
 	ExtensionToLanguage map[string]string `json:"extensionToLanguage"`
 }
 
 // buildLSPServerConfig translates servers (the SemanticProvider seam's
 // backend-neutral NativeServer identities) into `.lsp.json`'s shape, keyed
-// by each server's command basename (e.g. "gopls"). A server whose Language
-// has no known file extension (languageFileExtensions) is skipped — Claude
-// Code's `.lsp.json` has no way to route files to it without one.
+// by each server's command basename (e.g. "gopls"). Command is split into
+// the bare binary (Command) and its remaining tokens (Args), so Claude Code
+// launches it via PATH resolution rather than a single non-resolvable
+// string. A server whose Language has no entry in extensionToLanguage is
+// skipped — Claude Code's `.lsp.json` has no way to route files to it
+// without one.
 func buildLSPServerConfig(servers []agent.NativeServer) map[string]lspServerEntry {
 	config := make(map[string]lspServerEntry, len(servers))
 	for _, server := range servers {
 		if len(server.Command) == 0 {
 			continue
 		}
-		ext, ok := languageFileExtensions[strings.ToLower(server.Language)]
+		exts, ok := extensionToLanguage[strings.ToLower(server.Language)]
 		if !ok {
 			continue
 		}
 		name := filepath.Base(server.Command[0])
 		config[name] = lspServerEntry{
-			Command:             strings.Join(server.Command, " "),
-			ExtensionToLanguage: map[string]string{ext: strings.ToLower(server.Language)},
+			Command:             server.Command[0],
+			Args:                server.Command[1:],
+			ExtensionToLanguage: exts,
 		}
 	}
 	return config
