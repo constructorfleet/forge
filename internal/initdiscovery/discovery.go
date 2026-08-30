@@ -107,6 +107,7 @@ func Detect(dir string) Result {
 	}
 
 	notes = append(notes, detectAgentDocs(dir)...)
+	notes = append(notes, detectLSPCoverage(dir, cfg.LSP)...)
 
 	return Result{Config: cfg, Notes: notes}
 }
