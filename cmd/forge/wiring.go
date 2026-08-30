@@ -20,6 +20,7 @@ import (
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/repolock"
+	"github.com/Teagan42/forge/internal/review/agentreviewer"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/storage"
@@ -110,11 +111,19 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	eng.NeedsInfoTracker = trk
 	// eng.Diff is wired unconditionally since it is inert without a
 	// Reviewer (Engine only calls it from runReview, which itself is a
-	// no-op when eng.Reviewer is nil). eng.Reviewer is intentionally left
-	// unset: ticket 20 only requires the review.Reviewer seam to exist and
-	// be injectable, not a production-ready reviewer backend; wiring a real
-	// one is deferred to a later ticket.
+	// no-op when eng.Reviewer is nil).
 	eng.Diff = gitDiffProducer{}
+	// eng.Reviewer (issue #158): a fresh, single-axis (bugs/breaking/
+	// security) agentreviewer.Reviewer over the same Agent used for
+	// implementation, gated at cfg.Workflow.ReviewConfidenceFloor, wired
+	// whenever cfg.Workflow.Review is enabled (the default) — mirroring how
+	// cfg.PullRequests.Enabled gates Publisher/PRTracker above. Disabled
+	// (cfg.Workflow.Review false) leaves eng.Reviewer nil, so REVIEWING
+	// stays the ticket-20 auto-approve resting state exactly as before this
+	// ticket.
+	if cfg.Workflow.Review {
+		eng.Reviewer = agentreviewer.New(ag, cfg.Workflow.ReviewConfidenceFloor)
+	}
 	// eng.Publisher/eng.PRTracker (ticket 22) are Engine's single
 	// all-or-nothing commit/PR seam (see runCommitAndPR): with both wired,
 	// an approved (or, with no Reviewer, auto-approved) Issue is committed,
@@ -575,13 +584,20 @@ func (g gitReachabilityChecker) IsAncestor(ctx context.Context, commit, branch s
 // demoable end-to-end without a real coding backend (see ticket 18: "run it
 // with the fake adapter and watch state flow"). Any other provider value
 // invokes the real Claude Code CLI adapter (ticket 25).
+//
+// The same Agent this returns is also wrapped by agentreviewer.Reviewer
+// (issue #158, see buildEngine's eng.Reviewer wiring) whenever
+// cfg.Workflow.Review is enabled, so the "fake" case's default Summary must
+// double as a review findings envelope agentreviewer can parse (a clean,
+// empty-findings one) rather than only reading naturally as an
+// implementation summary.
 func buildAgent(cfg config.Config) (agent.Agent, error) {
 	switch cfg.Agent.Provider {
 	case "fake":
 		fake := agent.NewFakeAgent()
 		fake.ProgramDefault(agent.AgentResult{
 			Status:  agent.StatusImplemented,
-			Summary: "fake agent: no-op implementation",
+			Summary: `fake agent: no-op implementation {"axis":"bugs","findings":[]}`,
 		})
 		return fake, nil
 	case "claude-code", "":

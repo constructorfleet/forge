@@ -49,6 +49,13 @@ type ExecutionConfig struct {
 type WorkflowConfig struct {
 	Implementation string `yaml:"implementation"`
 	Review         bool   `yaml:"review"`
+
+	// ReviewConfidenceFloor is the minimum Confidence (0.0-1.0) a
+	// review axis's ERROR-severity Finding must carry to force
+	// review.VerdictChangesRequired (issue #158). An ERROR finding below
+	// this floor is advisory only: it is still surfaced in
+	// review.Result.Findings, but does not by itself block APPROVED.
+	ReviewConfidenceFloor float64 `yaml:"review_confidence_floor"`
 }
 
 // QualityGate is one deterministic command required to pass before
@@ -378,6 +385,14 @@ const defaultLSPRestartLimit = 1
 // practice rather than needing exhaustive enumeration.
 const defaultLSPMaxResults = 50
 
+// defaultReviewConfidenceFloor is WorkflowConfig.ReviewConfidenceFloor's
+// default (issue #158's acceptance criteria): a review axis's ERROR finding
+// must carry at least this much Confidence to force VerdictChangesRequired,
+// chosen so only findings the axis itself is fairly sure about can block an
+// Issue, while still-plausible-but-uncertain findings route back only as
+// advisory signal.
+const defaultReviewConfidenceFloor = 0.7
+
 // Default returns the fully-defaulted Config used when no .forge.yaml is
 // present — the zero-config case. It is also the single source of truth for
 // every deterministic default: Load starts from this literal and lets YAML
@@ -394,8 +409,9 @@ func Default() Config {
 		Execution: ExecutionConfig{MaxParallel: 4},
 		Retry:     domain.RetryLimits{Gate: 3, Review: 2, CI: 3},
 		Workflow: WorkflowConfig{
-			Implementation: "tdd",
-			Review:         true,
+			Implementation:        "tdd",
+			Review:                true,
+			ReviewConfidenceFloor: defaultReviewConfidenceFloor,
 		},
 		Quality: QualityConfig{MaxOutputBytes: 20000},
 		PullRequests: PullRequestsConfig{

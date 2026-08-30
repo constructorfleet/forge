@@ -135,7 +135,11 @@ type Result struct {
 	// assessment.
 	Summary string
 
-	// Findings is populated when Verdict is VerdictChangesRequired; empty
-	// on VerdictApproved.
+	// Findings is populated when Verdict is VerdictChangesRequired. A
+	// Reviewer may also populate it on VerdictApproved to surface
+	// lower-severity or below-confidence-floor findings as advisory signal
+	// (issue #158) — only runReview's repair-loop caller treats a
+	// VerdictApproved Result's Findings as non-actionable, discarding them
+	// rather than routing them back as agent.Feedback.
 	Findings []Finding
 }

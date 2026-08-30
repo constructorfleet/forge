@@ -80,6 +80,10 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("workflow.implementation", cfg.Workflow.Implementation, "unsupported implementation mode; supported: tdd"))
 	}
 
+	if cfg.Workflow.ReviewConfidenceFloor < 0 || cfg.Workflow.ReviewConfidenceFloor > 1 {
+		errs = append(errs, fieldErr("workflow.review_confidence_floor", fmt.Sprint(cfg.Workflow.ReviewConfidenceFloor), "must be between 0.0 and 1.0"))
+	}
+
 	for i, g := range cfg.Quality.Gates {
 		if strings.TrimSpace(g.Name) == "" {
 			errs = append(errs, fieldErr(fmt.Sprintf("quality.gates[%d].name", i), g.Name, "must not be empty"))
