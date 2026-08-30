@@ -7,7 +7,7 @@ import (
 )
 
 func TestBuildResult_NoFindings_Approved(t *testing.T) {
-	result := buildResult(envelope{Axis: "bugs"}, 0.7)
+	result := buildResult(envelope{Axis: "bugs"}, "bugs", 0.7)
 	if result.Verdict != review.VerdictApproved {
 		t.Errorf("Verdict = %q, want %q", result.Verdict, review.VerdictApproved)
 	}
@@ -18,7 +18,7 @@ func TestBuildResult_NoFindings_Approved(t *testing.T) {
 
 func TestBuildResult_HighSeverityAtFloor_ChangesRequired(t *testing.T) {
 	env := envelope{Findings: []axisFinding{{Severity: "HIGH", Confidence: 0.7, Message: "m"}}}
-	result := buildResult(env, 0.7)
+	result := buildResult(env, "bugs", 0.7)
 	if result.Verdict != review.VerdictChangesRequired {
 		t.Errorf("Verdict = %q, want %q (confidence == floor should block)", result.Verdict, review.VerdictChangesRequired)
 	}
@@ -26,7 +26,7 @@ func TestBuildResult_HighSeverityAtFloor_ChangesRequired(t *testing.T) {
 
 func TestBuildResult_HighSeverityBelowFloor_ApprovedAdvisory(t *testing.T) {
 	env := envelope{Findings: []axisFinding{{Severity: "HIGH", Confidence: 0.69, Message: "m"}}}
-	result := buildResult(env, 0.7)
+	result := buildResult(env, "bugs", 0.7)
 	if result.Verdict != review.VerdictApproved {
 		t.Errorf("Verdict = %q, want %q", result.Verdict, review.VerdictApproved)
 	}
@@ -43,7 +43,7 @@ func TestBuildResult_MedAndLowSeverity_NeverBlock(t *testing.T) {
 		{Severity: "MED", Confidence: 1.0, Message: "m"},
 		{Severity: "LOW", Confidence: 1.0, Message: "l"},
 	}}
-	result := buildResult(env, 0.1)
+	result := buildResult(env, "bugs", 0.1)
 	if result.Verdict != review.VerdictApproved {
 		t.Errorf("Verdict = %q, want %q", result.Verdict, review.VerdictApproved)
 	}
@@ -63,7 +63,7 @@ func TestBuildResult_OneHighAboveFloorAmongOthers_ChangesRequired(t *testing.T) 
 		{Severity: "LOW", Confidence: 1.0, Message: "l"},
 		{Severity: "HIGH", Confidence: 0.95, Message: "h"},
 	}}
-	result := buildResult(env, 0.7)
+	result := buildResult(env, "bugs", 0.7)
 	if result.Verdict != review.VerdictChangesRequired {
 		t.Errorf("Verdict = %q, want %q", result.Verdict, review.VerdictChangesRequired)
 	}
@@ -74,7 +74,7 @@ func TestBuildResult_OneHighAboveFloorAmongOthers_ChangesRequired(t *testing.T) 
 
 func TestBuildResult_SetsAxisToBugsOnEveryFinding(t *testing.T) {
 	env := envelope{Findings: []axisFinding{{Severity: "LOW", Confidence: 0.1, Message: "m"}}}
-	result := buildResult(env, 0.7)
+	result := buildResult(env, "bugs", 0.7)
 	if result.Findings[0].Axis != "bugs" {
 		t.Errorf("Axis = %q, want %q", result.Findings[0].Axis, "bugs")
 	}

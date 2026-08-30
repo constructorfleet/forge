@@ -7,14 +7,16 @@ import (
 	"github.com/Teagan42/forge/internal/review"
 )
 
-// buildPolicyNotes composes the fresh axis agent invocation's prompt: the
-// embedded rubric followed by the concrete review context (the Issue's
-// requirements, the diff under review, and the Quality Gate results that
-// already passed). agent.AgentRequest has no dedicated "skill"/"subagent"
-// primitive (CLAUDE.md's ADR-0004 context, and the issue's own framing), so
-// this is injected via AgentRequest.Policy.Notes, the one free-form guidance
-// field the Agent contract exposes.
-func buildPolicyNotes(req review.Request) string {
+// buildPolicyNotes composes one axis agent invocation's prompt: rubric (that
+// axis's embedded rubric text) followed by the concrete review context (the
+// Issue's requirements, the diff under review, and the Quality Gate results
+// that already passed). agent.AgentRequest has no dedicated "skill"/
+// "subagent" primitive (CLAUDE.md's ADR-0004 context, and the issue's own
+// framing), so this is injected via AgentRequest.Policy.Notes, the one
+// free-form guidance field the Agent contract exposes. Each axis gets its
+// own call with its own rubric, so the three concurrent invocations are
+// otherwise identical apart from this one substitution.
+func buildPolicyNotes(req review.Request, rubric string) string {
 	var b strings.Builder
 	b.WriteString(rubric)
 
