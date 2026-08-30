@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 // Direction selects which side of a hierarchy call_hierarchy/type_hierarchy
@@ -26,10 +26,10 @@ const (
 // (DirectionIncoming) or callees (DirectionOutgoing), flattened to
 // location-only Source Locations and capped at t.maxResults. Gated behind
 // the Driver's CallHierarchyProvider capability (see ADR-0014): a Driver
-// that doesn't advertise it returns gopls.ErrCapabilityUnsupported.
+// that doesn't advertise it returns lspdriver.ErrCapabilityUnsupported.
 func (t *Toolset) CallHierarchy(ctx context.Context, file string, line int, direction Direction) (ListResult, error) {
 	if !providerEnabled(t.driver.Capabilities().CallHierarchyProvider) {
-		return ListResult{}, fmt.Errorf("toolsurface: call_hierarchy: %w", gopls.ErrCapabilityUnsupported)
+		return ListResult{}, fmt.Errorf("toolsurface: call_hierarchy: %w", lspdriver.ErrCapabilityUnsupported)
 	}
 
 	pos, err := resolvePosition(ctx, t.driver, file, line, "")
@@ -42,7 +42,7 @@ func (t *Toolset) CallHierarchy(ctx context.Context, file string, line int, dire
 		return ListResult{}, err
 	}
 
-	var items []gopls.HierarchyItem
+	var items []lspdriver.HierarchyItem
 	switch direction {
 	case DirectionIncoming:
 		items = result.Callers
@@ -61,7 +61,7 @@ func (t *Toolset) CallHierarchy(ctx context.Context, file string, line int, dire
 // the Driver's TypeHierarchyProvider capability (see ADR-0014).
 func (t *Toolset) TypeHierarchy(ctx context.Context, file string, line int, direction Direction) (ListResult, error) {
 	if !providerEnabled(t.driver.Capabilities().TypeHierarchyProvider) {
-		return ListResult{}, fmt.Errorf("toolsurface: type_hierarchy: %w", gopls.ErrCapabilityUnsupported)
+		return ListResult{}, fmt.Errorf("toolsurface: type_hierarchy: %w", lspdriver.ErrCapabilityUnsupported)
 	}
 
 	pos, err := resolvePosition(ctx, t.driver, file, line, "")
@@ -74,7 +74,7 @@ func (t *Toolset) TypeHierarchy(ctx context.Context, file string, line int, dire
 		return ListResult{}, err
 	}
 
-	var items []gopls.HierarchyItem
+	var items []lspdriver.HierarchyItem
 	switch direction {
 	case DirectionSuper:
 		items = result.Supertypes
@@ -87,12 +87,12 @@ func (t *Toolset) TypeHierarchy(ctx context.Context, file string, line int, dire
 	return capLocations(hierarchyLocations(items), t.maxResults), nil
 }
 
-// hierarchyLocations normalizes []gopls.HierarchyItem into Source Locations,
+// hierarchyLocations normalizes []lspdriver.HierarchyItem into Source Locations,
 // carrying each item's name.
-func hierarchyLocations(items []gopls.HierarchyItem) []SourceLocation {
+func hierarchyLocations(items []lspdriver.HierarchyItem) []SourceLocation {
 	locs := make([]SourceLocation, 0, len(items))
 	for _, item := range items {
-		loc := sourceLocationFromGoplsLocation(item.Location)
+		loc := sourceLocationFromLSPLocation(item.Location)
 		loc.SymbolName = item.Name
 		locs = append(locs, loc)
 	}

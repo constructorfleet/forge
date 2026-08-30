@@ -1,4 +1,4 @@
-package gopls
+package lspdriver
 
 import (
 	"bufio"
@@ -287,5 +287,28 @@ func TestDriver_HierarchyMethodsRequireCapability(t *testing.T) {
 	}
 	if _, err := d.TypeHierarchy(context.Background(), fixtureFile, englishGreeterDefPos); err != ErrCapabilityUnsupported {
 		t.Errorf("TypeHierarchy() with no declared capability error = %v, want ErrCapabilityUnsupported", err)
+	}
+}
+
+func TestDriver_FindImplementationsRequiresCapability(t *testing.T) {
+	d := New(Options{Command: []string{fakeGoplsPath}, Dir: t.TempDir(), ReadinessTimeout: time.Second})
+
+	if _, err := d.FindImplementations(context.Background(), fixtureFile, greeterDefPos); err != ErrCapabilityUnsupported {
+		t.Errorf("FindImplementations() with no declared capability error = %v, want ErrCapabilityUnsupported", err)
+	}
+}
+
+func TestDriver_FindImplementationsUnchangedWhenCapabilityAdvertised(t *testing.T) {
+	d := startTestDriver(t, nil)
+
+	got, err := d.FindImplementations(context.Background(), fixtureFile, greeterDefPos)
+	if err != nil {
+		t.Fatalf("FindImplementations() error = %v", err)
+	}
+
+	abs, _ := filepath.Abs(fixtureFile)
+	want := []Location{{File: abs, Position: englishGreeterDefPos}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("FindImplementations() = %#v, want %#v", got, want)
 	}
 }

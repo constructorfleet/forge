@@ -4,27 +4,27 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
-func symAt(name string, line, col int) gopls.Symbol {
-	return gopls.Symbol{Name: name, Location: gopls.Location{File: "f.go", Position: gopls.Position{Line: line, Column: col}}}
+func symAt(name string, line, col int) lspdriver.Symbol {
+	return lspdriver.Symbol{Name: name, Location: lspdriver.Location{File: "f.go", Position: lspdriver.Position{Line: line, Column: col}}}
 }
 
 func TestResolvePosition_NoSymbolsOnLineDefaultsToColumnOne(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{symAt("Foo", 3, 5)}}
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{symAt("Foo", 3, 5)}}
 
 	pos, err := resolvePosition(context.Background(), driver, "f.go", 10, "")
 	if err != nil {
 		t.Fatalf("resolvePosition() error = %v", err)
 	}
-	if pos != (gopls.Position{Line: 10, Column: 1}) {
+	if pos != (lspdriver.Position{Line: 10, Column: 1}) {
 		t.Fatalf("resolvePosition() = %+v, want {10 1}", pos)
 	}
 }
 
 func TestResolvePosition_SingleSymbolOnLineUsedEvenWithoutName(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{symAt("Foo", 10, 5)}}
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{symAt("Foo", 10, 5)}}
 
 	pos, err := resolvePosition(context.Background(), driver, "f.go", 10, "")
 	if err != nil {
@@ -36,7 +36,7 @@ func TestResolvePosition_SingleSymbolOnLineUsedEvenWithoutName(t *testing.T) {
 }
 
 func TestResolvePosition_MatchingSymbolNameSelectsItsColumn(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{
 		symAt("Foo", 10, 5),
 		symAt("Bar", 10, 20),
 	}}
@@ -51,7 +51,7 @@ func TestResolvePosition_MatchingSymbolNameSelectsItsColumn(t *testing.T) {
 }
 
 func TestResolvePosition_UnmatchedSymbolNameFallsBackToColumnOne(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{symAt("Foo", 10, 5)}}
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{symAt("Foo", 10, 5)}}
 
 	pos, err := resolvePosition(context.Background(), driver, "f.go", 10, "DoesNotExist")
 	if err != nil {
@@ -63,7 +63,7 @@ func TestResolvePosition_UnmatchedSymbolNameFallsBackToColumnOne(t *testing.T) {
 }
 
 func TestResolvePosition_MultipleSymbolsNoNameAmbiguousFallsBackToColumnOne(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{
 		symAt("Foo", 10, 5),
 		symAt("Bar", 10, 20),
 	}}

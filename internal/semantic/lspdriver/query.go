@@ -1,18 +1,17 @@
-package gopls
+package lspdriver
 
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 )
 
-// ErrCapabilityUnsupported is returned by CallHierarchy and TypeHierarchy
-// when the connected server didn't advertise the corresponding capability,
-// so no prepare* request is attempted.
-var ErrCapabilityUnsupported = errors.New("gopls: capability not supported by server")
+// ErrCapabilityUnsupported is returned by FindImplementations,
+// CallHierarchy, and TypeHierarchy when the connected server didn't
+// advertise the corresponding capability, so no request is attempted.
+var ErrCapabilityUnsupported = errors.New("lspdriver: capability not supported by server")
 
 // Location is one file:line result in this package's typed shape.
 type Location struct {
@@ -96,8 +95,15 @@ func (d *Driver) FindReferences(ctx context.Context, file string, pos Position) 
 	return locs, nil
 }
 
-// FindImplementations maps to textDocument/implementation.
+// FindImplementations maps to textDocument/implementation. It returns
+// ErrCapabilityUnsupported if the connected server didn't advertise
+// implementationProvider (e.g. pyright), matching the CallHierarchy/
+// TypeHierarchy capability gates.
 func (d *Driver) FindImplementations(ctx context.Context, file string, pos Position) ([]Location, error) {
+	if d.Capabilities().ImplementationProvider == nil {
+		return nil, ErrCapabilityUnsupported
+	}
+
 	server, docURI, err := d.prepare(ctx, file)
 	if err != nil {
 		return nil, err
@@ -129,7 +135,7 @@ func (d *Driver) SymbolInfo(ctx context.Context, file string, pos Position) (Sym
 		return SymbolInfo{}, err
 	}
 	if hover != nil {
-		info.Signature, info.Documentation = splitHoverContents(hover.Contents)
+		info.Signature, info.Documentation = splitHoverContents(d.opts.Profile.HoverStyle, hover.Contents)
 	}
 
 	defResult, err := server.Definition(ctx, &protocol.DefinitionParams{
@@ -159,7 +165,7 @@ func (d *Driver) DocumentSymbols(ctx context.Context, file string) ([]Symbol, er
 	if err != nil {
 		return nil, err
 	}
-	return documentSymbolResultSymbols(docURI, result), nil
+	return documentSymbolResultSymbols(docURI, result, d.opts.Profile.DropSymbolChildren), nil
 }
 
 // WorkspaceSymbols maps to workspace/symbol.
@@ -320,8 +326,9 @@ func definitionResultLocations(result protocol.DefinitionResult) []Location {
 // documentSymbolResultSymbols normalizes the DocumentSymbolResult union
 // (SymbolInformationSlice or the hierarchical DocumentSymbolSlice) into a
 // flat Symbol list, associated with file since DocumentSymbol entries don't
-// carry their own URI.
-func documentSymbolResultSymbols(file uri.URI, result protocol.DocumentSymbolResult) []Symbol {
+// carry their own URI. dropChildren, from ServerProfile.DropSymbolChildren,
+// excludes nested symbols (e.g. pyright's function parameters) when true.
+func documentSymbolResultSymbols(file uri.URI, result protocol.DocumentSymbolResult, dropChildren bool) []Symbol {
 	switch v := result.(type) {
 	case protocol.DocumentSymbolSlice:
 		var out []Symbol
@@ -336,7 +343,7 @@ func documentSymbolResultSymbols(file uri.URI, result protocol.DocumentSymbolRes
 						Position: fromLSPPosition(s.SelectionRange.Start),
 					},
 				})
-				if len(s.Children) > 0 {
+				if len(s.Children) > 0 && !dropChildren {
 					walk(s.Children)
 				}
 			}
@@ -427,60 +434,6 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
-}
-
-// splitHoverContents separates a Hover's contents into a signature (the
-// first fenced code block, gopls's convention for the type/signature line)
-// and the remaining prose as documentation. Non-markdown hover shapes
-// degrade to returning their text as documentation with no signature.
-func splitHoverContents(contents protocol.HoverContents) (signature, documentation string) {
-	switch v := contents.(type) {
-	case *protocol.MarkupContent:
-		if v == nil {
-			return "", ""
-		}
-		return splitMarkdown(v.Value)
-	case protocol.String:
-		return "", string(v)
-	case protocol.MarkedStringSlice:
-		var docs []string
-		for _, m := range v {
-			if s, ok := m.(protocol.String); ok {
-				docs = append(docs, string(s))
-			}
-		}
-		return "", strings.Join(docs, "\n")
-	default:
-		return "", ""
-	}
-}
-
-// splitMarkdown pulls the first ```-fenced block out of value as the
-// signature, treating everything else as documentation.
-func splitMarkdown(value string) (signature, documentation string) {
-	const fence = "```"
-
-	start := strings.Index(value, fence)
-	if start == -1 {
-		return "", strings.TrimSpace(value)
-	}
-
-	before := strings.TrimSpace(value[:start])
-	rest := value[start+len(fence):]
-	if nl := strings.Index(rest, "\n"); nl != -1 {
-		rest = rest[nl+1:]
-	}
-
-	end := strings.Index(rest, fence)
-	if end == -1 {
-		return strings.TrimSpace(rest), before
-	}
-
-	signature = strings.TrimSpace(rest[:end])
-	after := strings.TrimSpace(rest[end+len(fence):])
-
-	documentation = strings.TrimSpace(strings.Join([]string{before, after}, "\n"))
-	return signature, documentation
 }
 
 // symbolKindName names the LSP SymbolKind values gopls actually emits for

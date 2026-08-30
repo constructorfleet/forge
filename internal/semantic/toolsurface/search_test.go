@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 func TestSearchSymbols_FileScopeUsesDocumentSymbols(t *testing.T) {
-	driver := &fakeDriver{documentSyms: []gopls.Symbol{symAt("Foo", 1, 1), symAt("Bar", 2, 1)}}
+	driver := &fakeDriver{documentSyms: []lspdriver.Symbol{symAt("Foo", 1, 1), symAt("Bar", 2, 1)}}
 	ts := NewToolset(driver, Options{})
 
 	got, err := ts.SearchSymbols(context.Background(), "Foo", ScopeFile, "f.go")
@@ -25,7 +25,7 @@ func TestSearchSymbols_FileScopeUsesDocumentSymbols(t *testing.T) {
 }
 
 func TestSearchSymbols_WorkspaceScopeUsesWorkspaceSymbols(t *testing.T) {
-	driver := &fakeDriver{workspaceSyms: []gopls.Symbol{symAt("Baz", 5, 1)}}
+	driver := &fakeDriver{workspaceSyms: []lspdriver.Symbol{symAt("Baz", 5, 1)}}
 	ts := NewToolset(driver, Options{})
 
 	got, err := ts.SearchSymbols(context.Background(), "Baz", ScopeWorkspace, "")
@@ -56,7 +56,7 @@ func TestSearchSymbols_UnknownScopeErrors(t *testing.T) {
 }
 
 func TestSearchSymbols_CapsAtMaxResults(t *testing.T) {
-	syms := make([]gopls.Symbol, 60)
+	syms := make([]lspdriver.Symbol, 60)
 	for i := range syms {
 		syms[i] = symAt("S", i+1, 1)
 	}

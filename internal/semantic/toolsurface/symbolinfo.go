@@ -16,7 +16,7 @@ type SymbolInfoResult struct {
 // signature/type, documentation, and definition location in one call,
 // merging what would otherwise be separate hover and definition requests
 // (see ADR-0014). Type mirrors Signature: gopls's hover output doesn't
-// distinguish them (see gopls.SymbolInfo's doc comment), so there's nothing
+// distinguish them (see lspdriver.SymbolInfo's doc comment), so there's nothing
 // further to split.
 func (t *Toolset) SymbolInfo(ctx context.Context, file string, line int) (SymbolInfoResult, error) {
 	pos, err := resolvePosition(ctx, t.driver, file, line, "")
@@ -35,7 +35,7 @@ func (t *Toolset) SymbolInfo(ctx context.Context, file string, line int) (Symbol
 		Docs:      info.Documentation,
 	}
 	if info.Definition != nil {
-		loc := sourceLocationFromGoplsLocation(*info.Definition)
+		loc := sourceLocationFromLSPLocation(*info.Definition)
 		result.DefinitionLocation = &loc
 	}
 	return result, nil

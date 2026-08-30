@@ -1,4 +1,4 @@
-package gopls
+package lspdriver
 
 import "go.lsp.dev/protocol"
 

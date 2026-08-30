@@ -4,21 +4,21 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"go.lsp.dev/protocol"
 )
 
-func hierarchyItemAt(name string, line int) gopls.HierarchyItem {
-	return gopls.HierarchyItem{Name: name, Location: gopls.Location{File: "f.go", Position: gopls.Position{Line: line, Column: 1}}}
+func hierarchyItemAt(name string, line int) lspdriver.HierarchyItem {
+	return lspdriver.HierarchyItem{Name: name, Location: lspdriver.Location{File: "f.go", Position: lspdriver.Position{Line: line, Column: 1}}}
 }
 
 func TestCallHierarchy_IncomingReturnsCallers(t *testing.T) {
 	driver := &fakeDriver{
 		caps: protocol.ServerCapabilities{CallHierarchyProvider: protocol.Boolean(true)},
-		callHierarchy: gopls.CallHierarchy{
+		callHierarchy: lspdriver.CallHierarchy{
 			Item:    hierarchyItemAt("Target", 1),
-			Callers: []gopls.HierarchyItem{hierarchyItemAt("CallerA", 5)},
-			Callees: []gopls.HierarchyItem{hierarchyItemAt("CalleeB", 9)},
+			Callers: []lspdriver.HierarchyItem{hierarchyItemAt("CallerA", 5)},
+			Callees: []lspdriver.HierarchyItem{hierarchyItemAt("CalleeB", 9)},
 		},
 	}
 	ts := NewToolset(driver, Options{})
@@ -35,10 +35,10 @@ func TestCallHierarchy_IncomingReturnsCallers(t *testing.T) {
 func TestCallHierarchy_OutgoingReturnsCallees(t *testing.T) {
 	driver := &fakeDriver{
 		caps: protocol.ServerCapabilities{CallHierarchyProvider: protocol.Boolean(true)},
-		callHierarchy: gopls.CallHierarchy{
+		callHierarchy: lspdriver.CallHierarchy{
 			Item:    hierarchyItemAt("Target", 1),
-			Callers: []gopls.HierarchyItem{hierarchyItemAt("CallerA", 5)},
-			Callees: []gopls.HierarchyItem{hierarchyItemAt("CalleeB", 9)},
+			Callers: []lspdriver.HierarchyItem{hierarchyItemAt("CallerA", 5)},
+			Callees: []lspdriver.HierarchyItem{hierarchyItemAt("CalleeB", 9)},
 		},
 	}
 	ts := NewToolset(driver, Options{})
@@ -65,10 +65,10 @@ func TestCallHierarchy_UnsupportedCapabilityErrors(t *testing.T) {
 func TestTypeHierarchy_SuperReturnsSupertypes(t *testing.T) {
 	driver := &fakeDriver{
 		caps: protocol.ServerCapabilities{TypeHierarchyProvider: protocol.Boolean(true)},
-		typeHierarchy: gopls.TypeHierarchy{
+		typeHierarchy: lspdriver.TypeHierarchy{
 			Item:       hierarchyItemAt("Target", 1),
-			Supertypes: []gopls.HierarchyItem{hierarchyItemAt("Base", 2)},
-			Subtypes:   []gopls.HierarchyItem{hierarchyItemAt("Derived", 3)},
+			Supertypes: []lspdriver.HierarchyItem{hierarchyItemAt("Base", 2)},
+			Subtypes:   []lspdriver.HierarchyItem{hierarchyItemAt("Derived", 3)},
 		},
 	}
 	ts := NewToolset(driver, Options{})

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"github.com/Teagan42/forge/internal/semantic/toolsurface"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.lsp.dev/protocol"
@@ -15,42 +15,42 @@ import (
 // pre-configured result.
 type fakeDriver struct {
 	caps       protocol.ServerCapabilities
-	definition []gopls.Location
+	definition []lspdriver.Location
 	err        error
 }
 
 func (f *fakeDriver) Capabilities() protocol.ServerCapabilities { return f.caps }
 
-func (f *fakeDriver) FindDefinition(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindDefinition(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return f.definition, f.err
 }
 
-func (f *fakeDriver) FindReferences(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindReferences(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return nil, f.err
 }
 
-func (f *fakeDriver) FindImplementations(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindImplementations(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return nil, f.err
 }
 
-func (f *fakeDriver) SymbolInfo(ctx context.Context, file string, pos gopls.Position) (gopls.SymbolInfo, error) {
-	return gopls.SymbolInfo{}, f.err
+func (f *fakeDriver) SymbolInfo(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.SymbolInfo, error) {
+	return lspdriver.SymbolInfo{}, f.err
 }
 
-func (f *fakeDriver) DocumentSymbols(ctx context.Context, file string) ([]gopls.Symbol, error) {
+func (f *fakeDriver) DocumentSymbols(ctx context.Context, file string) ([]lspdriver.Symbol, error) {
 	return nil, f.err
 }
 
-func (f *fakeDriver) WorkspaceSymbols(ctx context.Context, query string) ([]gopls.Symbol, error) {
+func (f *fakeDriver) WorkspaceSymbols(ctx context.Context, query string) ([]lspdriver.Symbol, error) {
 	return nil, f.err
 }
 
-func (f *fakeDriver) CallHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.CallHierarchy, error) {
-	return gopls.CallHierarchy{}, f.err
+func (f *fakeDriver) CallHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.CallHierarchy, error) {
+	return lspdriver.CallHierarchy{}, f.err
 }
 
-func (f *fakeDriver) TypeHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.TypeHierarchy, error) {
-	return gopls.TypeHierarchy{}, f.err
+func (f *fakeDriver) TypeHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.TypeHierarchy, error) {
+	return lspdriver.TypeHierarchy{}, f.err
 }
 
 // connect wires server to an in-process client over an in-memory
@@ -106,9 +106,9 @@ func TestNew_RegistersOnlyCapabilityGatedTools(t *testing.T) {
 func TestFindDefinitionTool_ReturnsSourceLocationFromDriver(t *testing.T) {
 	driver := &fakeDriver{
 		caps: protocol.ServerCapabilities{DefinitionProvider: protocol.Boolean(true)},
-		definition: []gopls.Location{{
+		definition: []lspdriver.Location{{
 			File:     "main.go",
-			Position: gopls.Position{Line: 10, Column: 2},
+			Position: lspdriver.Position{Line: 10, Column: 2},
 		}},
 	}
 	ts := toolsurface.NewToolset(driver, toolsurface.Options{ReadFile: func(string) ([]byte, error) { return nil, nil }})

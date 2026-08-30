@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/Teagan42/forge/internal/lsp"
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"github.com/Teagan42/forge/internal/semantic/mcpserver"
 	"github.com/Teagan42/forge/internal/semantic/toolsurface"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,7 +18,7 @@ import (
 // runInternalMCP implements `forge internal-mcp --workspace <path>`: a
 // backend-neutral Model Context Protocol server exposing Forge's
 // semantic-navigation tool surface (internal/semantic/toolsurface) backed
-// by a Forge-managed gopls driver (internal/semantic/gopls) rooted at
+// by a Forge-managed LSP driver (internal/semantic/lspdriver) rooted at
 // <path>, served over stdio.
 //
 // It is not meant to be run interactively — an Agent backend consuming
@@ -62,7 +62,7 @@ func runInternalMCP(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	driver := gopls.New(gopls.Options{
+	driver := lspdriver.New(lspdriver.Options{
 		Command:          spec.Command,
 		Dir:              *workspace,
 		ReadinessTimeout: cfg.LSP.ReadinessTimeout,

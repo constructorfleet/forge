@@ -3,34 +3,34 @@ package toolsurface
 import (
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
-func TestSourceLocationFromGoplsLocation(t *testing.T) {
-	loc := gopls.Location{File: "/repo/main.go", Position: gopls.Position{Line: 12, Column: 4}}
+func TestSourceLocationFromLSPLocation(t *testing.T) {
+	loc := lspdriver.Location{File: "/repo/main.go", Position: lspdriver.Position{Line: 12, Column: 4}}
 
-	got := sourceLocationFromGoplsLocation(loc)
+	got := sourceLocationFromLSPLocation(loc)
 
 	want := SourceLocation{File: "/repo/main.go", Line: 12, Col: 4}
 	if got != want {
-		t.Fatalf("sourceLocationFromGoplsLocation() = %+v, want %+v", got, want)
+		t.Fatalf("sourceLocationFromLSPLocation() = %+v, want %+v", got, want)
 	}
 }
 
-func TestSourceLocationFromGoplsSymbol(t *testing.T) {
-	sym := gopls.Symbol{
+func TestSourceLocationFromLSPSymbol(t *testing.T) {
+	sym := lspdriver.Symbol{
 		Name: "Foo",
 		Kind: "function",
-		Location: gopls.Location{
+		Location: lspdriver.Location{
 			File:     "/repo/foo.go",
-			Position: gopls.Position{Line: 3, Column: 1},
+			Position: lspdriver.Position{Line: 3, Column: 1},
 		},
 	}
 
-	got := sourceLocationFromGoplsSymbol(sym)
+	got := sourceLocationFromLSPSymbol(sym)
 
 	want := SourceLocation{File: "/repo/foo.go", Line: 3, Col: 1, SymbolName: "Foo", Kind: "function"}
 	if got != want {
-		t.Fatalf("sourceLocationFromGoplsSymbol() = %+v, want %+v", got, want)
+		t.Fatalf("sourceLocationFromLSPSymbol() = %+v, want %+v", got, want)
 	}
 }
