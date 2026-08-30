@@ -39,12 +39,21 @@ var englishGreeterDefPos = Position{Line: 13, Column: 6}
 
 func startTestDriver(t *testing.T, env []string) *Driver {
 	t.Helper()
+	return startTestDriverWithProfile(t, env, ServerProfile{})
+}
+
+// startTestDriverWithProfile is startTestDriver with an explicit
+// ServerProfile, for the per-server behaviors (hover shape, symbol-children
+// handling) a driver's profile — not its protocol handling — decides.
+func startTestDriverWithProfile(t *testing.T, env []string, profile ServerProfile) *Driver {
+	t.Helper()
 	d := New(Options{
 		Command:          []string{fakeGoplsPath},
 		Dir:              t.TempDir(),
 		Env:              env,
 		ReadinessTimeout: 5 * time.Second,
 		RestartLimit:     0,
+		Profile:          profile,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -166,7 +175,10 @@ func TestDriver_DocumentSymbols(t *testing.T) {
 	for i, s := range got {
 		names[i] = s.Name
 	}
-	wantNames := []string{"Greeter", "EnglishGreeter", "Greet", "Caller"}
+	// "name" is Greet's parameter child: with the zero ServerProfile the
+	// hierarchical result is flattened whole, children included. Contrast
+	// TestDriver_DocumentSymbolsDropsChildrenWhenProfileSet.
+	wantNames := []string{"Greeter", "EnglishGreeter", "Greet", "name", "Caller"}
 	if len(names) != len(wantNames) {
 		t.Fatalf("DocumentSymbols() names = %v, want %v", names, wantNames)
 	}
@@ -187,6 +199,35 @@ func TestDriver_DocumentSymbols(t *testing.T) {
 	}
 	if greet.Location.Position != greetDefPos {
 		t.Errorf("Greet symbol Position = %#v, want %#v", greet.Location.Position, greetDefPos)
+	}
+}
+
+// TestDriver_DocumentSymbolsDropsChildrenWhenProfileSet is the driver-level
+// half of the pyright parameter-child criterion: the same hierarchical
+// documentSymbol result flattens without its nested children when the
+// server's own ServerProfile sets DropSymbolChildren, which is how each
+// language's profile reaches the multiplexing MCP server — per driver, not
+// per router.
+func TestDriver_DocumentSymbolsDropsChildrenWhenProfileSet(t *testing.T) {
+	d := startTestDriverWithProfile(t, nil, ServerProfile{DropSymbolChildren: true})
+
+	got, err := d.DocumentSymbols(context.Background(), fixtureFile)
+	if err != nil {
+		t.Fatalf("DocumentSymbols() error = %v", err)
+	}
+
+	names := make([]string, len(got))
+	for i, s := range got {
+		names[i] = s.Name
+	}
+	wantNames := []string{"Greeter", "EnglishGreeter", "Greet", "Caller"}
+	if len(names) != len(wantNames) {
+		t.Fatalf("DocumentSymbols() names = %v, want %v (parameter child dropped)", names, wantNames)
+	}
+	for i, want := range wantNames {
+		if names[i] != want {
+			t.Errorf("DocumentSymbols()[%d].Name = %q, want %q", i, names[i], want)
+		}
 	}
 }
 

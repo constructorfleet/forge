@@ -70,9 +70,14 @@ type NativeServer struct {
 	Command  []string
 }
 
-// MCPServer is one language server identity a SemanticDescriptor asks a
-// backend to consume through an injected MCP server (the "mcp"
-// InjectionChannel).
+// MCPServer is one MCP endpoint a SemanticDescriptor asks a backend to
+// consume semantic navigation through (the "mcp" InjectionChannel).
+//
+// Forge's own endpoint is a multiplexer covering every language detected in
+// the workspace (ADR 0016), so the provider emits exactly one of these
+// regardless of language count and leaves both fields empty: which language
+// servers run, and how, is resolved by `forge internal-mcp --workspace`
+// itself, not named here.
 type MCPServer struct {
 	Language string
 	Command  []string

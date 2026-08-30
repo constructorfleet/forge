@@ -125,6 +125,44 @@ func TestNewRegistry_ConfigExtendsWithNewLanguage(t *testing.T) {
 	}
 }
 
+func TestExtensions_BuiltinTable(t *testing.T) {
+	got := lsp.Extensions(config.LSPConfig{})
+
+	want := map[string]string{
+		".go":  "go",
+		".rs":  "rust",
+		".py":  "python",
+		".js":  "javascript",
+		".jsx": "javascript",
+		".ts":  "javascript",
+		".tsx": "javascript",
+		".mjs": "javascript",
+		".cjs": "javascript",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Extensions() = %v, want %v", got, want)
+	}
+}
+
+func TestExtensions_ConfigOverridesAndExtends(t *testing.T) {
+	got := lsp.Extensions(config.LSPConfig{
+		Extensions: map[string]string{
+			".rs": "go",     // operator repoints an existing extension
+			".kt": "kotlin", // and adds an unknown one
+		},
+	})
+
+	if got[".rs"] != "go" {
+		t.Errorf("Extensions()[\".rs\"] = %q, want %q (config overrides the built-in)", got[".rs"], "go")
+	}
+	if got[".kt"] != "kotlin" {
+		t.Errorf("Extensions()[\".kt\"] = %q, want %q (config extends the table)", got[".kt"], "kotlin")
+	}
+	if got[".go"] != "go" {
+		t.Errorf("Extensions()[\".go\"] = %q, want the built-in row to survive extension", got[".go"])
+	}
+}
+
 func TestDetect_GoRepoYieldsGopls(t *testing.T) {
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
@@ -152,10 +190,29 @@ func TestDetect_FourLanguagesYieldFourServers(t *testing.T) {
 	got := lsp.Detect([]string{"Go", "Python", "Rust", "JavaScript"}, registry)
 
 	want := []lsp.DetectedServer{
-		{Language: "go", Command: []string{"gopls"}},
-		{Language: "python", Command: []string{"pyright-langserver", "--stdio"}},
-		{Language: "rust", Command: []string{"rust-analyzer"}},
-		{Language: "javascript", Command: []string{"typescript-language-server", "--stdio"}},
+		{
+			Language: "go",
+			Command:  []string{"gopls"},
+			Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+		},
+		{
+			Language: "python",
+			Command:  []string{"pyright-langserver", "--stdio"},
+			Profile: lspdriver.ServerProfile{
+				HoverStyle:         lspdriver.HoverStylePyrightAnnotated,
+				DropSymbolChildren: true,
+			},
+		},
+		{
+			Language: "rust",
+			Command:  []string{"rust-analyzer"},
+			Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleRustTwoFence},
+		},
+		{
+			Language: "javascript",
+			Command:  []string{"typescript-language-server", "--stdio"},
+			Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Detect() = %+v, want %+v", got, want)
