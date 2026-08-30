@@ -69,14 +69,61 @@ const (
 	SeverityError   Severity = "ERROR"
 )
 
+// AxisSeverity is the severity vocabulary used by an individual review axis
+// (bugs/security, code-quality, documentation) before it is folded onto
+// Forge's Severity enum via MapAxisSeverity. Axes speak HIGH/MED/LOW
+// natively; Severity is the coarser INFO/WARNING/ERROR vocabulary the rest
+// of Forge (gates, feedback, engine) already understands.
+type AxisSeverity string
+
+const (
+	AxisSeverityHigh AxisSeverity = "HIGH"
+	AxisSeverityMed  AxisSeverity = "MED"
+	AxisSeverityLow  AxisSeverity = "LOW"
+)
+
+// MapAxisSeverity maps one axis's HIGH/MED/LOW severity onto Forge's
+// existing three-value Severity enum: HIGH becomes SeverityError, MED
+// becomes SeverityWarning, and LOW (or anything unrecognized) becomes
+// SeverityInfo. This is the single place that translation happens, so the
+// synthesis step (a later ticket) never has to reimplement it.
+func MapAxisSeverity(axisSeverity AxisSeverity) Severity {
+	switch axisSeverity {
+	case AxisSeverityHigh:
+		return SeverityError
+	case AxisSeverityMed:
+		return SeverityWarning
+	default:
+		return SeverityInfo
+	}
+}
+
 // Finding is one structured issue a Reviewer raised against the diff, per
-// issue 20's acceptance criteria (severity, file, line, message). File/Line
-// are empty/zero for a Finding that isn't anchored to a specific location.
+// issue 20's acceptance criteria (severity, file, line, message) as grown by
+// issue 157 for the Thermo-style multi-axis Reviewer. File/Line are
+// empty/zero for a Finding that isn't anchored to a specific location.
 type Finding struct {
 	Severity Severity
 	File     string
 	Line     int
 	Message  string
+
+	// Confidence is the merged confidence, 0.0-1.0, that this Finding is a
+	// real, actionable issue.
+	Confidence float64
+
+	// Axis is which review axis surfaced this Finding: "bugs", "quality",
+	// or "docs".
+	Axis string
+
+	// Remedy is the smallest correct change that would resolve this
+	// Finding, so the implementation Worker knows exactly what to do
+	// rather than just what's wrong.
+	Remedy string
+
+	// AgreedBy is how many axes independently surfaced this Finding;
+	// higher agreement is stronger signal it's real.
+	AgreedBy int
 }
 
 // Result is the structured outcome of one Reviewer.Review call.
