@@ -72,13 +72,54 @@ func NewRegistry(cfg config.LSPConfig) Registry {
 	return registry
 }
 
+// builtinExtensions is the file-extension -> language table the
+// multiplexing MCP server routes tool calls through (ADR 0016): the whole
+// Node/JS/TS family collapses onto the single "javascript" registry key,
+// since typescript-language-server serves .js and .ts alike.
+var builtinExtensions = map[string]string{
+	".go":  "go",
+	".rs":  "rust",
+	".py":  "python",
+	".js":  "javascript",
+	".jsx": "javascript",
+	".ts":  "javascript",
+	".tsx": "javascript",
+	".mjs": "javascript",
+	".cjs": "javascript",
+}
+
+// Extensions builds the file-extension -> language table from Forge's
+// built-in defaults, overridden and extended by cfg.Extensions. Keys are
+// normalized to lowercase with a leading dot, so an operator may write
+// either "mjs" or ".MJS". The languages it names are the registry's, so a
+// row for a language no server serves simply routes nowhere.
+func Extensions(cfg config.LSPConfig) map[string]string {
+	extensions := make(map[string]string, len(builtinExtensions)+len(cfg.Extensions))
+	maps.Copy(extensions, builtinExtensions)
+	for ext, language := range cfg.Extensions {
+		extensions[normalizeExtension(ext)] = strings.ToLower(language)
+	}
+	return extensions
+}
+
+// normalizeExtension lowercases ext and ensures exactly one leading dot.
+func normalizeExtension(ext string) string {
+	ext = strings.ToLower(ext)
+	if ext == "" || strings.HasPrefix(ext, ".") {
+		return ext
+	}
+	return "." + ext
+}
+
 // DetectedServer is the identity of a Language Server that may run for a
-// detected language: which language it serves and the command that starts
-// it. It carries no capability flags — those come from the server's own LSP
-// initialize handshake.
+// detected language: which language it serves, the command that starts it,
+// and the declarative ServerProfile its quirks require. It carries no
+// capability flags — those come from the server's own LSP initialize
+// handshake.
 type DetectedServer struct {
 	Language string
 	Command  []string
+	Profile  lspdriver.ServerProfile
 }
 
 // Detect maps languages (as reported by agent.RepositoryContext.Languages)
@@ -93,7 +134,11 @@ func Detect(languages []string, registry Registry) []DetectedServer {
 		if !ok {
 			continue
 		}
-		detected = append(detected, DetectedServer{Language: strings.ToLower(language), Command: spec.Command})
+		detected = append(detected, DetectedServer{
+			Language: strings.ToLower(language),
+			Command:  spec.Command,
+			Profile:  spec.Profile,
+		})
 	}
 	return detected
 }

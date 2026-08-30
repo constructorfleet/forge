@@ -267,6 +267,16 @@ func (s *fakeServer) DocumentSymbol(_ context.Context, params *protocol.Document
 			Kind:           protocol.SymbolKindFunction,
 			Range:          protocol.Range{Start: protocol.Position{Line: 15, Character: 0}, End: protocol.Position{Line: 17, Character: 1}},
 			SelectionRange: protocol.Range{Start: protocol.Position{Line: 15, Character: 5}, End: protocol.Position{Line: 15, Character: 10}},
+			// A nested parameter symbol, the shape pyright emits and
+			// ServerProfile.DropSymbolChildren exists to suppress.
+			Children: []protocol.DocumentSymbol{
+				{
+					Name:           "name",
+					Kind:           protocol.SymbolKindVariable,
+					Range:          protocol.Range{Start: protocol.Position{Line: 15, Character: 11}, End: protocol.Position{Line: 15, Character: 22}},
+					SelectionRange: protocol.Range{Start: protocol.Position{Line: 15, Character: 11}, End: protocol.Position{Line: 15, Character: 15}},
+				},
+			},
 		},
 		{
 			Name:           "Caller",

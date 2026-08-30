@@ -96,10 +96,14 @@ type capabilitySpec struct {
 
 // buildDescriptor decides, per capability, whether Provider needs to fill a
 // gap and via which list (NativeServers for the "lspPlugin" channel,
-// MCPServers for "mcp"), then populates that list from every detected
-// server — Semantic Capabilities are a per-backend property, not a
-// per-language one, so a single fill decision applies uniformly across
-// every DetectedServer.
+// MCPServers for "mcp"), then populates that list — Semantic Capabilities
+// are a per-backend property, not a per-language one, so a single fill
+// decision applies uniformly across every DetectedServer.
+//
+// The two channels are provisioned differently (ADR 0016): the native list
+// names every detected server, since the harness points its own LSP tooling
+// at each one, while the MCP channel is a single workspace-level endpoint
+// that multiplexes them itself.
 func buildDescriptor(profile agent.SemanticProfile, cfg Config, servers []DetectedServer) agent.SemanticDescriptor {
 	caps := profile.Capabilities
 	specs := []capabilitySpec{
@@ -146,10 +150,15 @@ func buildDescriptor(profile agent.SemanticProfile, cfg Config, servers []Detect
 			descriptor.NativeServers = append(descriptor.NativeServers, agent.NativeServer{Language: s.Language, Command: s.Command})
 		}
 	}
-	if needMCP {
-		for _, s := range servers {
-			descriptor.MCPServers = append(descriptor.MCPServers, agent.MCPServer{Language: s.Language, Command: s.Command})
-		}
+	// The MCP channel is filled by exactly one workspace-level endpoint,
+	// however many languages were detected: Forge's own MCP server is a
+	// multiplexer that detects and starts each language's server itself
+	// (ADR 0016), so a per-language list would ask the backend to register
+	// several servers exposing the same un-namespaced tool names. The
+	// detected servers still gate it — with nothing detected there is
+	// nothing for that endpoint to serve.
+	if needMCP && len(servers) > 0 {
+		descriptor.MCPServers = append(descriptor.MCPServers, agent.MCPServer{})
 	}
 	return descriptor
 }

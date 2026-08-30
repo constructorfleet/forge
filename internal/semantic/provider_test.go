@@ -101,11 +101,66 @@ func TestPrepare_GapWithMCPChannel_FillsMCPServers(t *testing.T) {
 	defer sess.Teardown()
 
 	augmented := sess.Augment(agent.AgentRequest{})
-	if len(augmented.Semantic.MCPServers) != 1 || augmented.Semantic.MCPServers[0].Language != "go" {
-		t.Errorf("MCPServers = %+v, want one {go, [gopls]} entry", augmented.Semantic.MCPServers)
+	// One entry, not one per language: see
+	// TestPrepare_MCPChannel_CollapsesToOneEndpointAcrossLanguages.
+	if len(augmented.Semantic.MCPServers) != 1 {
+		t.Errorf("MCPServers = %+v, want one workspace-level entry", augmented.Semantic.MCPServers)
 	}
 	if len(augmented.Semantic.NativeServers) != 0 {
 		t.Errorf("NativeServers = %+v, want none (this backend's channel is mcp)", augmented.Semantic.NativeServers)
+	}
+}
+
+// TestPrepare_MCPChannel_CollapsesToOneEndpointAcrossLanguages is this
+// ticket's (#155) descriptor half: `forge internal-mcp --workspace` is a
+// multiplexer that detects and starts the workspace's language servers
+// itself, so the MCP channel is filled by exactly one workspace-level
+// endpoint no matter how many languages were detected — one `forgelsp`
+// registration, one un-namespaced tool set, no colliding tool names.
+func TestPrepare_MCPChannel_CollapsesToOneEndpointAcrossLanguages(t *testing.T) {
+	backend := profiledBackend{profile: agent.SemanticProfile{
+		Capabilities: agent.SemanticCapabilities{}, // all false
+		Channel:      agent.InjectionChannelMCP,
+	}}
+	provider := semantic.NewProvider(backend, semantic.Config{Enabled: true})
+
+	sess := provider.Prepare(context.Background(), "/workspace", agent.RepositoryContext{}, []semantic.DetectedServer{
+		{Language: "go", Command: []string{"gopls"}},
+		{Language: "rust", Command: []string{"rust-analyzer"}},
+		{Language: "python", Command: []string{"pyright-langserver", "--stdio"}},
+		{Language: "javascript", Command: []string{"typescript-language-server", "--stdio"}},
+	})
+	defer sess.Teardown()
+
+	augmented := sess.Augment(agent.AgentRequest{})
+	if len(augmented.Semantic.MCPServers) != 1 {
+		t.Fatalf("MCPServers = %+v, want exactly one workspace-level entry for four detected languages", augmented.Semantic.MCPServers)
+	}
+	if augmented.Semantic.MCPServers[0].Language != "" {
+		t.Errorf("MCPServers[0].Language = %q, want empty: the endpoint serves the workspace, not one language", augmented.Semantic.MCPServers[0].Language)
+	}
+}
+
+// TestPrepare_LSPPluginChannel_KeepsOneNativeServerPerLanguage is the other
+// half: the collapse is MCP-channel-only. The native path still names every
+// detected server, since the harness points its own LSP tooling at each.
+func TestPrepare_LSPPluginChannel_KeepsOneNativeServerPerLanguage(t *testing.T) {
+	backend := profiledBackend{profile: agent.SemanticProfile{
+		Capabilities: agent.SemanticCapabilities{},
+		Channel:      agent.InjectionChannelLSPPlugin,
+	}}
+	provider := semantic.NewProvider(backend, semantic.Config{Enabled: true})
+
+	sess := provider.Prepare(context.Background(), "/workspace", agent.RepositoryContext{}, []semantic.DetectedServer{
+		{Language: "go", Command: []string{"gopls"}},
+		{Language: "rust", Command: []string{"rust-analyzer"}},
+		{Language: "python", Command: []string{"pyright-langserver", "--stdio"}},
+	})
+	defer sess.Teardown()
+
+	augmented := sess.Augment(agent.AgentRequest{})
+	if len(augmented.Semantic.NativeServers) != 3 {
+		t.Fatalf("NativeServers = %+v, want one per detected language", augmented.Semantic.NativeServers)
 	}
 }
 
