@@ -46,6 +46,14 @@ type Request struct {
 	// GateResults are the Quality Gate results that passed before Review
 	// was invoked (CONTEXT.md "Quality Gate", "Gate Runner").
 	GateResults []gate.Result
+
+	// WorkspacePath is the execution's working tree — the same one Quality
+	// Gates ran against (CONTEXT.md "Workspace") — so a Reviewer can open
+	// files beyond the diff to trace cross-file/cross-package effects. It
+	// carries no implementation conversation history; it is read-only
+	// filesystem access alongside Diff, not a resumption of the
+	// implementation Agent's prior invocation.
+	WorkspacePath string
 }
 
 // Verdict is a Reviewer's outcome for one Review.

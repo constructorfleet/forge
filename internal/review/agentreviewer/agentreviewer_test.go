@@ -193,6 +193,29 @@ func TestReview_InjectsRubricAndDiffIntoAgentPolicyNotes(t *testing.T) {
 	}
 }
 
+func TestReview_PassesWorkspacePathThroughToAgentRequest(t *testing.T) {
+	fake := agent.NewFakeAgent()
+	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: cleanEnvelope})
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	_, err := reviewer.Review(context.Background(), review.Request{
+		Diff:          "diff --git a/foo.go b/foo.go\n+bug here",
+		Issue:         newIssue(),
+		WorkspacePath: "/workspaces/issue-42",
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	invocations := fake.Invocations()
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %d, want 1", len(invocations))
+	}
+	if got := invocations[0].WorkspacePath; got != "/workspaces/issue-42" {
+		t.Errorf("AgentRequest.WorkspacePath = %q, want %q", got, "/workspaces/issue-42")
+	}
+}
+
 func TestReview_DefaultConfidenceFloor_UsedWhenNonPositive(t *testing.T) {
 	fake := agent.NewFakeAgent()
 	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: highConfidenceEnvelope})
