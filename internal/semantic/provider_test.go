@@ -112,7 +112,7 @@ func TestPrepare_GapWithMCPChannel_FillsMCPServers(t *testing.T) {
 func TestPrepare_CapabilityAlreadyNative_NeedsNoFill(t *testing.T) {
 	backend := profiledBackend{profile: agent.SemanticProfile{
 		Capabilities: allCapabilitiesTrue(),
-		Channel:      agent.InjectionChannelLSPPlugin,
+		Channel:      agent.InjectionChannelMCP,
 	}}
 	provider := semantic.NewProvider(backend, semantic.Config{Enabled: true})
 
@@ -124,6 +124,54 @@ func TestPrepare_CapabilityAlreadyNative_NeedsNoFill(t *testing.T) {
 	augmented := sess.Augment(agent.AgentRequest{})
 	if len(augmented.Semantic.NativeServers) != 0 || len(augmented.Semantic.MCPServers) != 0 {
 		t.Errorf("Augment() = %+v, want an inert descriptor: the backend already handles Definition itself", augmented.Semantic)
+	}
+}
+
+// TestPrepare_LSPPluginChannel_ProvisionsServersEvenWithNoCapabilityGap is
+// this ticket's (#154) core red test for the provisioning-trigger decouple:
+// pre-#154, buildDescriptor only set needNative because some capability was
+// declared false (a gap). With every capability declared true — no gap at
+// all — a backend on the lspPlugin channel must still provision its
+// detected native servers, since provisioning now depends only on the
+// channel and detected servers, not on any capability gap.
+func TestPrepare_LSPPluginChannel_ProvisionsServersEvenWithNoCapabilityGap(t *testing.T) {
+	backend := profiledBackend{profile: agent.SemanticProfile{
+		Capabilities: allCapabilitiesTrue(),
+		Channel:      agent.InjectionChannelLSPPlugin,
+	}}
+	provider := semantic.NewProvider(backend, semantic.Config{Enabled: true})
+
+	sess := provider.Prepare(context.Background(), "/workspace", agent.RepositoryContext{}, []semantic.DetectedServer{
+		{Language: "go", Command: []string{"gopls"}},
+	})
+	defer sess.Teardown()
+
+	augmented := sess.Augment(agent.AgentRequest{})
+	if len(augmented.Semantic.NativeServers) != 1 || augmented.Semantic.NativeServers[0].Language != "go" {
+		t.Errorf("NativeServers = %+v, want one {go, [gopls]} entry even though every capability is already native", augmented.Semantic.NativeServers)
+	}
+	if len(augmented.Semantic.MCPServers) != 0 {
+		t.Errorf("MCPServers = %+v, want none: this backend's channel is lspPlugin", augmented.Semantic.MCPServers)
+	}
+}
+
+// TestPrepare_LSPPluginChannel_NoDetectedServers_StaysInert covers the
+// other half of the decouple: with no servers detected at all, an
+// lspPlugin-channel backend still provisions nothing, regardless of
+// capability gaps — there is nothing to provision.
+func TestPrepare_LSPPluginChannel_NoDetectedServers_StaysInert(t *testing.T) {
+	backend := profiledBackend{profile: agent.SemanticProfile{
+		Capabilities: allCapabilitiesTrue(),
+		Channel:      agent.InjectionChannelLSPPlugin,
+	}}
+	provider := semantic.NewProvider(backend, semantic.Config{Enabled: true})
+
+	sess := provider.Prepare(context.Background(), "/workspace", agent.RepositoryContext{}, nil)
+	defer sess.Teardown()
+
+	augmented := sess.Augment(agent.AgentRequest{})
+	if len(augmented.Semantic.NativeServers) != 0 {
+		t.Errorf("NativeServers = %+v, want none: no servers were detected", augmented.Semantic.NativeServers)
 	}
 }
 
