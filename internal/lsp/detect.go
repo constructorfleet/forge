@@ -5,41 +5,69 @@
 package lsp
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 // ServerSpec is one Language Server Registry entry: the command that starts
-// the Language Server for a language. It carries no capability information —
-// a server's capabilities are learned later from its LSP initialize
-// handshake, never from the registry.
+// the Language Server for a language, plus its declarative ServerProfile
+// (see lspdriver.ServerProfile). It carries no capability information — a
+// server's capabilities are learned later from its LSP initialize handshake,
+// never from the registry.
 type ServerSpec struct {
 	Command []string
+	Profile lspdriver.ServerProfile
 }
 
 // Registry is the Language Server Registry: a language identifier mapped to
 // the ServerSpec that serves it.
 type Registry map[string]ServerSpec
 
-// builtinServers seeds the Language Server Registry with Forge's defaults.
-// v1 ships exactly one entry: Go, served by gopls.
+// builtinServers seeds the Language Server Registry with Forge's v1
+// defaults: the four supported languages, each with the ServerProfile its
+// server's markdown/symbol quirks require (see ADR 0016). "javascript" is
+// the single key for the whole Node/JS/TS family — repocontext keeps
+// emitting "JavaScript" for package.json, and typescript-language-server
+// serves .js and .ts alike.
 var builtinServers = Registry{
-	"go": {Command: []string{"gopls"}},
+	"go": {
+		Command: []string{"gopls"},
+		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+	},
+	"rust": {
+		Command: []string{"rust-analyzer"},
+		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleRustTwoFence},
+	},
+	"python": {
+		Command: []string{"pyright-langserver", "--stdio"},
+		Profile: lspdriver.ServerProfile{
+			HoverStyle:         lspdriver.HoverStylePyrightAnnotated,
+			DropSymbolChildren: true,
+		},
+	},
+	"javascript": {
+		Command: []string{"typescript-language-server", "--stdio"},
+		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+	},
 }
 
 // NewRegistry builds the Language Server Registry from Forge's built-in
 // defaults, merged over/extended by cfg.Servers — a configured command for a
-// language replaces the built-in one; a configured language absent from the
-// built-ins is added. Configuration alone never gates which servers run
-// against a workspace; see Detect.
+// language merges into the existing row, preserving its built-in Profile;
+// a configured language absent from the built-ins is added with the zero
+// ServerProfile. Configuration alone never gates which servers run against
+// a workspace; see Detect.
 func NewRegistry(cfg config.LSPConfig) Registry {
 	registry := make(Registry, len(builtinServers)+len(cfg.Servers))
-	for language, spec := range builtinServers {
-		registry[language] = spec
-	}
+	maps.Copy(registry, builtinServers)
 	for language, server := range cfg.Servers {
-		registry[strings.ToLower(language)] = ServerSpec{Command: server.Command}
+		key := strings.ToLower(language)
+		spec := registry[key]
+		spec.Command = server.Command
+		registry[key] = spec
 	}
 	return registry
 }
