@@ -1,10 +1,12 @@
-// Package gopls owns the process-lifecycle half of Forge's managed gopls
-// driver (issue #123): starting a persistent gopls subprocess over stdio,
-// completing the initialize/initialized handshake, exposing the server's
-// advertised capabilities, and keeping the subprocess alive across a single
-// crash. Per-capability query methods (definition, references, ...) are a
-// later ticket's concern; this package only gets a live, capability-aware
-// connection up and keeps it up.
+// Package gopls is Forge's managed gopls driver: starting a persistent
+// gopls subprocess over stdio, completing the initialize/initialized
+// handshake, exposing the server's advertised capabilities, and keeping the
+// subprocess alive across a single crash (issue #123) — plus, on top of
+// that live connection, one typed method per semantic capability
+// (definition, references, implementations, symbol info, document/
+// workspace symbols, call/type hierarchy) with lazy per-file didOpen
+// (issue #124). Callers see capability-named methods, not raw LSP
+// protocol.
 package gopls
 
 import (
@@ -73,6 +75,15 @@ type Driver struct {
 	// Shutdown can wait for that instead of calling cmd.Wait() itself —
 	// exec.Cmd.Wait must not be called concurrently from two goroutines.
 	monitorDone chan struct{}
+
+	// openedMu guards opened, the set of files this Driver has sent
+	// textDocument/didOpen for on the current subprocess. Held across the
+	// whole lazy-open check-and-send in ensureOpen (see query.go) so a
+	// file is opened at most once even under concurrent callers; opened
+	// is reset on every successful (re)connection since a fresh gopls
+	// subprocess has no memory of prior opens.
+	openedMu sync.Mutex
+	opened   map[string]struct{}
 }
 
 // New returns a Driver for opts. The subprocess is not started until Start
@@ -154,6 +165,10 @@ func (d *Driver) Shutdown(ctx context.Context) error {
 	d.capabilities = protocol.ServerCapabilities{}
 	d.mu.Unlock()
 
+	d.openedMu.Lock()
+	d.opened = nil
+	d.openedMu.Unlock()
+
 	return shutdownErr
 }
 
@@ -204,6 +219,10 @@ func (d *Driver) attemptStart(ctx context.Context) {
 	d.capabilities = caps
 	d.monitorDone = done
 	d.mu.Unlock()
+
+	d.openedMu.Lock()
+	d.opened = nil
+	d.openedMu.Unlock()
 
 	go d.monitor(cmd, conn, done)
 }
