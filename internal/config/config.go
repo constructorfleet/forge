@@ -252,6 +252,14 @@ type LSPConfig struct {
 	// successful handshake before giving up and going permanently inert.
 	// See issue #123.
 	RestartLimit int `yaml:"restart_limit"`
+
+	// MaxResults caps how many results the Forge-managed tool surface
+	// (internal/semantic/toolsurface) returns from any list-returning tool
+	// (find_references, find_implementations, search_symbols, and the
+	// flattened call/type hierarchy tools). A truncated result reports
+	// truncated=true and the untruncated total rather than paginating (see
+	// ADR-0014 and issue #125).
+	MaxResults int `yaml:"max_results"`
 }
 
 // LSPServerConfig is one Forge-managed language server definition.
@@ -364,6 +372,12 @@ const defaultLSPReadinessTimeout = 30 * time.Second
 // server behind repeated restart attempts.
 const defaultLSPRestartLimit = 1
 
+// defaultLSPMaxResults is LSPConfig.MaxResults's default: the Forge-managed
+// tool surface's per-call cap from ADR-0014, chosen because agents
+// consuming these tools act on the first few highest-relevance results in
+// practice rather than needing exhaustive enumeration.
+const defaultLSPMaxResults = 50
+
 // Default returns the fully-defaulted Config used when no .forge.yaml is
 // present — the zero-config case. It is also the single source of truth for
 // every deterministic default: Load starts from this literal and lets YAML
@@ -410,6 +424,7 @@ func Default() Config {
 		LSP: LSPConfig{
 			ReadinessTimeout: defaultLSPReadinessTimeout,
 			RestartLimit:     defaultLSPRestartLimit,
+			MaxResults:       defaultLSPMaxResults,
 		},
 	}
 }
