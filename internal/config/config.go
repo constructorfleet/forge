@@ -240,14 +240,14 @@ type LSPConfig struct {
 	// that default when an operator needs to force a specific choice.
 	Providers map[string]LSPProviderPreference `yaml:"providers"`
 
-	// ReadinessTimeout bounds how long the Forge-managed gopls driver
-	// (internal/semantic/gopls) blocks waiting for a spawned language
+	// ReadinessTimeout bounds how long the Forge-managed LSP driver
+	// (internal/semantic/lspdriver) blocks waiting for a spawned language
 	// server's initialize/initialized handshake to complete before
 	// degrading that server to inert rather than surfacing an error to
 	// callers. See issue #123.
 	ReadinessTimeout time.Duration `yaml:"readiness_timeout"`
 
-	// RestartLimit bounds how many times the Forge-managed gopls driver
+	// RestartLimit bounds how many times the Forge-managed LSP driver
 	// restarts a language server subprocess that crashed after a
 	// successful handshake before giving up and going permanently inert.
 	// See issue #123.

@@ -28,7 +28,7 @@ func (t *Toolset) FindDefinition(ctx context.Context, file string, line int, sym
 		return SourceLocation{}, nil
 	}
 
-	loc := sourceLocationFromGoplsLocation(locs[0])
+	loc := sourceLocationFromLSPLocation(locs[0])
 	loc.Snippet = t.snippet(loc.File, loc.Line)
 	return loc, nil
 }

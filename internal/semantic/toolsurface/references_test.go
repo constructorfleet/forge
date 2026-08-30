@@ -4,15 +4,15 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 func TestFindReferences_IncludeDeclarationTrueKeepsAll(t *testing.T) {
 	driver := &fakeDriver{
-		definition: []gopls.Location{{File: "f.go", Position: gopls.Position{Line: 1, Column: 1}}},
-		references: []gopls.Location{
-			{File: "f.go", Position: gopls.Position{Line: 1, Column: 1}},
-			{File: "f.go", Position: gopls.Position{Line: 9, Column: 2}},
+		definition: []lspdriver.Location{{File: "f.go", Position: lspdriver.Position{Line: 1, Column: 1}}},
+		references: []lspdriver.Location{
+			{File: "f.go", Position: lspdriver.Position{Line: 1, Column: 1}},
+			{File: "f.go", Position: lspdriver.Position{Line: 9, Column: 2}},
 		},
 	}
 	ts := NewToolset(driver, Options{})
@@ -28,10 +28,10 @@ func TestFindReferences_IncludeDeclarationTrueKeepsAll(t *testing.T) {
 
 func TestFindReferences_IncludeDeclarationFalseExcludesDefinition(t *testing.T) {
 	driver := &fakeDriver{
-		definition: []gopls.Location{{File: "f.go", Position: gopls.Position{Line: 1, Column: 1}}},
-		references: []gopls.Location{
-			{File: "f.go", Position: gopls.Position{Line: 1, Column: 1}},
-			{File: "f.go", Position: gopls.Position{Line: 9, Column: 2}},
+		definition: []lspdriver.Location{{File: "f.go", Position: lspdriver.Position{Line: 1, Column: 1}}},
+		references: []lspdriver.Location{
+			{File: "f.go", Position: lspdriver.Position{Line: 1, Column: 1}},
+			{File: "f.go", Position: lspdriver.Position{Line: 9, Column: 2}},
 		},
 	}
 	ts := NewToolset(driver, Options{})
@@ -49,9 +49,9 @@ func TestFindReferences_IncludeDeclarationFalseExcludesDefinition(t *testing.T) 
 }
 
 func TestFindReferences_CapsAtMaxResults(t *testing.T) {
-	refs := make([]gopls.Location, 60)
+	refs := make([]lspdriver.Location, 60)
 	for i := range refs {
-		refs[i] = gopls.Location{File: "f.go", Position: gopls.Position{Line: i + 1, Column: 1}}
+		refs[i] = lspdriver.Location{File: "f.go", Position: lspdriver.Position{Line: i + 1, Column: 1}}
 	}
 	driver := &fakeDriver{references: refs}
 	ts := NewToolset(driver, Options{MaxResults: 50})
@@ -66,9 +66,9 @@ func TestFindReferences_CapsAtMaxResults(t *testing.T) {
 }
 
 func TestFindImplementations_LocationOnlyAndCapped(t *testing.T) {
-	impls := make([]gopls.Location, 3)
+	impls := make([]lspdriver.Location, 3)
 	for i := range impls {
-		impls[i] = gopls.Location{File: "f.go", Position: gopls.Position{Line: i + 1, Column: 1}}
+		impls[i] = lspdriver.Location{File: "f.go", Position: lspdriver.Position{Line: i + 1, Column: 1}}
 	}
 	driver := &fakeDriver{implementation: impls}
 	ts := NewToolset(driver, Options{})

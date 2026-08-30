@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 func TestSymbolInfo_MapsSignatureTypeDocsAndDefinition(t *testing.T) {
-	def := gopls.Location{File: "f.go", Position: gopls.Position{Line: 4, Column: 2}}
+	def := lspdriver.Location{File: "f.go", Position: lspdriver.Position{Line: 4, Column: 2}}
 	driver := &fakeDriver{
-		symbolInfo: gopls.SymbolInfo{
+		symbolInfo: lspdriver.SymbolInfo{
 			Signature:     "func Foo() error",
 			Documentation: "Foo does a thing.",
 			Definition:    &def,
@@ -38,7 +38,7 @@ func TestSymbolInfo_MapsSignatureTypeDocsAndDefinition(t *testing.T) {
 }
 
 func TestSymbolInfo_NoDefinitionLeavesLocationNil(t *testing.T) {
-	driver := &fakeDriver{symbolInfo: gopls.SymbolInfo{Signature: "x"}}
+	driver := &fakeDriver{symbolInfo: lspdriver.SymbolInfo{Signature: "x"}}
 	ts := NewToolset(driver, Options{})
 
 	got, err := ts.SymbolInfo(context.Background(), "f.go", 1)

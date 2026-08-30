@@ -1,4 +1,4 @@
-package gopls
+package lspdriver
 
 import (
 	"bufio"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,6 +133,80 @@ func TestDriver_CrashRestartsOnceThenGoesInert(t *testing.T) {
 	}
 	if caps := d.Capabilities(); caps.HoverProvider != nil {
 		t.Errorf("Capabilities().HoverProvider = %#v, want nil (inert) after exhausting RestartLimit", caps.HoverProvider)
+	}
+}
+
+func TestDriver_HandshakeSendsProfileInitOptions(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.CreateTemp(t.TempDir(), "init-options")
+	if err != nil {
+		t.Fatalf("create init-options log: %v", err)
+	}
+	initLogPath := f.Name()
+	_ = f.Close()
+
+	d := New(Options{
+		Command:          []string{fakeGoplsPath},
+		Dir:              dir,
+		Env:              []string{"FAKEGOPLS_INIT_OPTIONS_LOG=" + initLogPath},
+		ReadinessTimeout: 5 * time.Second,
+		RestartLimit:     0,
+		Profile: ServerProfile{
+			InitOptions: map[string]any{"tsserver": map[string]any{"path": "/usr/lib/node_modules/typescript/lib"}},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.Start(ctx)
+	defer func() { _ = d.Shutdown(context.Background()) }()
+
+	if caps := d.Capabilities(); caps.HoverProvider == nil {
+		t.Fatal("driver did not become ready")
+	}
+
+	data, err := os.ReadFile(initLogPath)
+	if err != nil {
+		t.Fatalf("read init-options log: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	if !strings.Contains(got, `"tsserver"`) || !strings.Contains(got, `"path"`) {
+		t.Fatalf("initializationOptions received = %q, want it to contain the profile's InitOptions", got)
+	}
+}
+
+func TestDriver_HandshakeSendsNoInitOptionsForZeroProfile(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.CreateTemp(t.TempDir(), "init-options")
+	if err != nil {
+		t.Fatalf("create init-options log: %v", err)
+	}
+	initLogPath := f.Name()
+	_ = f.Close()
+
+	d := New(Options{
+		Command:          []string{fakeGoplsPath},
+		Dir:              dir,
+		Env:              []string{"FAKEGOPLS_INIT_OPTIONS_LOG=" + initLogPath},
+		ReadinessTimeout: 5 * time.Second,
+		RestartLimit:     0,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.Start(ctx)
+	defer func() { _ = d.Shutdown(context.Background()) }()
+
+	if caps := d.Capabilities(); caps.HoverProvider == nil {
+		t.Fatal("driver did not become ready")
+	}
+
+	data, err := os.ReadFile(initLogPath)
+	if err != nil {
+		t.Fatalf("read init-options log: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "null" {
+		t.Fatalf("initializationOptions received = %q, want %q for the zero ServerProfile", got, "null")
 	}
 }
 

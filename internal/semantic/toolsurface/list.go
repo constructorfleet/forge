@@ -1,6 +1,6 @@
 package toolsurface
 
-import "github.com/Teagan42/forge/internal/semantic/gopls"
+import "github.com/Teagan42/forge/internal/semantic/lspdriver"
 
 // ListResult is the shape every list-returning tool responds with: the
 // (possibly capped) items, whether the underlying result was truncated to
@@ -24,27 +24,27 @@ func capLocations(items []SourceLocation, max int) ListResult {
 	return ListResult{Items: items[:max], Truncated: true, Total: total}
 }
 
-// symbolLocations normalizes a []gopls.Symbol into Source Locations.
-func symbolLocations(syms []gopls.Symbol) []SourceLocation {
+// symbolLocations normalizes a []lspdriver.Symbol into Source Locations.
+func symbolLocations(syms []lspdriver.Symbol) []SourceLocation {
 	locs := make([]SourceLocation, 0, len(syms))
 	for _, s := range syms {
-		locs = append(locs, sourceLocationFromGoplsSymbol(s))
+		locs = append(locs, sourceLocationFromLSPSymbol(s))
 	}
 	return locs
 }
 
 // excludeLocations returns the locs in from that don't match any of the
 // file:line:column positions in exclude.
-func excludeLocations(from, exclude []gopls.Location) []gopls.Location {
+func excludeLocations(from, exclude []lspdriver.Location) []lspdriver.Location {
 	if len(exclude) == 0 {
 		return from
 	}
-	skip := make(map[gopls.Location]struct{}, len(exclude))
+	skip := make(map[lspdriver.Location]struct{}, len(exclude))
 	for _, e := range exclude {
 		skip[e] = struct{}{}
 	}
 
-	out := make([]gopls.Location, 0, len(from))
+	out := make([]lspdriver.Location, 0, len(from))
 	for _, l := range from {
 		if _, found := skip[l]; found {
 			continue

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"go.lsp.dev/protocol"
 )
 
@@ -17,8 +17,8 @@ func fakeReadFile(content string) func(string) ([]byte, error) {
 func definitionCapableDriver() *fakeDriver {
 	return &fakeDriver{
 		caps: protocol.ServerCapabilities{DefinitionProvider: protocol.Boolean(true)},
-		definition: []gopls.Location{
-			{File: "f.go", Position: gopls.Position{Line: 5, Column: 3}},
+		definition: []lspdriver.Location{
+			{File: "f.go", Position: lspdriver.Position{Line: 5, Column: 3}},
 		},
 	}
 }
@@ -45,7 +45,7 @@ func TestFindDefinition_SnippetClampedNearFileStart(t *testing.T) {
 	src := strings.Join([]string{"l1", "l2", "l3", "l4"}, "\n") + "\n"
 	driver := &fakeDriver{
 		caps:       protocol.ServerCapabilities{DefinitionProvider: protocol.Boolean(true)},
-		definition: []gopls.Location{{File: "f.go", Position: gopls.Position{Line: 1, Column: 1}}},
+		definition: []lspdriver.Location{{File: "f.go", Position: lspdriver.Position{Line: 1, Column: 1}}},
 	}
 	ts := NewToolset(driver, Options{ReadFile: fakeReadFile(src)})
 

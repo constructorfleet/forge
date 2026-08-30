@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"go.lsp.dev/protocol"
 )
 
@@ -13,24 +13,24 @@ import (
 // default.
 const defaultMaxResults = 50
 
-// Driver is the subset of *gopls.Driver this package calls into, named for
+// Driver is the subset of *lspdriver.Driver this package calls into, named for
 // testability: a fake satisfying this interface stands in for a live gopls
 // subprocess in tests.
 type Driver interface {
 	Capabilities() protocol.ServerCapabilities
-	FindDefinition(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error)
-	FindReferences(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error)
-	FindImplementations(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error)
-	SymbolInfo(ctx context.Context, file string, pos gopls.Position) (gopls.SymbolInfo, error)
-	DocumentSymbols(ctx context.Context, file string) ([]gopls.Symbol, error)
-	WorkspaceSymbols(ctx context.Context, query string) ([]gopls.Symbol, error)
-	CallHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.CallHierarchy, error)
-	TypeHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.TypeHierarchy, error)
+	FindDefinition(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error)
+	FindReferences(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error)
+	FindImplementations(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error)
+	SymbolInfo(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.SymbolInfo, error)
+	DocumentSymbols(ctx context.Context, file string) ([]lspdriver.Symbol, error)
+	WorkspaceSymbols(ctx context.Context, query string) ([]lspdriver.Symbol, error)
+	CallHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.CallHierarchy, error)
+	TypeHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.TypeHierarchy, error)
 }
 
-// var _ Driver ensures *gopls.Driver keeps satisfying this interface as
-// gopls.Driver evolves.
-var _ Driver = (*gopls.Driver)(nil)
+// var _ Driver ensures *lspdriver.Driver keeps satisfying this interface as
+// lspdriver.Driver evolves.
+var _ Driver = (*lspdriver.Driver)(nil)
 
 // Options configures a Toolset.
 type Options struct {

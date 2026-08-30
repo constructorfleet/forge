@@ -5,7 +5,7 @@
 // result to Source Location, and hard-caps list results.
 package toolsurface
 
-import "github.com/Teagan42/forge/internal/semantic/gopls"
+import "github.com/Teagan42/forge/internal/semantic/lspdriver"
 
 // SourceLocation is the common, 1-based result shape every location-
 // returning tool in this package normalizes to (see ADR-0014 and CONTEXT.md's
@@ -20,9 +20,9 @@ type SourceLocation struct {
 	Snippet    string `json:"snippet,omitempty"`
 }
 
-// sourceLocationFromGoplsLocation normalizes a gopls.Location, which carries
+// sourceLocationFromLSPLocation normalizes a lspdriver.Location, which carries
 // no symbol name or kind of its own.
-func sourceLocationFromGoplsLocation(loc gopls.Location) SourceLocation {
+func sourceLocationFromLSPLocation(loc lspdriver.Location) SourceLocation {
 	return SourceLocation{
 		File: loc.File,
 		Line: loc.Position.Line,
@@ -30,10 +30,10 @@ func sourceLocationFromGoplsLocation(loc gopls.Location) SourceLocation {
 	}
 }
 
-// sourceLocationFromGoplsSymbol normalizes a gopls.Symbol, carrying its name
+// sourceLocationFromLSPSymbol normalizes a lspdriver.Symbol, carrying its name
 // and kind alongside the location.
-func sourceLocationFromGoplsSymbol(sym gopls.Symbol) SourceLocation {
-	loc := sourceLocationFromGoplsLocation(sym.Location)
+func sourceLocationFromLSPSymbol(sym lspdriver.Symbol) SourceLocation {
+	loc := sourceLocationFromLSPLocation(sym.Location)
 	loc.SymbolName = sym.Name
 	loc.Kind = sym.Kind
 	return loc

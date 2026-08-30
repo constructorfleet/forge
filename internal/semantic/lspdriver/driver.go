@@ -1,16 +1,19 @@
-// Package gopls is Forge's managed gopls driver: starting a persistent
-// gopls subprocess over stdio, completing the initialize/initialized
-// handshake, exposing the server's advertised capabilities, and keeping the
-// subprocess alive across a single crash (issue #123) — plus, on top of
-// that live connection, one typed method per semantic capability
-// (definition, references, implementations, symbol info, document/
-// workspace symbols, call/type hierarchy) with lazy per-file didOpen
-// (issue #124). Callers see capability-named methods, not raw LSP
-// protocol.
-package gopls
+// Package lspdriver is Forge's managed, language-neutral LSP driver:
+// starting a persistent language-server subprocess over stdio, completing
+// the initialize/initialized handshake, exposing the server's advertised
+// capabilities, and keeping the subprocess alive across a single crash
+// (issue #123) — plus, on top of that live connection, one typed method
+// per semantic capability (definition, references, implementations, symbol
+// info, document/workspace symbols, call/type hierarchy) with lazy
+// per-file didOpen (issue #124). Callers see capability-named methods, not
+// raw LSP protocol. Per-server variance (init options, hover markdown
+// shape, symbol-children handling) is carried as a declarative
+// ServerProfile rather than per-server driver subtypes; see ADR 0015.
+package lspdriver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -49,6 +52,12 @@ type Options struct {
 	// successful handshake is restarted before the Driver goes
 	// permanently inert.
 	RestartLimit int
+
+	// Profile carries this server's declarative per-server behavior
+	// (initializationOptions to send, hover-markdown shape, whether to
+	// drop child symbols). The zero value is the safe generic default:
+	// no init options, HoverStyleFirstFence, no dropping.
+	Profile ServerProfile
 }
 
 // Driver owns a persistent gopls subprocess: startup, the initialize/
@@ -190,7 +199,7 @@ func (d *Driver) attemptStart(ctx context.Context) {
 	_, conn, server := protocol.NewClient(connCtx, &driverClient{}, stream)
 
 	hctx, cancelHandshake := context.WithTimeout(ctx, d.opts.ReadinessTimeout)
-	caps, hsErr := handshake(hctx, server, d.opts.Dir)
+	caps, hsErr := handshake(hctx, server, d.opts.Dir, d.opts.Profile.InitOptions)
 	timedOut := hctx.Err() == context.DeadlineExceeded
 	cancelHandshake()
 
@@ -311,8 +320,11 @@ func waitForExit(cmd *exec.Cmd) {
 }
 
 // handshake performs the initialize/initialized exchange against server and
-// returns the capabilities the server advertised.
-func handshake(ctx context.Context, server protocol.Server, dir string) (protocol.ServerCapabilities, error) {
+// returns the capabilities the server advertised. initOptions, when
+// non-nil, is sent as initializationOptions — a server's ServerProfile
+// hook for handshake-time configuration (e.g. typescript-language-server's
+// required workspace `typescript` resolution).
+func handshake(ctx context.Context, server protocol.Server, dir string, initOptions map[string]any) (protocol.ServerCapabilities, error) {
 	root := uri.File(dir)
 	params := &protocol.InitializeParams{
 		Capabilities: protocol.ClientCapabilities{},
@@ -321,6 +333,13 @@ func handshake(ctx context.Context, server protocol.Server, dir string) (protoco
 				{URI: root, Name: dir},
 			}),
 		},
+	}
+	if initOptions != nil {
+		encoded, err := json.Marshal(initOptions)
+		if err != nil {
+			return protocol.ServerCapabilities{}, err
+		}
+		params.InitializationOptions = encoded
 	}
 
 	result, err := server.Initialize(ctx, params)

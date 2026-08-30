@@ -1,4 +1,4 @@
-package gopls
+package lspdriver
 
 import (
 	"context"

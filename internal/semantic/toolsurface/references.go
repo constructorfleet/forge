@@ -6,7 +6,7 @@ import "context"
 // its references, location-only and capped at t.maxResults (see ADR-0014).
 //
 // The underlying Driver always includes the declaration in its result (see
-// gopls.Driver.FindReferences); when includeDeclaration is false, this
+// lspdriver.Driver.FindReferences); when includeDeclaration is false, this
 // method excludes it itself by comparing against the symbol's definition
 // location, since the driver has no per-call toggle for it.
 func (t *Toolset) FindReferences(ctx context.Context, file string, line int, symbol string, includeDeclaration bool) (ListResult, error) {
@@ -30,7 +30,7 @@ func (t *Toolset) FindReferences(ctx context.Context, file string, line int, sym
 
 	locs := make([]SourceLocation, 0, len(refs))
 	for _, r := range refs {
-		locs = append(locs, sourceLocationFromGoplsLocation(r))
+		locs = append(locs, sourceLocationFromLSPLocation(r))
 	}
 	return capLocations(locs, t.maxResults), nil
 }
@@ -50,7 +50,7 @@ func (t *Toolset) FindImplementations(ctx context.Context, file string, line int
 
 	locs := make([]SourceLocation, 0, len(impls))
 	for _, i := range impls {
-		locs = append(locs, sourceLocationFromGoplsLocation(i))
+		locs = append(locs, sourceLocationFromLSPLocation(i))
 	}
 	return capLocations(locs, t.maxResults), nil
 }

@@ -1,5 +1,5 @@
 // Command fakegopls is a minimal stdio LSP server used only by
-// internal/semantic/gopls's tests to exercise Driver's subprocess wiring,
+// internal/semantic/lspdriver's tests to exercise Driver's subprocess wiring,
 // handshake, crash-restart, readiness-timeout, and per-capability query
 // paths without depending on a real gopls binary being installed.
 //
@@ -18,7 +18,10 @@
 // invocation so a test can assert how many times the fixture process was
 // launched. If FAKEGOPLS_OPEN_LOG names a file, one line (the opened URI)
 // is appended to it on every textDocument/didOpen, so a test can assert a
-// file was opened at most once across several query calls.
+// file was opened at most once across several query calls. If
+// FAKEGOPLS_INIT_OPTIONS_LOG names a file, the raw initializationOptions
+// JSON received on initialize (or "null" if none was sent) is appended to
+// it, so a test can assert a ServerProfile's InitOptions were sent.
 package main
 
 import (
@@ -45,6 +48,7 @@ func main() {
 	srv := &fakeServer{
 		crashAfterInit: mode == "crash-after-init",
 		openLog:        os.Getenv("FAKEGOPLS_OPEN_LOG"),
+		initOptionsLog: os.Getenv("FAKEGOPLS_INIT_OPTIONS_LOG"),
 	}
 	stream := jsonrpc2.NewStream(stdio{})
 	ctx, conn, _ := protocol.NewServer(context.Background(), srv, stream)
@@ -78,12 +82,21 @@ type fakeServer struct {
 
 	crashAfterInit bool
 	openLog        string
+	initOptionsLog string
 
 	mu     sync.Mutex
 	opened map[string]int
 }
 
-func (s *fakeServer) Initialize(context.Context, *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+func (s *fakeServer) Initialize(_ context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if s.initOptionsLog != "" {
+		raw := params.InitializationOptions
+		if raw == nil {
+			appendLine(s.initOptionsLog, "null")
+		} else {
+			appendLine(s.initOptionsLog, string(raw))
+		}
+	}
 	return &protocol.InitializeResult{
 		Capabilities: protocol.ServerCapabilities{
 			HoverProvider:           protocol.Boolean(true),

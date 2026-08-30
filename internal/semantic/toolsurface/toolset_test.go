@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Teagan42/forge/internal/semantic/gopls"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 	"go.lsp.dev/protocol"
 )
 
@@ -13,48 +13,48 @@ import (
 type fakeDriver struct {
 	caps protocol.ServerCapabilities
 
-	definition     []gopls.Location
-	references     []gopls.Location
-	implementation []gopls.Location
-	symbolInfo     gopls.SymbolInfo
-	documentSyms   []gopls.Symbol
-	workspaceSyms  []gopls.Symbol
-	callHierarchy  gopls.CallHierarchy
-	typeHierarchy  gopls.TypeHierarchy
+	definition     []lspdriver.Location
+	references     []lspdriver.Location
+	implementation []lspdriver.Location
+	symbolInfo     lspdriver.SymbolInfo
+	documentSyms   []lspdriver.Symbol
+	workspaceSyms  []lspdriver.Symbol
+	callHierarchy  lspdriver.CallHierarchy
+	typeHierarchy  lspdriver.TypeHierarchy
 	err            error
 }
 
 func (f *fakeDriver) Capabilities() protocol.ServerCapabilities { return f.caps }
 
-func (f *fakeDriver) FindDefinition(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindDefinition(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return f.definition, f.err
 }
 
-func (f *fakeDriver) FindReferences(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindReferences(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return f.references, f.err
 }
 
-func (f *fakeDriver) FindImplementations(ctx context.Context, file string, pos gopls.Position) ([]gopls.Location, error) {
+func (f *fakeDriver) FindImplementations(ctx context.Context, file string, pos lspdriver.Position) ([]lspdriver.Location, error) {
 	return f.implementation, f.err
 }
 
-func (f *fakeDriver) SymbolInfo(ctx context.Context, file string, pos gopls.Position) (gopls.SymbolInfo, error) {
+func (f *fakeDriver) SymbolInfo(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.SymbolInfo, error) {
 	return f.symbolInfo, f.err
 }
 
-func (f *fakeDriver) DocumentSymbols(ctx context.Context, file string) ([]gopls.Symbol, error) {
+func (f *fakeDriver) DocumentSymbols(ctx context.Context, file string) ([]lspdriver.Symbol, error) {
 	return f.documentSyms, f.err
 }
 
-func (f *fakeDriver) WorkspaceSymbols(ctx context.Context, query string) ([]gopls.Symbol, error) {
+func (f *fakeDriver) WorkspaceSymbols(ctx context.Context, query string) ([]lspdriver.Symbol, error) {
 	return f.workspaceSyms, f.err
 }
 
-func (f *fakeDriver) CallHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.CallHierarchy, error) {
+func (f *fakeDriver) CallHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.CallHierarchy, error) {
 	return f.callHierarchy, f.err
 }
 
-func (f *fakeDriver) TypeHierarchy(ctx context.Context, file string, pos gopls.Position) (gopls.TypeHierarchy, error) {
+func (f *fakeDriver) TypeHierarchy(ctx context.Context, file string, pos lspdriver.Position) (lspdriver.TypeHierarchy, error) {
 	return f.typeHierarchy, f.err
 }
 
