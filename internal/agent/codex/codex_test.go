@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -93,6 +94,70 @@ func TestAdapter_ExecuteSubprocessErrorIsFailedWithoutGoError(t *testing.T) {
 	if res.Status != agent.StatusFailed {
 		t.Fatalf("Status = %v, want FAILED", res.Status)
 	}
+}
+
+func TestAdapter_ExecuteWiresMCPServerWhenSemanticMCPServersPresent(t *testing.T) {
+	runner, call := fixedRunner("```json\n{\"status\":\"IMPLEMENTED\",\"summary\":\"ok\"}\n```\n")
+	a := &Adapter{Runner: runner}
+
+	req := agent.AgentRequest{
+		WorkspacePath: "/workspace",
+		Semantic: agent.SemanticDescriptor{
+			MCPServers: []agent.MCPServer{{Language: "go", Command: []string{"gopls"}}},
+		},
+	}
+	if _, err := a.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !containsArg(call.args, "--ignore-user-config") {
+		t.Fatalf("args = %v, want --ignore-user-config", call.args)
+	}
+	found := false
+	for i, arg := range call.args {
+		if arg != "-c" {
+			continue
+		}
+		if i+1 >= len(call.args) {
+			t.Fatalf("args = %v, want a value following -c", call.args)
+		}
+		val := call.args[i+1]
+		if !strings.HasPrefix(val, "mcp_servers.forgelsp.command=") {
+			continue
+		}
+		found = true
+		if !strings.Contains(val, "internal-mcp") || !strings.Contains(val, "/workspace") {
+			t.Fatalf("-c value = %q, want it to invoke internal-mcp against /workspace", val)
+		}
+	}
+	if !found {
+		t.Fatalf("args = %v, want a -c mcp_servers.forgelsp.command=[...] flag", call.args)
+	}
+}
+
+func TestAdapter_ExecuteOmitsMCPWiringWhenNoSemanticMCPServers(t *testing.T) {
+	runner, call := fixedRunner("```json\n{\"status\":\"IMPLEMENTED\",\"summary\":\"ok\"}\n```\n")
+	a := &Adapter{Runner: runner}
+
+	if _, err := a.Execute(context.Background(), agent.AgentRequest{WorkspacePath: "/workspace"}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if containsArg(call.args, "--ignore-user-config") {
+		t.Fatalf("args = %v, want no --ignore-user-config without Semantic.MCPServers", call.args)
+	}
+	if containsArg(call.args, "-c") {
+		t.Fatalf("args = %v, want no -c flag without Semantic.MCPServers", call.args)
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAdapter_SemanticProfileDeclaresNoNativeCapabilitiesViaMCP(t *testing.T) {
