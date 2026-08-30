@@ -73,12 +73,11 @@ func New(a agent.Agent, confidenceFloor float64) *Reviewer {
 // Review runs the bugs/breaking/security axis as one fresh Agent.Execute
 // call, parses its JSON findings envelope, and maps it onto review.Result.
 //
-// review.Request has no WorkspacePath field (only Diff, Issue, Repository,
-// and GateResults; see internal/review.Request's doc comment) — Review
-// passes req's fields straight through to AgentRequest and leaves
-// AgentRequest.WorkspacePath empty, since the axis's review context is the
-// diff text itself rather than anything requiring filesystem access to the
-// Worker's Workspace.
+// req.WorkspacePath is passed straight through to AgentRequest.WorkspacePath
+// so the axis agent runs in, and can read, the same working tree Quality
+// Gates ran against — letting it open files beyond the diff to trace
+// cross-file/cross-package effects, rather than being confined to the diff
+// text itself.
 func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Result, error) {
 	floor := r.ConfidenceFloor
 	if floor <= 0 {
@@ -86,9 +85,10 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 	}
 
 	result, err := r.Agent.Execute(ctx, agent.AgentRequest{
-		Issue:      req.Issue,
-		Repository: req.Repository,
-		Policy:     agent.WorkflowPolicy{Notes: buildPolicyNotes(req)},
+		Issue:         req.Issue,
+		Repository:    req.Repository,
+		Policy:        agent.WorkflowPolicy{Notes: buildPolicyNotes(req)},
+		WorkspacePath: req.WorkspacePath,
 	})
 	if err != nil {
 		return review.Result{}, fmt.Errorf("agentreviewer: axis %s: execute: %w", axisName, err)

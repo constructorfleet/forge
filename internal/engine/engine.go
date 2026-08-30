@@ -1071,10 +1071,11 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 
 	started := e.Now()
 	result, err := e.Reviewer.Review(ctx, review.Request{
-		Diff:        diff,
-		Issue:       issue,
-		Repository:  repoCtx,
-		GateResults: gateResults,
+		Diff:          diff,
+		Issue:         issue,
+		Repository:    repoCtx,
+		GateResults:   gateResults,
+		WorkspacePath: workspacePath,
 	})
 	if err != nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer execute issue %s: %w", issueID, err)

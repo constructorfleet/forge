@@ -82,6 +82,14 @@ func TestExecute_ReviewApproved_AdvancesToCommitting(t *testing.T) {
 	if inv.Repository.BaseRevision != te.base {
 		t.Errorf("Repository.BaseRevision = %q, want %q", inv.Repository.BaseRevision, te.base)
 	}
+	// The Reviewer must see the same workspace path the DiffProducer ran
+	// against, so an axis can open files beyond the diff (issue #169).
+	if len(diff.calls) != 1 {
+		t.Fatalf("got %d DiffProducer calls, want 1", len(diff.calls))
+	}
+	if inv.WorkspacePath == "" || inv.WorkspacePath != diff.calls[0].workspacePath {
+		t.Errorf("WorkspacePath = %q, want %q (same tree Quality Gates and Diff ran against)", inv.WorkspacePath, diff.calls[0].workspacePath)
+	}
 
 	// The DiffProducer was invoked against the Workspace path and the
 	// Worker's base revision, not shelled out to inside Engine itself.
