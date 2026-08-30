@@ -192,6 +192,9 @@ func validate(cfg Config) error {
 	if cfg.LSP.RestartLimit < 0 {
 		errs = append(errs, fieldErr("lsp.restart_limit", fmt.Sprint(cfg.LSP.RestartLimit), "must be >= 0"))
 	}
+	if cfg.LSP.MaxResults < 1 {
+		errs = append(errs, fieldErr("lsp.max_results", fmt.Sprint(cfg.LSP.MaxResults), "must be >= 1"))
+	}
 
 	if len(errs) == 0 {
 		return nil

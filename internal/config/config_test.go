@@ -789,6 +789,40 @@ func TestLoad_LSPNegativeRestartLimitRejected(t *testing.T) {
 	}
 }
 
+func TestDefault_LSPMaxResultsDefault(t *testing.T) {
+	cfg := Default()
+	if cfg.LSP.MaxResults != 50 {
+		t.Errorf("LSP.MaxResults = %d, want 50", cfg.LSP.MaxResults)
+	}
+	if err := validate(cfg); err != nil {
+		t.Errorf("validate(Default()) = %v, want nil", err)
+	}
+}
+
+func TestLoad_LSPMaxResultsOverride(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  max_results: 25\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LSP.MaxResults != 25 {
+		t.Errorf("LSP.MaxResults = %d, want 25", cfg.LSP.MaxResults)
+	}
+}
+
+func TestLoad_LSPNonPositiveMaxResultsRejected(t *testing.T) {
+	path := writeTemp(t, "lsp:\n  max_results: 0\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "lsp.max_results") {
+		t.Errorf("Load() error = %v, want it to identify lsp.max_results", err)
+	}
+}
+
 func TestLoad_NoSecretsFieldsExist(t *testing.T) {
 	// Structural guard: config carries no token/password/secret fields.
 	// Anything auth-related must be sourced from the environment at use
