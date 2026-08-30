@@ -8,6 +8,9 @@ package codex
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/clicommon"
@@ -93,14 +96,53 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	if executable == "" {
 		executable = defaultExecutable
 	}
+	args := append(append([]string{}, nonInteractiveArgs...), mcpArgs(req)...)
 	cfg := clicommon.CLIConfig{
 		BackendName:         "codex",
 		Runner:              a.Runner,
 		Executable:          executable,
-		Args:                nonInteractiveArgs,
+		Args:                args,
 		AllowedEnvVars:      allowedEnvVars,
 		AuthEnvVars:         defaultAuthEnvVars,
 		ExtraEnvPassthrough: a.ExtraEnvPassthrough,
 	}
 	return clicommon.ExecuteCLI(ctx, cfg, req)
+}
+
+// forgeExecutable resolves the currently-running forge binary's absolute
+// path (os.Executable) so Codex spawns the exact same forge that dispatched
+// it, falling back to the bare "forge" name (resolved via PATH by Codex's
+// own subprocess spawn) if that lookup fails. A package var so tests can
+// override it.
+var forgeExecutable = func() string {
+	path, err := os.Executable()
+	if err != nil {
+		return "forge"
+	}
+	return path
+}
+
+// mcpArgs translates req.Semantic.MCPServers (see CONTEXT.md "Injection
+// Channel": InjectionChannelMCP) into the Codex CLI flags that point Codex
+// at Forge's backend-neutral MCP server (`forge internal-mcp --workspace
+// <path>`, issue #127): a `-c mcp_servers.forgelsp.command=[...]` config
+// override plus `--ignore-user-config`, so Codex spawns and owns that
+// subprocess itself rather than reading it from the user's own Codex
+// config. Returns nil when Semantic.MCPServers is empty — the
+// SemanticProvider seam (internal/semantic) already degrades to an empty
+// list whenever lsp.enabled is false or Codex's declared capabilities need
+// no fill, so no special-casing of that config is needed here.
+func mcpArgs(req agent.AgentRequest) []string {
+	if len(req.Semantic.MCPServers) == 0 {
+		return nil
+	}
+
+	command := []string{forgeExecutable(), "internal-mcp", "--workspace", req.WorkspacePath}
+	quoted := make([]string, len(command))
+	for i, c := range command {
+		quoted[i] = fmt.Sprintf("%q", c)
+	}
+	value := fmt.Sprintf("mcp_servers.forgelsp.command=[%s]", strings.Join(quoted, ","))
+
+	return []string{"-c", value, "--ignore-user-config"}
 }
