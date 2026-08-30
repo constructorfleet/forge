@@ -41,7 +41,7 @@ func Render(result Result) ([]byte, error) {
 	buf.WriteString(header)
 
 	for _, n := range result.Notes {
-		if n.Field == "agent_instructions" {
+		if n.Field == "agent_instructions" || n.Field == "lsp_no_server" {
 			buf.WriteString("#\n# " + n.Message + "\n")
 			continue
 		}
