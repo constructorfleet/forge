@@ -303,9 +303,29 @@ func TestDriver_DidOpenIsLazyAndPerFile(t *testing.T) {
 		t.Fatalf("DocumentSymbols() error = %v", err)
 	}
 
-	got := opens()
-	if len(got) != 1 {
-		t.Fatalf("didOpen sent %d times across 3 query calls referencing the same file, want exactly 1: %v", len(got), got)
+	// didOpen is a fire-and-forget LSP notification: ensureOpen sends it and
+	// issues the query request without awaiting it, so the fake server's
+	// append to the open log can lag the synchronous query responses (it is
+	// dispatched independently of the request replies). Reading the log once,
+	// immediately, therefore races that notification — the source of this
+	// test's intermittent CI failures. The Driver's per-file lazy-open cache
+	// guarantees at most one didOpen for greet.go across the three calls, so
+	// poll for it to land rather than racing it; a count above one is a real
+	// regression (didOpen sent per call), which the guard below still catches.
+	var got []string
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got = opens()
+		if len(got) > 1 {
+			t.Fatalf("didOpen sent %d times across 3 query calls referencing the same file, want exactly 1: %v", len(got), got)
+		}
+		if len(got) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("didOpen not observed within 2s after 3 query calls, want exactly 1: %v", got)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if !strings.HasSuffix(got[0], "greet.go") {
 		t.Errorf("didOpen URI = %q, want it to name greet.go", got[0])
