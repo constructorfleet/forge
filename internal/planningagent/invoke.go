@@ -39,7 +39,7 @@ func InvokeStructured[Req any, Res any](
 	}
 
 	prompt := build(req)
-	raw, err := backend.Invoke(ctx, key, prompt)
+	raw, err := backend.Invoke(ctx, InvokeRequest{Key: key, Prompt: prompt})
 	if err != nil {
 		return zero, fmt.Errorf("planningagent: invoke: %w", err)
 	}
