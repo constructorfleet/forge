@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.2](https://github.com/constructorfleet/forge/compare/forge-v0.16.1...forge-v0.16.2) (2026-08-31)
+
+
+### Bug Fixes
+
+* bug in cancel ([#312](https://github.com/constructorfleet/forge/issues/312)) ([8bab37e](https://github.com/constructorfleet/forge/commit/8bab37ee22ce23baf35ec887163555a9dd95fbbf))
+
 ## [0.16.1](https://github.com/constructorfleet/forge/compare/forge-v0.16.0...forge-v0.16.1) (2026-08-31)
 
 
