@@ -28,6 +28,11 @@ func sampleArtifact() *planning.Artifact {
 
 func TestParseRenderRoundTrip(t *testing.T) {
 	a := sampleArtifact()
+	a.TicketKinds = map[string]planning.TicketKind{
+		"TKT-001": planning.TicketKindCode,
+		"TKT-002": planning.TicketKindNonCode,
+	}
+	a.Revision = planning.ComputeRevision(a)
 	rendered := planning.Render(a)
 
 	parsed, err := planning.Parse(rendered)

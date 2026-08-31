@@ -50,6 +50,9 @@ func ValidateTicketPlanDeterministic(
 		if len(t.AcceptanceCriteria) == 0 {
 			return errMissingAcceptanceCriteria(t.Key)
 		}
+		if t.Kind != planning.TicketKindCode && t.Kind != planning.TicketKindNonCode {
+			return fmt.Errorf("ticket-plan: ticket %s has invalid ticket kind %q (must be code or non-code)", t.Key, t.Kind)
+		}
 
 		// Validate requirement references
 		for _, req := range t.Requirements {
@@ -97,8 +100,12 @@ func ValidateTicketPlanDeterministic(
 				return errDependencyOnDecision(t.Key)
 			}
 			// Target must exist
-			if _, ok := ticketMap[dep]; !ok {
+			target, ok := ticketMap[dep]
+			if !ok {
 				return errUnresolvableDependency(t.Key, dep)
+			}
+			if t.Kind == planning.TicketKindCode && target.Kind == planning.TicketKindNonCode {
+				return fmt.Errorf("ticket-plan: ticket %s code ticket cannot depend on non-code ticket %s", t.Key, dep)
 			}
 		}
 	}

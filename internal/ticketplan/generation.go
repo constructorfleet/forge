@@ -11,6 +11,7 @@ import (
 
 type TicketGenResult struct {
 	Key                   string                   `json:"key"`
+	Kind                  planning.TicketKind      `json:"kind,omitempty"`
 	Objective             string                   `json:"objective"`
 	Requirements          []string                 `json:"requirements"`
 	AcceptanceCriteria    []string                 `json:"acceptance_criteria"`
@@ -39,6 +40,12 @@ func Generate(ctx context.Context, backend planningagent.Backend, pc planningage
 		})
 	if err != nil {
 		return nil, fmt.Errorf("ticket-plan-generation invocation failed: %w", err)
+	}
+
+	for i := range res.Tickets {
+		if res.Tickets[i].Kind == "" {
+			res.Tickets[i].Kind = planning.TicketKindCode
+		}
 	}
 
 	return &res, nil
@@ -85,12 +92,13 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "Generate a ticket plan with temporary ticket keys (TKT-001, TKT-002, ...) that covers all requirements from the specification.\n"
 	prompt += "Each ticket must have:\n"
 	prompt += "1. **key** - Temporary ticket key (TKT-001, TKT-002, ...)\n"
-	prompt += "2. **objective** - Clear, measurable objective for this ticket\n"
-	prompt += "3. **requirements** - List of requirement IDs (REQ-NNN) this ticket addresses (at least one)\n"
-	prompt += "4. **acceptance_criteria** - List of measurable acceptance criteria (at least one)\n"
-	prompt += "5. **dependencies** - List of other ticket keys this ticket depends on (empty if none)\n"
-	prompt += "6. **implementation_context** - List of concrete starting points for the implementer: likely files, directories, symbols, existing implementations, or analogous examples already in the repository. Include this whenever such pointers can be identified during planning; leave it empty only when no such pointers exist.\n"
-	prompt += "7. **estimate** - Optional effort/complexity estimate with:\n"
+	prompt += "2. **kind** - Optional ticket kind: \"code\" for repository-changing executable work (default), or \"non-code\" for verification-only, tracker-only, or manual deliverables that should go to ready-for-human/manual handling instead of forge execute.\n"
+	prompt += "3. **objective** - Clear, measurable objective for this ticket\n"
+	prompt += "4. **requirements** - List of requirement IDs (REQ-NNN) this ticket addresses (at least one)\n"
+	prompt += "5. **acceptance_criteria** - List of measurable acceptance criteria (at least one)\n"
+	prompt += "6. **dependencies** - List of other ticket keys this ticket depends on (empty if none)\n"
+	prompt += "7. **implementation_context** - List of concrete starting points for the implementer: likely files, directories, symbols, existing implementations, or analogous examples already in the repository. Include this whenever such pointers can be identified during planning; leave it empty only when no such pointers exist.\n"
+	prompt += "8. **estimate** - Optional effort/complexity estimate with:\n"
 	prompt += "   - **size** - One of: S, M, L, XL (required if estimate provided)\n"
 	prompt += "   - **risk** - Optional risk hint (e.g., \"new_tech\", \"unknown_deps\", \"complex_refactor\")\n\n"
 	prompt += "Sizing and scope:\n"
@@ -102,6 +110,7 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "Rules:\n"
 	prompt += "- Keys must be sequential (TKT-001, TKT-002, ...)\n"
 	prompt += "- Dependencies must only reference other ticket keys (TKT-NNN), never decision IDs\n"
+	prompt += "- Verification-only, tracker-only, and manual deliverables must be kind \"non-code\" so they do not enter the code execution pipeline.\n"
 	prompt += "- No self-dependencies or cycles\n"
 	prompt += "- Every requirement from the spec must be covered by at least one ticket\n"
 	prompt += "- Every ticket must reference at least one requirement\n"
@@ -110,7 +119,7 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "Return your response as a JSON object with this shape:\n"
 	prompt += "{\n"
 	prompt += `  "tickets": [` + "\n"
-	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "implementation_context": ["internal/foo/bar.go: extend Baz() with ..."], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
+	prompt += `    {"key": "TKT-001", "kind": "code", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "implementation_context": ["internal/foo/bar.go: extend Baz() with ..."], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
 	prompt += `    ...` + "\n"
 	prompt += `  ]` + "\n"
 	prompt += "}\n"
@@ -170,6 +179,12 @@ func validateTicketPlanGenerationResult(r TicketPlanGenerationResult) error {
 
 		if t.Objective == "" {
 			return fmt.Errorf("ticket %s has empty objective", t.Key)
+		}
+		if t.Kind == "" {
+			r.Tickets[i].Kind = planning.TicketKindCode
+		}
+		if t.Kind != "" && t.Kind != planning.TicketKindCode && t.Kind != planning.TicketKindNonCode {
+			return fmt.Errorf("ticket %s has invalid kind %q (must be code or non-code)", t.Key, t.Kind)
 		}
 
 		if len(t.Requirements) == 0 {

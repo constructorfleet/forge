@@ -620,6 +620,65 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 	}
 }
 
+func TestSpecEngineGenerateTicketPlanRecordsTicketKinds(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+	spec := &planning.Artifact{
+		Kind:  planning.KindSpec,
+		State: "approved",
+		Sections: []planning.Section{
+			{Heading: "Context", Body: "A widget builder using SQLite"},
+			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable\nREQ-002: Widget must be verified manually"},
+		},
+	}
+	spec.Revision = planning.ComputeRevision(spec)
+	spec.ApprovedRevision = spec.Revision
+
+	loader := &fakeLoaderForTest{goal: goal, spec: spec}
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", `{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"kind": "code",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully"],
+				"dependencies": []
+			},
+			{
+				"key": "TKT-002",
+				"kind": "non-code",
+				"objective": "Verify tracker-only acceptance criterion",
+				"requirements": ["REQ-002"],
+				"acceptance_criteria": ["No repository diff is required"],
+				"dependencies": []
+			}
+		]
+	}`)
+	backend.ProgramResult("ticket-plan-review", `{
+		"verdict": "APPROVED",
+		"summary": "ok",
+		"findings": []
+	}`)
+
+	engine := specengine.NewSpecEngine(backend)
+	if err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader); err != nil {
+		t.Fatalf("GenerateTicketPlan failed: %v", err)
+	}
+
+	if got := loader.ticketPlan.TicketKinds["TKT-001"]; got != planning.TicketKindCode {
+		t.Errorf("ticket kind TKT-001 = %q, want %q", got, planning.TicketKindCode)
+	}
+	if got := loader.ticketPlan.TicketKinds["TKT-002"]; got != planning.TicketKindNonCode {
+		t.Errorf("ticket kind TKT-002 = %q, want %q", got, planning.TicketKindNonCode)
+	}
+}
+
 // TestSpecEngineGenerateTicketPlan_ReviewBudgetExhausted is issue #251's
 // correctness case: when the automated ticketplanreview reviewer raises the
 // same finding on every attempt, that is a recurring, reproducible defect

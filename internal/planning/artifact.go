@@ -17,6 +17,15 @@ const (
 	KindTicketPlan Kind = "ticket-plan"
 )
 
+// TicketKind declares whether a planned ticket is executable code work or a
+// non-code/manual deliverable that must not enter the code execution pipeline.
+type TicketKind string
+
+const (
+	TicketKindCode    TicketKind = "code"
+	TicketKindNonCode TicketKind = "non-code"
+)
+
 // DerivedFromEntry records one artifact this Artifact was derived from, at
 // the revision it was derived from. Entries are typed (Kind) and keyed
 // (ID); canonicalization sorts them by ID so reordering the block does not
@@ -39,8 +48,8 @@ type Section struct {
 //
 // Revision, State, ApprovedRevision, ApprovedBy, and ApprovedAt are
 // workflow fields: they record process state but do not participate in the
-// content revision. Kind, DerivedFrom, Estimates, and Sections are definitional: they
-// are exactly what ComputeRevision hashes.
+// content revision. Kind, DerivedFrom, Estimates, TicketKinds, and Sections are
+// definitional: they are exactly what ComputeRevision hashes.
 type Artifact struct {
 	Kind Kind
 
@@ -60,5 +69,6 @@ type Artifact struct {
 
 	DerivedFrom []DerivedFromEntry
 	Estimates   map[string]TicketEstimate
+	TicketKinds map[string]TicketKind
 	Sections    []Section
 }

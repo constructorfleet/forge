@@ -18,6 +18,7 @@ type metaBlock struct {
 	Kind             string                    `yaml:"kind"`
 	DerivedFrom      []derivedYAML             `yaml:"derived_from,omitempty"`
 	Estimates        map[string]TicketEstimate `yaml:"estimates,omitempty"`
+	TicketKinds      map[string]TicketKind     `yaml:"ticket_kinds,omitempty"`
 }
 
 type derivedYAML struct {

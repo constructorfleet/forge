@@ -27,6 +27,11 @@ func Render(a *Artifact) []byte {
 		estimates[k] = TicketEstimate{Size: v.Size, Risk: v.Risk}
 	}
 
+	ticketKinds := make(map[string]TicketKind)
+	for k, v := range a.TicketKinds {
+		ticketKinds[k] = v
+	}
+
 	meta := metaBlock{
 		Revision:         a.Revision,
 		State:            a.State,
@@ -36,6 +41,7 @@ func Render(a *Artifact) []byte {
 		Kind:             string(a.Kind),
 		DerivedFrom:      derived,
 		Estimates:        estimates,
+		TicketKinds:      ticketKinds,
 	}
 
 	yamlBytes, err := yaml.Marshal(&meta)

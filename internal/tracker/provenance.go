@@ -25,6 +25,10 @@ const (
 	// materialized graph, but only once the whole graph has been
 	// re-fetched and validated — never earlier, and never for a subset.
 	ProvenanceReady ForgeProvenanceStatus = "ready"
+	// ProvenanceManual marks a planned non-code deliverable. It is a real
+	// tracker Issue for human/manual follow-through, but ValidateExecutable
+	// rejects it so it cannot enter the code execution pipeline.
+	ProvenanceManual ForgeProvenanceStatus = "manual"
 )
 
 // ForgeProvenance is Forge's normalized representation of the canonical
@@ -128,10 +132,10 @@ func ParseForgeProvenance(body string) (*ForgeProvenance, error) {
 		if err := yaml.Unmarshal([]byte(strings.Join(yamlLines, "\n")), &p); err != nil {
 			return nil, fmt.Errorf("tracker: invalid %q metadata: %w", forgeProvenanceHeading, err)
 		}
-		if p.Status != ProvenanceMaterializing && p.Status != ProvenanceReady {
+		if p.Status != ProvenanceMaterializing && p.Status != ProvenanceReady && p.Status != ProvenanceManual {
 			return nil, fmt.Errorf(
-				"tracker: %q has invalid status %q (expected %q or %q)",
-				forgeProvenanceHeading, p.Status, ProvenanceMaterializing, ProvenanceReady,
+				"tracker: %q has invalid status %q (expected %q, %q, or %q)",
+				forgeProvenanceHeading, p.Status, ProvenanceMaterializing, ProvenanceReady, ProvenanceManual,
 			)
 		}
 		return &p, nil

@@ -1,7 +1,8 @@
 // Package materialize turns an approved TicketPlan (internal/ticketplan) —
-// the intended graph — into a valid, executable tracker Issue DAG Phase 1
-// (internal/engine, internal/scheduler) runs. The TicketPlan and the
-// materialized Issues are distinct objects: this package is the only
+// the intended graph — into tracker Issues. Code tickets become a valid,
+// executable Issue DAG Phase 1 (internal/engine, internal/scheduler) runs;
+// non-code tickets become non-executable manual Issues. The TicketPlan and
+// the materialized Issues are distinct objects: this package is the only
 // bridge between them.
 //
 // Materialize runs in three phases:
@@ -33,6 +34,7 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/ticketplan"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -60,6 +62,9 @@ type Result struct {
 	// IssueIDs maps each ticket's temporary key (e.g. "TKT-003") to the
 	// tracker-assigned Issue ID materialized for it.
 	IssueIDs map[string]string
+	// ManualIssueIDs maps non-code tickets to non-executable tracker Issues
+	// routed for human/manual handling instead of forge execute.
+	ManualIssueIDs map[string]string
 }
 
 // Tracker is the subset of tracker.Tracker Materialize needs.
@@ -96,14 +101,37 @@ func Materialize(ctx context.Context, trk Tracker, tickets []ticketplan.Ticket, 
 	if len(tickets) == 0 {
 		return Result{}, fmt.Errorf("materialize: no tickets to materialize")
 	}
+	codeTickets, manualTickets := splitByKind(tickets)
+	if len(codeTickets) == 0 && len(manualTickets) == 0 {
+		return Result{}, fmt.Errorf("materialize: no tickets to materialize")
+	}
 	if err := checkAcyclic(tickets); err != nil {
 		return Result{}, err
+	}
+	if err := validateExecutableDependencies(tickets); err != nil {
+		return Result{}, err
+	}
+
+	manualIssueIDs := make(map[string]string, len(manualTickets))
+	for _, t := range manualTickets {
+		body := renderManualBody(t, opts)
+		created, err := trk.CreateIssue(ctx, tracker.IssueRequest{
+			Title: t.Key + ": " + t.Objective,
+			Body:  body,
+		})
+		if err != nil {
+			return Result{}, &PartialFailureError{Phase: "manual (create)", IssueIDs: manualIssueIDs, Underlying: err}
+		}
+		manualIssueIDs[t.Key] = created.ID
+	}
+	if len(codeTickets) == 0 {
+		return Result{IssueIDs: map[string]string{}, ManualIssueIDs: manualIssueIDs}, nil
 	}
 
 	// Phase A: create every Issue in a non-executable materializing state,
 	// collecting real tracker IDs for each temporary key.
-	issueIDs := make(map[string]string, len(tickets))
-	for _, t := range tickets {
+	issueIDs := make(map[string]string, len(codeTickets))
+	for _, t := range codeTickets {
 		body := renderInitialBody(t, opts)
 		created, err := trk.CreateIssue(ctx, tracker.IssueRequest{
 			Title: t.Key + ": " + t.Objective,
@@ -117,7 +145,7 @@ func Materialize(ctx context.Context, trk Tracker, tickets []ticketplan.Ticket, 
 
 	// Phase B: rewrite temporary ticket keys to tracker IDs in the
 	// canonical `## Dependencies` block, and stamp full provenance.
-	for _, t := range tickets {
+	for _, t := range codeTickets {
 		deps := make([]string, len(t.Dependencies))
 		for i, d := range t.Dependencies {
 			id, ok := issueIDs[d]
@@ -138,11 +166,11 @@ func Materialize(ctx context.Context, trk Tracker, tickets []ticketplan.Ticket, 
 	// Phase C: re-fetch and validate the materialized graph. Issues become
 	// executable only once the whole graph validates — and only once every
 	// Issue has been individually flipped to ready.
-	if err := validateMaterializedGraph(ctx, trk, tickets, issueIDs); err != nil {
+	if err := validateMaterializedGraph(ctx, trk, codeTickets, issueIDs); err != nil {
 		return Result{}, &PartialFailureError{Phase: "C (validate)", IssueIDs: issueIDs, Underlying: err}
 	}
 
-	for _, t := range tickets {
+	for _, t := range codeTickets {
 		deps := make([]string, len(t.Dependencies))
 		for i, d := range t.Dependencies {
 			deps[i] = issueIDs[d]
@@ -153,7 +181,38 @@ func Materialize(ctx context.Context, trk Tracker, tickets []ticketplan.Ticket, 
 		}
 	}
 
-	return Result{IssueIDs: issueIDs}, nil
+	return Result{IssueIDs: issueIDs, ManualIssueIDs: manualIssueIDs}, nil
+}
+
+func splitByKind(tickets []ticketplan.Ticket) ([]ticketplan.Ticket, []ticketplan.Ticket) {
+	codeTickets := make([]ticketplan.Ticket, 0, len(tickets))
+	manualTickets := make([]ticketplan.Ticket, 0)
+	for _, t := range tickets {
+		if t.Kind == planning.TicketKindNonCode {
+			manualTickets = append(manualTickets, t)
+			continue
+		}
+		codeTickets = append(codeTickets, t)
+	}
+	return codeTickets, manualTickets
+}
+
+func validateExecutableDependencies(tickets []ticketplan.Ticket) error {
+	byKey := make(map[string]ticketplan.Ticket, len(tickets))
+	for _, t := range tickets {
+		byKey[t.Key] = t
+	}
+	for _, t := range tickets {
+		if t.Kind == planning.TicketKindNonCode {
+			continue
+		}
+		for _, dep := range t.Dependencies {
+			if byKey[dep].Kind == planning.TicketKindNonCode {
+				return fmt.Errorf("materialize: ticket %s code ticket cannot depend on non-code ticket %s", t.Key, dep)
+			}
+		}
+	}
+	return nil
 }
 
 // checkAcyclic defensively re-verifies the temp-key dependency graph is
@@ -234,6 +293,18 @@ func renderMaterializingBody(t ticketplan.Ticket, deps []string, opts Options) s
 func renderReadyBody(t ticketplan.Ticket, deps []string, opts Options) string {
 	return renderTicketSections(t) + renderDependencies(deps) + tracker.RenderForgeProvenance(tracker.ForgeProvenance{
 		Status:       tracker.ProvenanceReady,
+		TempKey:      t.Key,
+		Project:      opts.Project,
+		SpecRevision: opts.SpecRevision,
+		PlanRevision: opts.PlanRevision,
+		Requirements: t.Requirements,
+		Decisions:    opts.Decisions,
+	})
+}
+
+func renderManualBody(t ticketplan.Ticket, opts Options) string {
+	return renderTicketSections(t) + renderDependencies(nil) + tracker.RenderForgeProvenance(tracker.ForgeProvenance{
+		Status:       tracker.ProvenanceManual,
 		TempKey:      t.Key,
 		Project:      opts.Project,
 		SpecRevision: opts.SpecRevision,

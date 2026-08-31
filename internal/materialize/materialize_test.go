@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Teagan42/forge/internal/materialize"
+	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/ticketplan"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -140,6 +141,98 @@ func TestMaterialize_RendersImplementationContext(t *testing.T) {
 	}
 	if !strings.Contains(issue.Body, "### Implementation Context\n- internal/widget/builder.go: extend Build()") {
 		t.Fatalf("issue body missing implementation context: %q", issue.Body)
+	}
+}
+
+func TestMaterialize_RoutesNonCodeTicketsToManualNonExecutableIssues(t *testing.T) {
+	trk := tracker.NewFakeTracker()
+	tickets := []ticketplan.Ticket{
+		{
+			Key:                "TKT-001",
+			Kind:               planning.TicketKindCode,
+			Objective:          "Implement the code path",
+			Requirements:       []string{"REQ-001"},
+			AcceptanceCriteria: []string{"Code path works"},
+		},
+		{
+			Key:                "TKT-002",
+			Kind:               planning.TicketKindNonCode,
+			Objective:          "Verify tracker-only acceptance criteria",
+			Requirements:       []string{"REQ-002"},
+			AcceptanceCriteria: []string{"No repository diff is required"},
+		},
+	}
+
+	result, err := materialize.Materialize(context.Background(), trk, tickets, testOptions())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	codeID := result.IssueIDs["TKT-001"]
+	manualID := result.ManualIssueIDs["TKT-002"]
+	if codeID == "" {
+		t.Fatalf("missing executable issue ID: %+v", result.IssueIDs)
+	}
+	if manualID == "" {
+		t.Fatalf("missing manual issue ID: %+v", result.ManualIssueIDs)
+	}
+	if _, ok := result.IssueIDs["TKT-002"]; ok {
+		t.Fatalf("non-code ticket was returned as executable work: %+v", result.IssueIDs)
+	}
+
+	codeIssue, err := trk.GetIssue(context.Background(), codeID)
+	if err != nil {
+		t.Fatalf("GetIssue(code): %v", err)
+	}
+	if err := tracker.ValidateExecutable(codeIssue.ID, codeIssue.Body); err != nil {
+		t.Fatalf("code issue not executable: %v", err)
+	}
+
+	manualIssue, err := trk.GetIssue(context.Background(), manualID)
+	if err != nil {
+		t.Fatalf("GetIssue(manual): %v", err)
+	}
+	if err := tracker.ValidateExecutable(manualIssue.ID, manualIssue.Body); err == nil {
+		t.Fatal("manual issue is executable, want non-executable")
+	}
+	prov, err := tracker.ParseForgeProvenance(manualIssue.Body)
+	if err != nil {
+		t.Fatalf("ParseForgeProvenance(manual): %v", err)
+	}
+	if prov.Status != tracker.ProvenanceManual {
+		t.Fatalf("manual status = %q, want %q", prov.Status, tracker.ProvenanceManual)
+	}
+}
+
+func TestMaterialize_CodeTicketDependencyOnManualTicketFailsBeforeTrackerWrites(t *testing.T) {
+	trk := tracker.NewFakeTracker()
+	tickets := []ticketplan.Ticket{
+		{
+			Key:                "TKT-001",
+			Kind:               planning.TicketKindNonCode,
+			Objective:          "Manual verification",
+			Requirements:       []string{"REQ-001"},
+			AcceptanceCriteria: []string{"Verified"},
+		},
+		{
+			Key:                "TKT-002",
+			Kind:               planning.TicketKindCode,
+			Objective:          "Implement after manual verification",
+			Requirements:       []string{"REQ-002"},
+			AcceptanceCriteria: []string{"Implemented"},
+			Dependencies:       []string{"TKT-001"},
+		},
+	}
+
+	_, err := materialize.Materialize(context.Background(), trk, tickets, testOptions())
+	if err == nil {
+		t.Fatal("expected an error for code ticket depending on manual ticket")
+	}
+	if !strings.Contains(err.Error(), "code ticket cannot depend on non-code ticket") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, getErr := trk.GetIssue(context.Background(), "1"); getErr == nil {
+		t.Fatal("tracker issue was created before preflight failure")
 	}
 }
 
