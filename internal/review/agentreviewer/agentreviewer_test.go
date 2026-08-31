@@ -646,6 +646,42 @@ func TestReview_PopulatesEnvelopesWithRawFindingsAndUsage(t *testing.T) {
 	}
 }
 
+// TestReview_PopulatesEnvelopesWithAssurances is issue #182's agentreviewer
+// acceptance criterion: an axis's parsed assurances (issue #176) surface on
+// Result.Envelopes alongside its findings, for the engine to persist.
+func TestReview_PopulatesEnvelopesWithAssurances(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programEnvelope(bugsAxisMarker, `{"axis":"bugs","findings":[],"assurances":["error handling in Save is correct and complete"]}`)
+	fake.programEnvelope(qualityAxisMarker, cleanEnvelope)
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{Diff: "d", Issue: newIssue()})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	byAxis := map[string]review.AxisEnvelope{}
+	for _, e := range result.Envelopes {
+		byAxis[e.Axis] = e
+	}
+
+	bugs, ok := byAxis["bugs"]
+	if !ok {
+		t.Fatalf("no bugs envelope among %+v", result.Envelopes)
+	}
+	if len(bugs.Assurances) != 1 || bugs.Assurances[0] != "error handling in Save is correct and complete" {
+		t.Errorf("bugs.Assurances = %+v, want [\"error handling in Save is correct and complete\"]", bugs.Assurances)
+	}
+
+	quality, ok := byAxis["quality"]
+	if !ok {
+		t.Fatalf("no quality envelope among %+v", result.Envelopes)
+	}
+	if len(quality.Assurances) != 0 {
+		t.Errorf("quality.Assurances = %+v, want empty (cleanEnvelope has no assurances)", quality.Assurances)
+	}
+}
+
 // TestReview_UnrecoverableAxisExcludedFromEnvelopes ensures an axis that
 // never produced a usable envelope (Coverage.Ran == false) does not appear
 // in Result.Envelopes — there is no raw envelope to persist for it.

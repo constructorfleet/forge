@@ -212,6 +212,11 @@ type AxisEnvelope struct {
 	// them.
 	Findings []AxisRawFinding
 
+	// Assurances is this axis's raw assurances (issue #176) — things it
+	// explicitly checked and found clean/correct — exactly as its agent
+	// emitted them.
+	Assurances []string
+
 	// Usage is the axis agent invocation's token accounting, when its
 	// backend exposed one (mirrors agent.AgentResult.Usage).
 	Usage *agent.TokenUsage
