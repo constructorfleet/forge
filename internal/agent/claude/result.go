@@ -2,8 +2,11 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
@@ -12,33 +15,51 @@ import (
 // Claude Code CLI via `--json-schema` (issue 20/ticket 32) so the CLI
 // itself enforces the {status, summary, needs_info, usage} envelope shape
 // on the model's final answer, instead of Forge inferring it from a fenced
-// ```json block after the fact. It mirrors structuredResult's fields
-// exactly, so schema-constrained output decodes with the same struct that
-// backs the tolerant fenced-block fallback below.
-const resultJSONSchema = `{` +
-	`"type":"object",` +
-	`"properties":{` +
-	`"status":{"type":"string","enum":["IMPLEMENTED","NEEDS_INFO","FAILED"]},` +
-	`"summary":{"type":"string"},` +
-	`"needs_info":{` +
-	`"type":"object",` +
-	`"properties":{` +
-	`"question":{"type":"string"},` +
-	`"context":{"type":"string"}` +
-	`},` +
-	`"required":["question"]` +
-	`},` +
-	`"usage":{` +
-	`"type":"object",` +
-	`"properties":{` +
-	`"input_tokens":{"type":"integer"},` +
-	`"output_tokens":{"type":"integer"}` +
-	`}` +
-	`}` +
-	`},` +
-	`"required":["status","summary"],` +
-	`"additionalProperties":false` +
-	`}`
+// ```json block after the fact. It is derived from structuredResult (issue
+// 194) via buildResultJSONSchema, rather than hand-maintained, so it cannot
+// drift from the struct that decodes the schema-constrained output.
+var resultJSONSchema = func() string {
+	schema, err := buildResultJSONSchema()
+	if err != nil {
+		panic(fmt.Sprintf("claude: derive result JSON schema: %v", err))
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		panic(fmt.Sprintf("claude: marshal result JSON schema: %v", err))
+	}
+	return string(encoded)
+}()
+
+// buildResultJSONSchema derives a JSON Schema for structuredResult using
+// jsonschema-go's struct-based inference, then applies the one refinement
+// inference cannot express: restricting "status" to the recognized
+// agent.AgentStatus values. Inference alone already produces the rest of
+// the shape the hand-authored schema enforced — required:[status,summary],
+// additionalProperties:false (jsonschema-go's default for structs), and the
+// nested needs_info/usage objects — because structuredResult's optional
+// fields are marked "omitempty".
+//
+// One intentional relaxation from the old hand-authored schema: pointer
+// fields (NeedsInfo, Usage) also accept an explicit JSON null in addition
+// to being omitted, since jsonschema-go treats a Go pointer as nullable.
+// The Claude Code CLI never emits null for these fields, so this is not
+// reachable in practice.
+func buildResultJSONSchema() (*jsonschema.Schema, error) {
+	schema, err := jsonschema.For[structuredResult](nil)
+	if err != nil {
+		return nil, fmt.Errorf("infer schema for structuredResult: %w", err)
+	}
+	status, ok := schema.Properties["status"]
+	if !ok {
+		return nil, fmt.Errorf("inferred schema missing %q property", "status")
+	}
+	status.Enum = []any{
+		string(agent.StatusImplemented),
+		string(agent.StatusNeedsInfo),
+		string(agent.StatusFailed),
+	}
+	return schema, nil
+}
 
 // fencedJSONBlock matches fenced code blocks (optionally tagged "json") so
 // parseStructuredResult can pull the outcome Claude Code was instructed to
@@ -73,12 +94,12 @@ type structuredResult struct {
 
 type needsInfoFields struct {
 	Question string `json:"question"`
-	Context  string `json:"context"`
+	Context  string `json:"context,omitempty"`
 }
 
 type usageFields struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // parseStructuredResult scans stdout for fenced code blocks and returns the
