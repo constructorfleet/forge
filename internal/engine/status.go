@@ -226,8 +226,18 @@ func latestFailure(issueID string, events []storage.Event, gates []storage.GateR
 		return fmt.Sprintf("%s failed", label)
 	}
 	for i := len(reviews) - 1; i >= 0; i-- {
-		if reviews[i].Verdict != "CHANGES_REQUIRED" {
+		// CHANGES_REQUIRED and INCONCLUSIVE are the two review verdicts that
+		// can leave an Issue FAILED: the former when the review retry budget is
+		// exhausted, the latter (issue #257) when an axis was unrecoverable.
+		// Both carry their reason in Summary/Findings.
+		if reviews[i].Verdict != "CHANGES_REQUIRED" && reviews[i].Verdict != "INCONCLUSIVE" {
 			continue
+		}
+		if reviews[i].Verdict == "INCONCLUSIVE" {
+			if reviews[i].Summary != "" {
+				return "review inconclusive: " + reviews[i].Summary
+			}
+			return "review inconclusive: an axis was unrecoverable (see review run)"
 		}
 		if reviews[i].Summary != "" {
 			return reviews[i].Summary

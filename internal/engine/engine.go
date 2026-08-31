@@ -1308,16 +1308,20 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 	case review.VerdictChangesRequired:
 		return issue, review.VerdictChangesRequired, result.Findings, nil
 	case review.VerdictInconclusive:
-		// Issue #161: the Reviewer could not certify full axis coverage (at
-		// least one axis was unrecoverable and no surviving axis produced a
-		// blocking finding to route back as CHANGES_REQUIRED instead). A
-		// false APPROVED is the worst outcome Forge can produce, so this
-		// never auto-approves; it also never consumes RetryBudget.Review —
-		// this is an infra/coverage gap, not a repairable rejection — and
-		// escalates straight to NEEDS_INFO instead.
-		issue, err := e.escalateReviewToNeedsInfo(ctx, executionID, issueID,
-			"Review could not be completed on full axis coverage; human input is needed to proceed.",
-			result.Summary)
+		// Issue #161/#257: the Reviewer could not certify full axis coverage —
+		// at least one axis was unrecoverable (a backend/parse error) and no
+		// surviving axis produced a blocking finding to route back as
+		// CHANGES_REQUIRED. That is a review *error*, not a request for human
+		// input: the axis failed to run, so there is no question for a human
+		// to answer. It routes to the retryable FAILED terminal — `forge
+		// retry` re-runs the Issue once the underlying cause is resolved —
+		// rather than NEEDS_INFO, which would strand a transient infra failure
+		// behind a human gate. It still never auto-approves (a false APPROVED
+		// is the worst outcome Forge can produce) and never consumes
+		// RetryBudget.Review: operator-driven `forge retry`, not the repair
+		// loop, owns recovery here. The review.run Event recorded above carries
+		// the coverage gap for diagnosis (surfaced by status's latestFailure).
+		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
 		return issue, review.VerdictInconclusive, nil, err
 	default:
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer returned unknown verdict %q for issue %s", result.Verdict, issueID)
