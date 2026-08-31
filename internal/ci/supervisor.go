@@ -109,8 +109,8 @@ func New(store storage.Store, trk Tracker, cfg config.Config, baseBranch string)
 // interval rules both races out without a fixed grace delay.
 const checksSettleGracePolls = 2
 
-// Wait polls the pull request attached to issueID until all required checks
-// succeed or one required check fails.
+// Wait polls the pull request attached to issueID until the pull request is
+// merged after all required checks succeed, or one required check fails.
 func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error) {
 	required, err := s.requiredChecks(ctx)
 	if err != nil {
@@ -162,6 +162,15 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 		lastCheckNames = currentCheckNames
 		haveLastCheckNames = true
 		status, failed := evaluateChecks(required, checks, settledStreak >= checksSettleGracePolls)
+		if status == storage.CIRunStatusPassed {
+			merged, err := s.pullRequestMerged(ctx, issueID, pr.Number)
+			if err != nil {
+				return "", err
+			}
+			if !merged {
+				status = storage.CIRunStatusPending
+			}
+		}
 		run := storage.CIRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -201,6 +210,18 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			}
 		}
 	}
+}
+
+func (s *Supervisor) pullRequestMerged(ctx context.Context, issueID string, number int) (bool, error) {
+	getter, ok := s.Tracker.(tracker.MergeStatusGetter)
+	if !ok {
+		return true, nil
+	}
+	status, err := getter.GetPullRequestMergeStatus(ctx, number)
+	if err != nil {
+		return false, fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
+	}
+	return status.Merged, nil
 }
 
 func (s *Supervisor) requiredChecks(ctx context.Context) ([]string, error) {

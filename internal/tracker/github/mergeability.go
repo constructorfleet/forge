@@ -12,6 +12,7 @@ import (
 // shape GetPullRequestMergeStatus normalizes.
 type ghPullRequestMergeability struct {
 	MergeableState string `json:"mergeable_state"`
+	Merged         bool   `json:"merged"`
 }
 
 // GetPullRequestMergeStatus returns pull request number's current
@@ -30,6 +31,7 @@ func (c *Client) GetPullRequestMergeStatus(ctx context.Context, number int) (tra
 		return tracker.PullRequestMergeStatus{}, err
 	}
 	return tracker.PullRequestMergeStatus{
+		Merged:     pr.Merged,
 		Conflicted: pr.MergeableState == "dirty",
 		Behind:     pr.MergeableState == "behind",
 	}, nil
