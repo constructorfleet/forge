@@ -54,11 +54,35 @@ const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}
 // acceptance criterion).
 const commitMessageWrapWidth = 80
 
-// conventionalCommitHeader matches a Conventional Commits header line:
-// type[(scope)][!]: description. Used to detect an Issue Title that already
+// conventionalCommitHeader matches a Conventional Commits header's prefix:
+// type[(scope)][!]: , capturing the type (group 1) and the full prefix
+// (group 0, up to and including the trailing ": ") so callers can both
+// validate the type against allowedConventionalCommitTypes and strip the
+// prefix when it's not one. Used to detect an Issue Title that already
 // carries its own conventional-commit prefix, so commitMessage/prTitle
 // don't double-prefix it.
-var conventionalCommitHeader = regexp.MustCompile(`^[a-z]+(\([a-zA-Z0-9_./-]+\))?!?: .+`)
+var conventionalCommitHeader = regexp.MustCompile(`^([a-z]+)(\([a-zA-Z0-9_./-]+\))?!?: `)
+
+// allowedConventionalCommitTypes is the set of Conventional Commits types
+// this repo's CI "Conventional Commit PR title" check
+// (amannn/action-semantic-pull-request, .github/workflows/ci.yml) accepts
+// under its default configuration. An Issue Title carrying a prefix outside
+// this set (e.g. an area prefix like "review:") is not "already
+// conventional" — see issue 187 — and must have that prefix replaced by the
+// inferred type rather than passed through.
+var allowedConventionalCommitTypes = map[string]bool{
+	"feat":     true,
+	"fix":      true,
+	"docs":     true,
+	"style":    true,
+	"refactor": true,
+	"perf":     true,
+	"test":     true,
+	"build":    true,
+	"ci":       true,
+	"chore":    true,
+	"revert":   true,
+}
 
 // conventionalCommitTypeKeywords maps keywords that may appear in an
 // Issue's Title or Body to the Conventional Commits type they imply. Checked
@@ -255,18 +279,30 @@ func (e *Engine) commitMessage(issue domain.Issue, summary string) string {
 }
 
 // prTitle is the pull request's title: the Issue's Title, Conventional
-// Commits-prefixed unless it already carries its own prefix (e.g. an Issue
-// titled "fix: nil panic on empty diff"), falling back to a generic "Issue
-// #<id>" label for a tracker adapter that doesn't populate Title.
+// Commits-prefixed unless it already carries its own valid prefix (e.g. an
+// Issue titled "fix: nil panic on empty diff"), falling back to a generic
+// "Issue #<id>" label for a tracker adapter that doesn't populate Title. A
+// prefix that looks conventional but isn't an allowed Conventional Commits
+// type (e.g. an area prefix like "review:") is stripped and replaced by the
+// inferred type rather than nested underneath it (issue 187: "feat:
+// review: …" is not acceptable).
 func prTitle(issue domain.Issue) string {
-	title := issue.Title
-	if title == "" {
-		title = "Issue #" + issue.ID
+	if issue.Title == "" {
+		issue.Title = "Issue #" + issue.ID
 	}
-	if conventionalCommitHeader.MatchString(title) {
-		return title
+	ctype, title := conventionalCommitHeaderParts(issue)
+	return ctype + ": " + title
+}
+
+// stripInvalidConventionalCommitPrefix removes a leading "<word>: " prefix
+// from title when that word is not an allowed Conventional Commits type, so
+// prTitle/renderIssueTemplate can prepend the inferred type without nesting
+// it under the invalid one (issue 187).
+func stripInvalidConventionalCommitPrefix(title string) string {
+	if loc := conventionalCommitHeader.FindStringIndex(title); loc != nil {
+		return title[loc[1]:]
 	}
-	return conventionalCommitType(issue) + ": " + title
+	return title
 }
 
 // conventionalCommitType infers the Conventional Commits type implied by
@@ -322,16 +358,37 @@ func prBody(issue domain.Issue, summary string) string {
 }
 
 // renderIssueTemplate replaces the {type}, {title}, {body}, and {issue}
-// placeholders in tmpl with the inferred Conventional Commits type,
-// issue.Title, a wrapped change description, and issue.ID respectively.
+// placeholders in tmpl with the Conventional Commits type, issue.Title, a
+// wrapped change description, and issue.ID respectively. {type}/{title} are
+// derived the same way prTitle derives its header, so a template rendering
+// "{type}: {title}" (the default) always matches prTitle's output: an
+// invalid area prefix (e.g. "review:") on issue.Title is stripped from
+// {title} rather than left in place, which would otherwise double-prefix
+// the header once {type} is prepended (issue 187).
 func renderIssueTemplate(tmpl string, issue domain.Issue, summary string) string {
+	ctype, title := conventionalCommitHeaderParts(issue)
 	r := strings.NewReplacer(
-		"{type}", conventionalCommitType(issue),
-		"{title}", issue.Title,
+		"{type}", ctype,
+		"{title}", title,
 		"{body}", wrapText(changeDescription(issue, summary), commitMessageWrapWidth),
 		"{issue}", issue.ID,
 	)
 	return r.Replace(tmpl)
+}
+
+// conventionalCommitHeaderParts splits issue's effective Conventional
+// Commits header into a type part and a title part such that
+// ctype + ": " + title reproduces prTitle(issue): when issue.Title already
+// carries a valid prefix, ctype is that whole prefix (type, scope, and "!"
+// marker included) so the scope/marker survive the round trip; otherwise
+// ctype is the inferred type and title is issue.Title stripped of any
+// invalid prefix.
+func conventionalCommitHeaderParts(issue domain.Issue) (ctype, title string) {
+	title = issue.Title
+	if m := conventionalCommitHeader.FindStringSubmatch(title); m != nil && allowedConventionalCommitTypes[m[1]] {
+		return strings.TrimSuffix(m[0], ": "), title[len(m[0]):]
+	}
+	return conventionalCommitType(issue), stripInvalidConventionalCommitPrefix(title)
 }
 
 // wrapText word-wraps text to width columns, preserving existing blank
