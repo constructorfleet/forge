@@ -457,6 +457,52 @@ func TestWait_NoObservedChecksAtAll_PassesAfterGracePolls(t *testing.T) {
 	}
 }
 
+// TestWait_UnprotectedBranch_NewCheckRegistersLate_DoesNotPassBeforeItAppears
+// covers issue 231: on an unprotected branch (no tracker-declared required
+// checks), Wait falls back to waiting on whatever checks the tracker
+// currently reports. That fallback previously recomputed "required" from
+// only the checks visible on the *current* poll, so a PR whose checks
+// register across more than one workflow (e.g. a fast lint job plus a
+// slower, separately-triggered analysis job) could have Wait observe only
+// the fast job, see it green, and transition to DONE while the slower job's
+// check hadn't registered with the tracker yet at all -- exactly the "forge
+// said it's done but the PR is still running" failure from issue 231. Wait
+// must instead treat the fallback-observed check set as complete only once
+// it has held steady (no new checks appearing) across
+// emptyChecksGracePolls consecutive polls, mirroring the zero-checks grace
+// period issue 215 already established.
+func TestWait_UnprotectedBranch_NewCheckRegistersLate_DoesNotPassBeforeItAppears(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-8", "30")
+
+	trk := &stubTracker{
+		mergeRequirements: tracker.MergeRequirements{}, // unprotected branch: no required checks
+		checkResponses: [][]tracker.PullRequestCheck{
+			{{Name: "lint", State: tracker.CheckSuccess}},
+			{{Name: "lint", State: tracker.CheckSuccess}, {Name: "test", State: tracker.CheckPending}},
+			{{Name: "lint", State: tracker.CheckSuccess}, {Name: "test", State: tracker.CheckSuccess}},
+		},
+	}
+	sleep := &sleepRecorder{}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	supervisor.Sleep = sleep.Sleep
+
+	state, err := supervisor.Wait(context.Background(), "exec-8", "30")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateDone {
+		t.Fatalf("state = %s, want DONE", state)
+	}
+	if trk.checkCalls != 3 {
+		t.Fatalf("GetPullRequestChecks calls = %d, want 3 (must not pass before the late-registering check appears and goes green)", trk.checkCalls)
+	}
+	if sleep.calls != 2 {
+		t.Fatalf("sleep calls = %d, want 2", sleep.calls)
+	}
+}
+
 func TestWait_TrackerErrorIsReturnedWithoutTransition(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-4", "26")

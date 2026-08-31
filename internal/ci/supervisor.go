@@ -84,15 +84,17 @@ func New(store storage.Store, trk Tracker, cfg config.Config, baseBranch string)
 	}
 }
 
-// emptyChecksGracePolls is how many consecutive polls must observe zero
-// tracker-declared required checks AND zero reported PR checks before Wait
-// concludes "no CI is configured for this PR" and passes immediately. A
-// single empty poll is not enough evidence: GitHub (and most CI systems)
-// take a few seconds after PR/commit creation to register their first check
-// run, so a lone empty poll is indistinguishable from "CI hasn't reported in
-// yet" (issue 215). Requiring the empty result to hold across a poll
-// interval rules that race out without needing a fixed grace delay.
-const emptyChecksGracePolls = 2
+// checksSettleGracePolls is how many consecutive polls must observe the
+// same set of reported PR check names before Wait trusts that set as
+// complete when it has no tracker-declared required checks to fall back
+// on. A single poll's check list is not enough evidence either when it is
+// empty (GitHub takes a few seconds after PR/commit creation to register
+// its first check run, issue 215) or when it is non-empty (a PR's checks
+// can register across more than one workflow, so an early poll may see
+// only a fast job and miss a slower one that hasn't reported in yet at
+// all, issue 231). Requiring the observed set to hold steady across a poll
+// interval rules both races out without a fixed grace delay.
+const checksSettleGracePolls = 2
 
 // Wait polls the pull request attached to issueID until all required checks
 // succeed or one required check fails.
@@ -111,7 +113,9 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 	}
 	pr := prs[len(prs)-1]
 
-	emptyChecksStreak := 0
+	var lastCheckNames []string
+	haveLastCheckNames := false
+	settledStreak := 0
 	for {
 		// Mergeability and review feedback are checked ahead of required
 		// checks each poll (issue 109, "Merge Conflicts" / "Review
@@ -131,12 +135,15 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			return "", fmt.Errorf("ci: poll checks for issue %s: %w", issueID, err)
 		}
 
-		if len(required) == 0 && len(checks) == 0 {
-			emptyChecksStreak++
+		currentCheckNames := checkNames(checks)
+		if haveLastCheckNames && slices.Equal(currentCheckNames, lastCheckNames) {
+			settledStreak++
 		} else {
-			emptyChecksStreak = 0
+			settledStreak = 1
 		}
-		status, failed := evaluateChecks(required, checks, emptyChecksStreak >= emptyChecksGracePolls)
+		lastCheckNames = currentCheckNames
+		haveLastCheckNames = true
+		status, failed := evaluateChecks(required, checks, settledStreak >= checksSettleGracePolls)
 		run := storage.CIRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -189,8 +196,9 @@ func (s *Supervisor) requiredChecks(ctx context.Context) ([]string, error) {
 	return mr.RequiredChecks, nil
 }
 
-func evaluateChecks(required []string, checks []tracker.PullRequestCheck, allowEmptyPass bool) (storage.CIRunStatus, *tracker.PullRequestCheck) {
-	if len(required) == 0 {
+func evaluateChecks(required []string, checks []tracker.PullRequestCheck, checksSettled bool) (storage.CIRunStatus, *tracker.PullRequestCheck) {
+	usingObservedFallback := len(required) == 0
+	if usingObservedFallback {
 		// No tracker-declared required checks (issue 215: most commonly an
 		// unprotected branch — see
 		// tracker/github.Client.GetMergeRequirements) does not mean nothing
@@ -200,12 +208,12 @@ func evaluateChecks(required []string, checks []tracker.PullRequestCheck, allowE
 		required = checkNames(checks)
 	}
 	if len(required) == 0 {
-		if !allowEmptyPass {
+		if !checksSettled {
 			// Zero required checks and zero observed checks on this poll is
 			// ambiguous: it may mean no CI is configured, or it may mean CI
 			// hasn't registered its first check run yet (issue 215). Treat
 			// it as still pending until the caller has seen this hold
-			// across emptyChecksGracePolls consecutive polls.
+			// across checksSettleGracePolls consecutive polls.
 			return storage.CIRunStatusPending, nil
 		}
 		return storage.CIRunStatusPassed, nil
@@ -227,6 +235,17 @@ func evaluateChecks(required []string, checks []tracker.PullRequestCheck, allowE
 			return storage.CIRunStatusPending, nil
 		}
 	}
+	if usingObservedFallback && !checksSettled {
+		// Every check the tracker currently reports is green, but under
+		// the observed-fallback (no tracker-declared required checks) that
+		// set can still grow: a PR's checks can register across more than
+		// one workflow, so an early poll may see only a fast job and miss
+		// a slower one that hasn't reported in at all yet (issue 231).
+		// Wait until the observed set has held steady across
+		// checksSettleGracePolls consecutive polls before trusting it as
+		// the complete set.
+		return storage.CIRunStatusPending, nil
+	}
 	return storage.CIRunStatusPassed, nil
 }
 
@@ -238,6 +257,7 @@ func checkNames(checks []tracker.PullRequestCheck) []string {
 	for i, c := range checks {
 		names[i] = c.Name
 	}
+	slices.Sort(names)
 	return names
 }
 
