@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.11.0](https://github.com/constructorfleet/forge/compare/forge-v0.10.0...forge-v0.11.0) (2026-08-31)
+
+
+### Features
+
+* assurances in axis envelope + assurance-vs-finding tensions ([#181](https://github.com/constructorfleet/forge/issues/181)) ([dceb607](https://github.com/constructorfleet/forge/commit/dceb607a970ba2a275741e65688e5a26b0a92f19)), closes [#176](https://github.com/constructorfleet/forge/issues/176)
+* Codex (non-native) MCP channel: forge internal-mcp ([#140](https://github.com/constructorfleet/forge/issues/140)) ([163fbcb](https://github.com/constructorfleet/forge/commit/163fbcbe17f319a81071871a7789d0a9a082b48b)), closes [#127](https://github.com/constructorfleet/forge/issues/127)
+* deterministic review synthesizer (dedup, confidence-fold, ranking, tensions) ([#175](https://github.com/constructorfleet/forge/issues/175)) ([7a885b6](https://github.com/constructorfleet/forge/commit/7a885b681ff68646b622e6e984cfbac5880bba10)), closes [#160](https://github.com/constructorfleet/forge/issues/160)
+* forge init: lsp coverage Notes + PATH-probe (empty servers) ([#170](https://github.com/constructorfleet/forge/issues/170)) ([ec6bf7e](https://github.com/constructorfleet/forge/commit/ec6bf7e28ef4576dc0ffc8adbee73fd319f4676d))
+* generalize gopls driver into language-neutral lspdriver ([#152](https://github.com/constructorfleet/forge/issues/152)) ([#164](https://github.com/constructorfleet/forge/issues/164)) ([02b6233](https://github.com/constructorfleet/forge/commit/02b6233592523a2d120d2238a04186c268110571))
+* grow the Reviewer contract (Finding fields + severity map + enriched feedback) ([#163](https://github.com/constructorfleet/forge/issues/163)) ([021c624](https://github.com/constructorfleet/forge/commit/021c62472f2b11afa9853190d85bde2663527c7b))
+* per-axis review degradation + escalate incomplete/unsatisfiable reviews to NEEDS_INFO ([#177](https://github.com/constructorfleet/forge/issues/177)) ([2651ab1](https://github.com/constructorfleet/forge/commit/2651ab1831f1c269f1698a823950dda16f168284)), closes [#161](https://github.com/constructorfleet/forge/issues/161)
+* persist full per-axis review audit trail + configurable rubric overrides ([#178](https://github.com/constructorfleet/forge/issues/178)) ([3b5054b](https://github.com/constructorfleet/forge/commit/3b5054b8f82016cafba71015ca794b39bc5bc803)), closes [#162](https://github.com/constructorfleet/forge/issues/162)
+* run three review axes (bugs/quality/docs) in parallel ([#172](https://github.com/constructorfleet/forge/issues/172)) ([6007a0e](https://github.com/constructorfleet/forge/commit/6007a0eedbce1c0c6ae92f956fb3bff285037a2a))
+* single-axis (bugs/security) reviewer wired end-to-end ([#165](https://github.com/constructorfleet/forge/issues/165)) ([eea4009](https://github.com/constructorfleet/forge/commit/eea4009bcfcb9ba75068a6938c206f0c1f668a02))
+* thread workspace path into review.Request so axes read the workspace ([#171](https://github.com/constructorfleet/forge/issues/171)) ([2568609](https://github.com/constructorfleet/forge/commit/2568609d3539ba33f771177d36165f2d6fb79b9d))
+
+
+### Bug Fixes
+
+* claude adapter: multi-ext .lsp.json + command/args split + provisioning-trigger decouple ([#167](https://github.com/constructorfleet/forge/issues/167)) ([1465417](https://github.com/constructorfleet/forge/commit/14654171a45a6377c647c5e137594ce7ecdf30d3))
+* de-flake lspdriver didOpen test (read-before-flush race) ([#180](https://github.com/constructorfleet/forge/issues/180)) ([f4d2ed1](https://github.com/constructorfleet/forge/commit/f4d2ed14a93979b410516fd8517ce90f49a6f781))
+* deflake TestDriver_DidOpenIsLazyAndPerFile ([#174](https://github.com/constructorfleet/forge/issues/174)) ([430041d](https://github.com/constructorfleet/forge/commit/430041deabab31021ff5974caefe2b010016b894))
+* gopls driver: per-capability typed methods + lazy didOpen ([#137](https://github.com/constructorfleet/forge/issues/137)) ([31489dc](https://github.com/constructorfleet/forge/commit/31489dc9c0aa167dc1f63775bf3d6a7d16720399)), closes [#124](https://github.com/constructorfleet/forge/issues/124)
+* registry: TS/Python/Rust server rows + profiles + NewRegistry merge-preserve-Profile ([#166](https://github.com/constructorfleet/forge/issues/166)) ([2dc414d](https://github.com/constructorfleet/forge/commit/2dc414d26fd0b14dbfc95227a127d52aab568750))
+
 ## [0.10.0](https://github.com/constructorfleet/forge/compare/forge-v0.9.1...forge-v0.10.0) (2026-08-29)
 
 
