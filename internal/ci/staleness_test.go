@@ -51,10 +51,13 @@ func (s *stubRebaser) Rebase(_ context.Context, _, _, newBase string) ([]string,
 
 // stubBranchPusher is a minimal ci.BranchPusher double.
 type stubBranchPusher struct {
-	calls   int
-	paths   []string
-	branch  []string
-	pushErr error
+	calls     int
+	paths     []string
+	branch    []string
+	pushErr   error
+	resetPath []string
+	resetSHA  []string
+	resetErr  error
 }
 
 func (s *stubBranchPusher) ForcePush(_ context.Context, path, branch string) error {
@@ -62,6 +65,12 @@ func (s *stubBranchPusher) ForcePush(_ context.Context, path, branch string) err
 	s.paths = append(s.paths, path)
 	s.branch = append(s.branch, branch)
 	return s.pushErr
+}
+
+func (s *stubBranchPusher) Reset(_ context.Context, path, commitSHA string) error {
+	s.resetPath = append(s.resetPath, path)
+	s.resetSHA = append(s.resetSHA, commitSHA)
+	return s.resetErr
 }
 
 func seedWorkspace(t *testing.T, store *storage.SQLiteStore, executionID, issueID, path, branch string) {

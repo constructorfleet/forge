@@ -36,6 +36,21 @@ type BranchPusher interface {
 	ForcePush(ctx context.Context, workspacePath, branch string) error
 }
 
+// BranchResetter moves a Workspace branch back to a known commit after an
+// automatic conflict-resolution candidate fails before publication.
+type BranchResetter interface {
+	Reset(ctx context.Context, workspacePath, commitSHA string) error
+}
+
+// ConflictBranchRestorer restores a published automatic conflict-repair
+// candidate back to the original pull-request head using an explicit lease
+// on the candidate SHA, then restores the live Workspace branch locally.
+type ConflictBranchRestorer interface {
+	EnsureWorkspaceReady(ctx context.Context, workspacePath string) error
+	ForcePushCommitWithLease(ctx context.Context, workspacePath, branch, commitSHA, expectedRemoteSHA string) error
+	Reset(ctx context.Context, workspacePath, commitSHA string) error
+}
+
 // pollStale checks pull request number's mergeability against its base
 // branch for staleness (GitHub's mergeable_state == "behind") and, when
 // stale, rebases the Issue's Workspace onto s.BaseBranch and force-pushes

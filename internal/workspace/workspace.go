@@ -471,6 +471,94 @@ func (m *Manager) Cleanup(ctx context.Context, executionID, issueID string) erro
 	})
 }
 
+// CreateConflictCandidate creates a disposable conflict-resolution Workspace
+// from the recorded pull request head. It is separate from the live Issue
+// Workspace so a refused candidate can be deleted instead of rolled back.
+func (m *Manager) CreateConflictCandidate(ctx context.Context, executionID, issueID, originalSHA string) (domain.ConflictCandidate, error) {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return domain.ConflictCandidate{}, err
+	}
+	if originalSHA == "" {
+		return domain.ConflictCandidate{}, fmt.Errorf("workspace: conflict candidate original SHA must not be empty")
+	}
+
+	var candidate domain.ConflictCandidate
+	err := m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+
+		path := m.conflictCandidatePath(executionID, issueID)
+		branchName := m.conflictCandidateBranch(executionID, issueID)
+		if err := m.destroyBranchWorktreeLocked(ctx, path, branchName); err != nil {
+			return fmt.Errorf("workspace: clear conflict candidate for issue %s: %w", issueID, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("workspace: create parent dir for %s: %w", path, err)
+		}
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "add", "-b", branchName, "--", path, originalSHA); err != nil {
+			return err
+		}
+		head, err := m.headSHA(ctx, path)
+		if err != nil {
+			return err
+		}
+		candidate = domain.ConflictCandidate{Path: path, Branch: branchName, HeadSHA: head}
+		return nil
+	})
+	if err != nil {
+		return domain.ConflictCandidate{}, err
+	}
+	return candidate, nil
+}
+
+// RebaseConflictCandidate rebases the disposable candidate onto baseBranch.
+// Any unresolved Git conflict is aborted and reported as paths.
+func (m *Manager) RebaseConflictCandidate(ctx context.Context, candidate domain.ConflictCandidate, baseBranch string) ([]string, error) {
+	var conflicts []string
+	err := m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+
+		if _, ok, err := m.lookupWorktree(ctx, candidate.Path); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("workspace: rebase conflict candidate onto %s: %w", baseBranch, ErrNotFound)
+		}
+		if _, rebaseErr := m.runGit(ctx, candidate.Path, "rebase", "--", baseBranch); rebaseErr != nil {
+			paths, err := m.conflictedPaths(ctx, candidate.Path)
+			if err != nil {
+				return err
+			}
+			_, _, _ = m.runner.Run(ctx, candidate.Path, "rebase", "--abort")
+			if len(paths) == 0 {
+				return rebaseErr
+			}
+			conflicts = paths
+			return nil
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return conflicts, nil
+}
+
+// ConflictCandidateHead returns the current HEAD SHA for candidate.
+func (m *Manager) ConflictCandidateHead(ctx context.Context, candidate domain.ConflictCandidate) (string, error) {
+	return m.headSHA(ctx, candidate.Path)
+}
+
+// CleanupConflictCandidate removes a disposable conflict-resolution
+// Workspace and its branch.
+func (m *Manager) CleanupConflictCandidate(ctx context.Context, candidate domain.ConflictCandidate) error {
+	return m.withGitMetadataLock(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.destroyBranchWorktreeLocked(ctx, candidate.Path, candidate.Branch)
+	})
+}
+
 // Rebase moves the Workspace's branch for executionID/issueID onto newBase,
 // in place — unlike Create's idempotent-reuse behavior (see its doc
 // comment), this actually moves an existing branch's tip, so a retried
@@ -539,6 +627,52 @@ func (m *Manager) conflictedPaths(ctx context.Context, path string) ([]string, e
 		}
 	}
 	return paths, nil
+}
+
+func (m *Manager) headSHA(ctx context.Context, path string) (string, error) {
+	out, err := m.runGit(ctx, path, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) conflictCandidateBranch(executionID, issueID string) string {
+	return "forge/conflict-resolution/" + executionID + "/" + issueID
+}
+
+func (m *Manager) conflictCandidatePath(executionID, issueID string) string {
+	root := m.worktreeRoot
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(m.repoRoot, root)
+	}
+	return filepath.Join(root, "conflict-resolution", executionID, issueID)
+}
+
+func (m *Manager) destroyBranchWorktreeLocked(ctx context.Context, path, branchName string) error {
+	if _, ok, err := m.lookupWorktree(ctx, path); err != nil {
+		return err
+	} else if ok {
+		if _, err := m.runGit(ctx, m.repoRoot, "worktree", "remove", "--force", "--", path); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("workspace: remove dir %s: %w", path, err)
+	}
+	if _, err := m.runGit(ctx, m.repoRoot, "worktree", "prune"); err != nil {
+		return err
+	}
+	if branchName != "" {
+		if exists, err := m.branchExists(ctx, branchName); err != nil {
+			return err
+		} else if exists {
+			if _, err := m.runGit(ctx, m.repoRoot, "branch", "-D", "--", branchName); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (m *Manager) withGitMetadataLock(ctx context.Context, fn func() error) error {

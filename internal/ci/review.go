@@ -69,6 +69,9 @@ func (s *Supervisor) pollReviews(ctx context.Context, executionID, issueID strin
 		if err := s.Store.RecordCIRun(ctx, run); err != nil {
 			return true, "", fmt.Errorf("ci: persist run for issue %s: %w", issueID, err)
 		}
+		if handled, state, err := s.handlePublishedConflictCandidateFailure(ctx, executionID, issueID, "review from "+actionable.Author+" requested changes: "+actionable.Body); handled || err != nil {
+			return handled, state, err
+		}
 		issue, err := s.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCIFailed)
 		if err != nil {
 			return true, "", fmt.Errorf("ci: transition issue %s to CI_FAILED: %w", issueID, err)

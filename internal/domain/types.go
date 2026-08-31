@@ -84,6 +84,14 @@ type Workspace struct {
 	Branch  string
 }
 
+// ConflictCandidate is a disposable Workspace and branch used only for one
+// automatic pull-request conflict repair attempt.
+type ConflictCandidate struct {
+	Path    string
+	Branch  string
+	HeadSHA string
+}
+
 // Worker is one coding-agent invocation responsible for one Issue within an
 // Execution. The orchestrator's unit of concurrent work.
 type Worker struct {

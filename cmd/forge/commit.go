@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/repolock"
@@ -95,6 +97,88 @@ func (p gitPublisher) ForcePush(ctx context.Context, workspacePath, branch strin
 		return push()
 	}
 	return p.locks.WithLock(ctx, "branch:"+branch, push)
+}
+
+// EnsureWorkspaceReady verifies workspacePath has no uncommitted changes
+// and no in-progress Git operation before an automatic conflict-repair path
+// performs destructive branch movement.
+func (p gitPublisher) EnsureWorkspaceReady(ctx context.Context, workspacePath string) error {
+	out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "status", "--porcelain").Output()
+	if err != nil {
+		return fmt.Errorf("forge: git status --porcelain in %s: %w", workspacePath, err)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		return fmt.Errorf("workspace has uncommitted changes")
+	}
+	for _, name := range []string{"MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "rebase-merge", "rebase-apply"} {
+		gitPathOut, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "rev-parse", "--git-path", name).Output()
+		if err != nil {
+			return fmt.Errorf("forge: git rev-parse --git-path %s in %s: %w", name, workspacePath, err)
+		}
+		gitPath := strings.TrimSpace(string(gitPathOut))
+		if gitPath == "" {
+			continue
+		}
+		if !filepath.IsAbs(gitPath) {
+			gitPath = filepath.Join(workspacePath, gitPath)
+		}
+		if _, err := os.Stat(gitPath); err == nil {
+			return fmt.Errorf("workspace has in-progress git operation: %s", name)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect git operation marker %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// ForcePushWithLease publishes workspacePath's current HEAD to branch only
+// when origin/branch still equals expectedRemoteSHA.
+func (p gitPublisher) ForcePushWithLease(ctx context.Context, workspacePath, branch, expectedRemoteSHA string) error {
+	push := func() error {
+		lease := "--force-with-lease=refs/heads/" + branch + ":" + expectedRemoteSHA
+		refspec := "HEAD:" + branch
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", lease, "-u", "origin", refspec).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git push %s -u origin %s in %s: %w: %s", lease, refspec, workspacePath, err, out)
+		}
+		return nil
+	}
+	if p.locks == nil {
+		return push()
+	}
+	return p.locks.WithLock(ctx, "branch:"+branch, push)
+}
+
+// ForcePushCommitWithLease restores branch to commitSHA only when
+// origin/branch still equals expectedRemoteSHA.
+func (p gitPublisher) ForcePushCommitWithLease(ctx context.Context, workspacePath, branch, commitSHA, expectedRemoteSHA string) error {
+	push := func() error {
+		lease := "--force-with-lease=refs/heads/" + branch + ":" + expectedRemoteSHA
+		refspec := commitSHA + ":" + branch
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", lease, "origin", refspec).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git push %s origin %s in %s: %w: %s", lease, refspec, workspacePath, err, out)
+		}
+		return nil
+	}
+	if p.locks == nil {
+		return push()
+	}
+	return p.locks.WithLock(ctx, "branch:"+branch, push)
+}
+
+// Reset implements ci.BranchResetter, restoring a Forge-owned Workspace
+// branch to the pull request head recorded before an automatic conflict
+// repair candidate was attempted.
+func (p gitPublisher) Reset(ctx context.Context, workspacePath, commitSHA string) error {
+	reset := func() error {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "reset", "--hard", commitSHA).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git reset --hard %s in %s: %w: %s", commitSHA, workspacePath, err, out)
+		}
+		return nil
+	}
+	if p.locks == nil {
+		return reset()
+	}
+	return p.locks.WithLock(ctx, "workspace:"+workspacePath, reset)
 }
 
 // baseBranchName strips a "origin/" remote prefix from a configured

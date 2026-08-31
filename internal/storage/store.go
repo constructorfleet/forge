@@ -197,6 +197,23 @@ type PullRequest struct {
 	CreatedAt time.Time
 }
 
+// ConflictResolutionAttempt records one automatic merge-conflict repair
+// candidate after Forge has published it, so downstream CI/review failure
+// can restore the pull request branch to the original recorded head instead
+// of entering the ordinary CI repair loop.
+type ConflictResolutionAttempt struct {
+	ExecutionID  string
+	IssueID      string
+	PRNumber     int
+	Branch       string
+	OriginalSHA  string
+	CandidateSHA string
+	Status       string
+	Details      string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // WorkerClaim is one active Worker claim on an Issue, including the owning
 // process ID used by restart recovery to distinguish live workers from
 // orphaned ones after a crash or termination.
@@ -418,6 +435,21 @@ type Store interface {
 	// PullRequestsByIssue returns every PullRequest recorded for one Issue
 	// within an Execution, ordered by insertion.
 	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]PullRequest, error)
+
+	// RecordConflictResolutionAttempt persists one automatic
+	// merge-conflict repair candidate that has been published to the pull
+	// request branch.
+	RecordConflictResolutionAttempt(ctx context.Context, attempt ConflictResolutionAttempt) error
+
+	// ActiveConflictResolutionAttempt returns the latest published
+	// automatic merge-conflict repair candidate for one Issue. It returns
+	// ErrNotFound when no published candidate is awaiting downstream CI or
+	// review outcome.
+	ActiveConflictResolutionAttempt(ctx context.Context, executionID, issueID string) (ConflictResolutionAttempt, error)
+
+	// UpdateConflictResolutionAttemptStatus updates the active conflict
+	// repair attempt's terminal status and details.
+	UpdateConflictResolutionAttemptStatus(ctx context.Context, executionID, issueID, status, details string, updatedAt time.Time) error
 
 	// RecordCIRun persists one CI supervision attempt and appends a
 	// corresponding "ci.run" Event.

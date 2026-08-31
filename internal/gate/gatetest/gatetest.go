@@ -31,6 +31,7 @@ type FakeCommandRunner struct {
 	mu       sync.Mutex
 	outcomes map[string]outcome
 	calls    []string
+	workDirs []string
 }
 
 // NewFakeCommandRunner returns an empty FakeCommandRunner. A command with
@@ -58,10 +59,11 @@ func (f *FakeCommandRunner) ProgramError(command string, err error) {
 
 // Run records command and returns its programmed outcome (or a trivial
 // success if none was programmed).
-func (f *FakeCommandRunner) Run(_ context.Context, _, command string, stdout, stderr io.Writer) (int, error) {
+func (f *FakeCommandRunner) Run(_ context.Context, workDir, command string, stdout, stderr io.Writer) (int, error) {
 	f.mu.Lock()
 	oc, ok := f.outcomes[command]
 	f.calls = append(f.calls, command)
+	f.workDirs = append(f.workDirs, workDir)
 	f.mu.Unlock()
 
 	if !ok {
@@ -81,4 +83,11 @@ func (f *FakeCommandRunner) Calls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+// WorkDirs returns every working directory Run was called with, in call order.
+func (f *FakeCommandRunner) WorkDirs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.workDirs...)
 }
