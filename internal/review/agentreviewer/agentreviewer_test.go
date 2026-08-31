@@ -45,6 +45,21 @@ const lowConfidenceHighSeverityEnvelope = `{
   ]
 }`
 
+const highConfidenceMedSeverityEnvelope = `{
+  "axis": "bugs",
+  "findings": [
+    {
+      "severity": "MED",
+      "confidence": 0.9,
+      "file": "internal/foo/foo.go",
+      "line": 43,
+      "message": "review feedback is dropped before repair",
+      "evidence": "the finding is emitted by the review axis but the worker is never re-invoked",
+      "remedy": "route MED-and-higher findings as changes required"
+    }
+  ]
+}`
+
 const qualityEnvelope = `{
   "axis": "quality",
   "findings": [
@@ -309,6 +324,38 @@ func TestReview_HighConfidenceHighSeverity_ChangesRequiredWithEnrichedFeedback(t
 	}
 	if !strings.Contains(feedback[0].Message, "bugs") || !strings.Contains(feedback[0].Message, "remedy:") {
 		t.Errorf("feedback Message = %q, want axis+remedy folded in", feedback[0].Message)
+	}
+}
+
+func TestReview_HighConfidenceMedSeverity_ChangesRequiredWithFeedback(t *testing.T) {
+	_, result, err := reviewWithBugsSummary(t, highConfidenceMedSeverityEnvelope)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.Verdict != review.VerdictChangesRequired {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictChangesRequired)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want 1 finding", result.Findings)
+	}
+
+	f := result.Findings[0]
+	if f.Severity != review.SeverityWarning {
+		t.Errorf("Severity = %q, want %q", f.Severity, review.SeverityWarning)
+	}
+	if f.Confidence != 0.9 {
+		t.Errorf("Confidence = %v, want 0.9", f.Confidence)
+	}
+
+	feedback := review.BuildFeedback(result.Findings)
+	if len(feedback) != 1 {
+		t.Fatalf("BuildFeedback() = %+v, want 1 feedback item", feedback)
+	}
+	if feedback[0].Source != agent.FeedbackSourceReview {
+		t.Errorf("feedback Source = %q, want %q", feedback[0].Source, agent.FeedbackSourceReview)
+	}
+	if !strings.Contains(feedback[0].Message, "WARNING") || !strings.Contains(feedback[0].Message, "route MED-and-higher") {
+		t.Errorf("feedback Message = %q, want MED finding details folded in", feedback[0].Message)
 	}
 }
 

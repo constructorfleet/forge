@@ -38,23 +38,33 @@ func TestBuildResult_HighSeverityBelowFloor_ApprovedAdvisory(t *testing.T) {
 	}
 }
 
-func TestBuildResult_MedAndLowSeverity_NeverBlock(t *testing.T) {
+func TestBuildResult_MedSeverityAtFloor_ChangesRequired(t *testing.T) {
+	env := envelope{Findings: []axisFinding{{Severity: "MED", Confidence: 0.7, Message: "m"}}}
+	result := buildResult(env, "bugs", 0.7)
+	if result.Verdict != review.VerdictChangesRequired {
+		t.Errorf("Verdict = %q, want %q (MED findings at the confidence floor must be addressed)", result.Verdict, review.VerdictChangesRequired)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want 1", result.Findings)
+	}
+	if result.Findings[0].Severity != review.SeverityWarning {
+		t.Errorf("Severity = %q, want %q", result.Findings[0].Severity, review.SeverityWarning)
+	}
+}
+
+func TestBuildResult_LowSeverityAtFloor_ApprovedAdvisory(t *testing.T) {
 	env := envelope{Findings: []axisFinding{
-		{Severity: "MED", Confidence: 1.0, Message: "m"},
 		{Severity: "LOW", Confidence: 1.0, Message: "l"},
 	}}
 	result := buildResult(env, "bugs", 0.1)
 	if result.Verdict != review.VerdictApproved {
 		t.Errorf("Verdict = %q, want %q", result.Verdict, review.VerdictApproved)
 	}
-	if len(result.Findings) != 2 {
-		t.Fatalf("Findings = %+v, want 2", result.Findings)
+	if len(result.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want 1", result.Findings)
 	}
-	if result.Findings[0].Severity != review.SeverityWarning {
-		t.Errorf("Severity[0] = %q, want %q", result.Findings[0].Severity, review.SeverityWarning)
-	}
-	if result.Findings[1].Severity != review.SeverityInfo {
-		t.Errorf("Severity[1] = %q, want %q", result.Findings[1].Severity, review.SeverityInfo)
+	if result.Findings[0].Severity != review.SeverityInfo {
+		t.Errorf("Severity = %q, want %q", result.Findings[0].Severity, review.SeverityInfo)
 	}
 }
 

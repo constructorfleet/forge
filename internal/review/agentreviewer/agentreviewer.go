@@ -12,10 +12,10 @@
 // dedicated findings field (Summary is its only text surface), Reviewer
 // parses that envelope out of AgentResult.Summary (see envelope.go) for
 // every axis and folds all three axes' findings into one review.Result (see
-// combine in verdict.go): a Finding that maps to review.SeverityError with
-// Confidence at or above ConfidenceFloor forces
+// combine in verdict.go): a Finding that maps to review.SeverityWarning or
+// review.SeverityError with Confidence at or above ConfidenceFloor forces
 // review.VerdictChangesRequired; otherwise the Review is
-// review.VerdictApproved, with any lower-severity or below-floor findings
+// review.VerdictApproved, with any LOW-severity or below-floor findings
 // still attached to Result.Findings as advisory signal.
 //
 // combine itself delegates to synthesizeFindings (synthesizer.go), issue
@@ -61,7 +61,7 @@ var docsRubric string
 // defaultConfidenceFloor mirrors config.Default's
 // Workflow.ReviewConfidenceFloor default, so a Reviewer constructed with
 // confidenceFloor <= 0 (e.g. directly in a test, bypassing config) still
-// behaves sensibly rather than blocking on every ERROR-severity finding
+// behaves sensibly rather than blocking on every MED-or-higher finding
 // regardless of confidence.
 const defaultConfidenceFloor = 0.7
 
