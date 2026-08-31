@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/constructorfleet/forge/compare/forge-v0.16.0...forge-v0.16.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* resume needs-info by marker ([#310](https://github.com/constructorfleet/forge/issues/310)) ([c0b6841](https://github.com/constructorfleet/forge/commit/c0b6841054cc9f45940e187267c74e90b7036f04))
+
 ## [0.16.0](https://github.com/constructorfleet/forge/compare/forge-v0.15.5...forge-v0.16.0) (2026-08-31)
 
 
