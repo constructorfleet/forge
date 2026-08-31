@@ -35,18 +35,51 @@ func TestConventionalCommitType_InfersFromTitleAndBody(t *testing.T) {
 }
 
 // TestPrTitle_PrefixesWithInferredType covers the Conventional Commits
-// prefixing prTitle applies, and that a Title already carrying its own
-// prefix (e.g. authored by a human/Agent that already follows the
-// convention) is not double-prefixed.
+// prefixing prTitle applies: an Issue Title with no prefix gets the
+// inferred type prepended; a Title already carrying a *valid* Conventional
+// Commits type (including a scope and/or breaking-change marker) is left
+// unchanged (not double-prefixed); and a Title carrying a prefix that looks
+// conventional but isn't an allowed type (e.g. "review:", an area prefix
+// this repo's Issue titles use) has that invalid prefix replaced with the
+// inferred type rather than nested underneath it (issue 187).
 func TestPrTitle_PrefixesWithInferredType(t *testing.T) {
-	got := prTitle(domain.Issue{ID: "1", Title: "Add widget support"})
-	if want := "feat: Add widget support"; got != want {
-		t.Errorf("prTitle = %q, want %q", got, want)
+	cases := []struct {
+		name  string
+		issue domain.Issue
+		want  string
+	}{
+		{
+			name:  "no prefix gets inferred type prepended",
+			issue: domain.Issue{ID: "1", Title: "Add widget support"},
+			want:  "feat: Add widget support",
+		},
+		{
+			name:  "valid prefix left unchanged",
+			issue: domain.Issue{ID: "2", Title: "fix: nil panic on empty diff"},
+			want:  "fix: nil panic on empty diff",
+		},
+		{
+			name:  "valid scoped prefix left unchanged",
+			issue: domain.Issue{ID: "3", Title: "fix(engine): nil panic on empty diff"},
+			want:  "fix(engine): nil panic on empty diff",
+		},
+		{
+			name:  "valid breaking-change marker left unchanged",
+			issue: domain.Issue{ID: "4", Title: "feat!: drop the legacy config format"},
+			want:  "feat!: drop the legacy config format",
+		},
+		{
+			name:  "invalid area prefix is replaced, not nested",
+			issue: domain.Issue{ID: "5", Title: "review: persist per-axis assurances in the audit trail"},
+			want:  "feat: persist per-axis assurances in the audit trail",
+		},
 	}
-
-	got = prTitle(domain.Issue{ID: "2", Title: "fix(engine): nil panic on empty diff"})
-	if want := "fix(engine): nil panic on empty diff"; got != want {
-		t.Errorf("prTitle = %q, want %q (should not double-prefix)", got, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := prTitle(tc.issue); got != tc.want {
+				t.Errorf("prTitle(%+v) = %q, want %q", tc.issue, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -68,6 +101,26 @@ func TestCommitMessage_DefaultTemplate_EndsWithIssueID(t *testing.T) {
 	}
 	if !strings.Contains(msg, "Added Conventional Commits formatting") {
 		t.Errorf("commit message = %q, want it to contain a body describing the change", msg)
+	}
+}
+
+// TestCommitMessage_HeaderConsistentWithPRTitle covers issue 187's
+// requirement that the commit message header ({type}: {title}) stay
+// consistent with prTitle: an Issue Title carrying an invalid area prefix
+// (e.g. "review:") must not leave the commit header double-prefixed
+// ("feat: review: …") or the invalid type kept as the header's type.
+func TestCommitMessage_HeaderConsistentWithPRTitle(t *testing.T) {
+	e := &Engine{}
+	issue := domain.Issue{ID: "187", Title: "review: persist per-axis assurances in the audit trail"}
+	msg := e.commitMessage(issue, "Stripped invalid area prefixes from generated titles.")
+
+	header := strings.SplitN(msg, "\n", 2)[0]
+	wantHeader := "feat: persist per-axis assurances in the audit trail"
+	if header != wantHeader {
+		t.Errorf("commit message header = %q, want %q", header, wantHeader)
+	}
+	if wantPR := prTitle(issue); header != wantPR {
+		t.Errorf("commit message header = %q, want it to match prTitle(issue) = %q", header, wantPR)
 	}
 }
 
