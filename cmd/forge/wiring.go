@@ -650,7 +650,22 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 // demos; "claude-code"/"" wraps buildAgent's production agent.Agent in
 // planningagent.AgentBackend so planning genuinely invokes the configured
 // coding backend. Any other provider value is an error, matching buildAgent.
-func buildPlanningBackend(cfg config.Config) (planningagent.Backend, error) {
+//
+// The real backend is built with store so every planning invocation --
+// wayfinding, spec generation/review, ticket-plan generation/review, all of
+// which reach the Agent through this single Backend -- records an
+// agent_runs row and streams its transcript into transcript_events (issue
+// #248), the way execution and review agents already do.
+//
+// featureID is used as both the execution_id and the issue_id those rows are
+// keyed by. `forge plan` has no single durable execution id spanning its
+// stages (runWayfindingStage opens a planning_executions row, but only when
+// wayfinding actually runs, and spec/ticket-plan generation never sees one),
+// and planning has no repeating "issue" concept the way ticket execution
+// does -- so the Feature is the one stable scope every stage shares, and
+// correlating a Feature's whole planning transcript is a single lookup.
+// FakeBackend records nothing: it never reaches an agent.Agent at all.
+func buildPlanningBackend(cfg config.Config, store planningagent.TranscriptStore, featureID string) (planningagent.Backend, error) {
 	switch cfg.Agent.Provider {
 	case "fake":
 		return planningagent.NewFakeBackend(), nil
@@ -659,7 +674,7 @@ func buildPlanningBackend(cfg config.Config) (planningagent.Backend, error) {
 		if err != nil {
 			return nil, err
 		}
-		return planningagent.NewAgentBackend(ag), nil
+		return planningagent.NewPersistingAgentBackend(ag, store, featureID, featureID), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}

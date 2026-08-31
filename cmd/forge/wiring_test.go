@@ -13,6 +13,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
+	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker/github"
 )
 
@@ -189,7 +190,7 @@ func TestBuildPlanningBackend_SelectsByProvider(t *testing.T) {
 		t.Run(tc.provider, func(t *testing.T) {
 			cfg := config.Default()
 			cfg.Agent.Provider = tc.provider
-			backend, err := buildPlanningBackend(cfg)
+			backend, err := buildPlanningBackend(cfg, openPlanningStore(t), "feature-1")
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("buildPlanningBackend: want error, got nil")
@@ -208,6 +209,45 @@ func TestBuildPlanningBackend_SelectsByProvider(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildPlanningBackend_PersistsTranscriptsUnderTheFeature pins issue
+// #248's wiring: the real planning backend must be handed the Store and the
+// Feature's identifiers, or planning agents' transcripts never reach
+// transcript_events no matter how the AgentBackend seam behaves.
+func TestBuildPlanningBackend_PersistsTranscriptsUnderTheFeature(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agent.Provider = "claude-code"
+
+	backend, err := buildPlanningBackend(cfg, openPlanningStore(t), "widget")
+	if err != nil {
+		t.Fatalf("buildPlanningBackend: %v", err)
+	}
+	agentBackend, ok := backend.(*planningagent.AgentBackend)
+	if !ok {
+		t.Fatalf("buildPlanningBackend = %T, want *planningagent.AgentBackend", backend)
+	}
+
+	executionID, issueID, persisting := agentBackend.TranscriptScope()
+	if !persisting {
+		t.Fatal("TranscriptScope reports no persistence, want the Store threaded through")
+	}
+	if executionID != "widget" || issueID != "widget" {
+		t.Fatalf("TranscriptScope = (%q, %q), want the Feature id for both", executionID, issueID)
+	}
+}
+
+func openPlanningStore(t *testing.T) *storage.SQLiteStore {
+	t.Helper()
+	store, err := storage.Open(filepath.Join(t.TempDir(), "forge.db"))
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	return store
 }
 
 func TestVerifyTrackerAuth_MissingTokenErrorsBeforeAnyRequest(t *testing.T) {
