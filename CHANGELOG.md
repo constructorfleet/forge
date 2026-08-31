@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/constructorfleet/forge/compare/forge-v0.15.0...forge-v0.15.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* Ticket-plan review repair loop has the same non-determinism hard-fail as spec review ([#254](https://github.com/constructorfleet/forge/issues/254)) ([2096645](https://github.com/constructorfleet/forge/commit/2096645f9ccfd7770f6b284455542328e121c877)), closes [#251](https://github.com/constructorfleet/forge/issues/251)
+
 ## [0.15.0](https://github.com/constructorfleet/forge/compare/forge-v0.14.2...forge-v0.15.0) (2026-08-31)
 
 
