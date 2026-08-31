@@ -152,8 +152,9 @@ func TestRecordReviewRun_AppendsReviewRunEvent(t *testing.T) {
 }
 
 // TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip is issue #162's core
-// storage acceptance criterion: a ReviewRun's per-axis raw envelopes
-// (coverage, token usage, raw findings JSON) round-trip through
+// storage acceptance criterion (widened by issue #182 to cover
+// assurances): a ReviewRun's per-axis raw envelopes (coverage, token usage,
+// raw findings+assurances JSON) round-trip through
 // RecordReviewRun/ReviewRunsByIssue exactly as given, so a past Review is
 // fully reconstructable.
 func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
@@ -179,12 +180,12 @@ func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
 				Ran:          true,
 				InputTokens:  &inTokens,
 				OutputTokens: &outTokens,
-				RawFindings:  `[{"Severity":"HIGH","Confidence":0.9,"File":"main.go","Line":42,"Message":"unhandled error","Evidence":"err ignored","Remedy":"check err"}]`,
+				RawEnvelope:  `{"findings":[{"Severity":"HIGH","Confidence":0.9,"File":"main.go","Line":42,"Message":"unhandled error","Evidence":"err ignored","Remedy":"check err"}],"assurances":["input validation checked at every call site"]}`,
 			},
 			{
 				Axis:        "quality",
 				Ran:         true,
-				RawFindings: `[]`,
+				RawEnvelope: `{"findings":[],"assurances":[]}`,
 			},
 			{
 				Axis:   "docs",
@@ -219,13 +220,27 @@ func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
 	if bugs.OutputTokens == nil || *bugs.OutputTokens != outTokens {
 		t.Errorf("bugs.OutputTokens = %v, want %d", bugs.OutputTokens, outTokens)
 	}
-	if bugs.RawFindings != run.Envelopes[0].RawFindings {
-		t.Errorf("bugs.RawFindings = %q, want %q", bugs.RawFindings, run.Envelopes[0].RawFindings)
+	if bugs.RawEnvelope != run.Envelopes[0].RawEnvelope {
+		t.Errorf("bugs.RawEnvelope = %q, want %q", bugs.RawEnvelope, run.Envelopes[0].RawEnvelope)
+	}
+	var bugsDecoded struct {
+		Findings   []map[string]any `json:"findings"`
+		Assurances []string         `json:"assurances"`
+	}
+	if err := json.Unmarshal([]byte(bugs.RawEnvelope), &bugsDecoded); err != nil {
+		t.Fatalf("unmarshal bugs.RawEnvelope: %v", err)
+	}
+	if len(bugsDecoded.Findings) != 1 || bugsDecoded.Findings[0]["Message"] != "unhandled error" {
+		t.Errorf("bugsDecoded.Findings = %+v, want one finding with Message %q", bugsDecoded.Findings, "unhandled error")
+	}
+	wantAssurances := []string{"input validation checked at every call site"}
+	if len(bugsDecoded.Assurances) != 1 || bugsDecoded.Assurances[0] != wantAssurances[0] {
+		t.Errorf("bugsDecoded.Assurances = %v, want %v", bugsDecoded.Assurances, wantAssurances)
 	}
 
 	quality := got[1]
-	if quality.Axis != "quality" || !quality.Ran || quality.RawFindings != "[]" {
-		t.Errorf("quality envelope = %+v, want Axis quality, Ran true, RawFindings []", quality)
+	if quality.Axis != "quality" || !quality.Ran || quality.RawEnvelope != `{"findings":[],"assurances":[]}` {
+		t.Errorf("quality envelope = %+v, want Axis quality, Ran true, RawEnvelope {findings:[] assurances:[]}", quality)
 	}
 	if quality.InputTokens != nil || quality.OutputTokens != nil {
 		t.Errorf("quality envelope tokens = %v/%v, want nil/nil", quality.InputTokens, quality.OutputTokens)

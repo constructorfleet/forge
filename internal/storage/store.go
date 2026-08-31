@@ -129,16 +129,18 @@ type ReviewFinding struct {
 // ReviewAxisEnvelope is one review axis's ("bugs", "quality", "docs")
 // full audit record for a single ReviewRun (issue #162): whether it ran to
 // completion (mirroring review.AxisCoverage) and why not when it didn't,
-// its token usage when the backend exposed one, and its raw findings
-// envelope exactly as that axis's agent emitted it, before synthesis
-// deduped/folded them into ReviewRun.Findings. RawFindings is kept as an
-// opaque JSON-encoded blob (a JSON array of the axis's raw findings) rather
-// than individually queryable columns like ReviewFinding — mirroring how
-// GateRun keeps stdout/stderr as plain text — since this is audit/
-// reconstruction detail, not data any query filters on directly; the
-// caller (the engine) is responsible for producing and parsing that JSON,
-// so storage has no dependency on internal/review, the same convention
-// ReviewFinding documents.
+// its token usage when the backend exposed one, and its raw envelope
+// exactly as that axis's agent emitted it, before synthesis deduped/folded
+// its findings into ReviewRun.Findings (and, since issue #176/#182, before
+// its assurances were folded into assurance-vs-finding tension detection).
+// RawEnvelope is kept as an opaque JSON-encoded blob (a JSON object shaped
+// {"findings": [...], "assurances": [...]}) rather than individually
+// queryable columns like ReviewFinding — mirroring how GateRun keeps
+// stdout/stderr as plain text — since this is audit/reconstruction detail,
+// not data any query filters on directly; the caller (the engine) is
+// responsible for producing and parsing that JSON, so storage has no
+// dependency on internal/review, the same convention ReviewFinding
+// documents.
 type ReviewAxisEnvelope struct {
 	Axis   string
 	Ran    bool
@@ -149,9 +151,9 @@ type ReviewAxisEnvelope struct {
 	InputTokens  *int
 	OutputTokens *int
 
-	// RawFindings is the axis's raw findings envelope, JSON-encoded. Empty
-	// when the axis did not run.
-	RawFindings string
+	// RawEnvelope is the axis's raw findings+assurances envelope,
+	// JSON-encoded. Empty when the axis did not run.
+	RawEnvelope string
 }
 
 // ReviewRun is one Review invocation's persisted outcome (CONTEXT.md

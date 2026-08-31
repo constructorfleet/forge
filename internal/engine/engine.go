@@ -1160,12 +1160,15 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 
 // reviewAxisEnvelopesForStorage translates result's per-axis Coverage and
 // raw Envelopes into storage.ReviewAxisEnvelope for RecordReviewRun (issue
-// #162's full per-axis audit trail): Coverage supplies every axis Review
-// attempted (whether it ran, and why not when it didn't) while Envelopes
-// supplies the raw findings/token usage only for axes that ran, matched by
-// axis name. A Reviewer that populates Coverage but not Envelopes (or
-// neither, e.g. FakeReviewer) yields envelope rows with Ran/Reason only, no
-// raw findings/usage — never an error.
+// #162's full per-axis audit trail, widened by issue #182 to also carry
+// assurances): Coverage supplies every axis Review attempted (whether it
+// ran, and why not when it didn't) while Envelopes supplies the raw
+// findings/assurances/token usage only for axes that ran, matched by axis
+// name — findings and assurances are marshaled together into
+// se.RawEnvelope as {"findings": [...], "assurances": [...]}. A Reviewer
+// that populates Coverage but not Envelopes (or neither, e.g. FakeReviewer)
+// yields envelope rows with Ran/Reason only, no raw envelope/usage — never
+// an error.
 func reviewAxisEnvelopesForStorage(issueID string, result review.Result) ([]storage.ReviewAxisEnvelope, error) {
 	if len(result.Coverage) == 0 {
 		return nil, nil
@@ -1180,11 +1183,14 @@ func reviewAxisEnvelopesForStorage(issueID string, result review.Result) ([]stor
 	for _, c := range result.Coverage {
 		se := storage.ReviewAxisEnvelope{Axis: c.Axis, Ran: c.Ran, Reason: c.Reason}
 		if e, ok := byAxis[c.Axis]; ok {
-			raw, err := json.Marshal(e.Findings)
+			raw, err := json.Marshal(struct {
+				Findings   []review.AxisRawFinding `json:"findings"`
+				Assurances []string                `json:"assurances"`
+			}{Findings: e.Findings, Assurances: e.Assurances})
 			if err != nil {
-				return nil, fmt.Errorf("engine: marshal axis %s raw findings for issue %s: %w", c.Axis, issueID, err)
+				return nil, fmt.Errorf("engine: marshal axis %s raw envelope for issue %s: %w", c.Axis, issueID, err)
 			}
-			se.RawFindings = string(raw)
+			se.RawEnvelope = string(raw)
 			if e.Usage != nil {
 				inTokens := e.Usage.InputTokens
 				outTokens := e.Usage.OutputTokens

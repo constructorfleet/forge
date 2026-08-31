@@ -263,9 +263,10 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 		coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: true}
 		survivors = append(survivors, outcomes[i])
 		envelopes = append(envelopes, review.AxisEnvelope{
-			Axis:     ax.name,
-			Findings: toRawFindings(outcomes[i].env),
-			Usage:    usages[i],
+			Axis:       ax.name,
+			Findings:   toRawFindings(outcomes[i].env),
+			Assurances: outcomes[i].env.Assurances,
+			Usage:      usages[i],
 		})
 	}
 

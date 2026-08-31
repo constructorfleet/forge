@@ -49,9 +49,9 @@ func (s *SQLiteStore) RecordReviewRun(ctx context.Context, run ReviewRun) error 
 
 	for _, env := range run.Envelopes {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO review_axis_envelopes (review_run_id, axis, ran, reason, input_tokens, output_tokens, raw_findings)
+			INSERT INTO review_axis_envelopes (review_run_id, axis, ran, reason, input_tokens, output_tokens, raw_envelope)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			reviewRunID, env.Axis, env.Ran, env.Reason, env.InputTokens, env.OutputTokens, env.RawFindings,
+			reviewRunID, env.Axis, env.Ran, env.Reason, env.InputTokens, env.OutputTokens, env.RawEnvelope,
 		); err != nil {
 			return fmt.Errorf("storage: record review run for issue %s/%s: insert axis envelope: %w", run.ExecutionID, run.IssueID, err)
 		}
@@ -188,7 +188,7 @@ func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64
 // order Reviewer.Review's fan-out wrote them in.
 func (s *SQLiteStore) reviewAxisEnvelopesByRun(ctx context.Context, reviewRunID int64) ([]ReviewAxisEnvelope, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT axis, ran, reason, input_tokens, output_tokens, raw_findings
+		SELECT axis, ran, reason, input_tokens, output_tokens, raw_envelope
 		FROM review_axis_envelopes
 		WHERE review_run_id = ?
 		ORDER BY id`,
@@ -206,7 +206,7 @@ func (s *SQLiteStore) reviewAxisEnvelopesByRun(ctx context.Context, reviewRunID 
 			inputTokens sql.NullInt64
 			outTokens   sql.NullInt64
 		)
-		if err := rows.Scan(&e.Axis, &e.Ran, &e.Reason, &inputTokens, &outTokens, &e.RawFindings); err != nil {
+		if err := rows.Scan(&e.Axis, &e.Ran, &e.Reason, &inputTokens, &outTokens, &e.RawEnvelope); err != nil {
 			return nil, fmt.Errorf("scan review axis envelope: %w", err)
 		}
 		if inputTokens.Valid {
