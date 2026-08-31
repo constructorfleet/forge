@@ -19,15 +19,26 @@ import (
 // caller's typed result rather than Phase 1's fixed status shape.
 var fencedJSONBlock = regexp.MustCompile("(?s)```(?:json)?[ \t]*\r?\n(.*?)\r?\n(?m:^```)")
 
+// maxInvokeAttempts bounds InvokeStructured's retry of transient failures.
+// Planning invocations are pure and idempotent, so re-issuing the same
+// prompt on a transient failure is safe; this stays small because retries
+// are not a substitute for surfacing a persistent failure to the caller.
+const maxInvokeAttempts = 3
+
 // InvokeStructured builds a prompt from req via build, invokes backend
 // (identified for scripting/diagnostics by key), and extracts, decodes, and
 // validates a fenced-JSON result from the backend's raw output into the
 // typed Res. It scans fenced blocks from last to first -- matching the
 // convention that a backend's authoritative result is the final well-formed
 // block it emits -- and returns the first one (scanning backward) that both
-// decodes into Res and, if validate is non-nil, passes validate. An invalid
-// or missing structured response fails predictably with a descriptive
-// error rather than returning a zero Res disguised as success.
+// decodes into Res and, if validate is non-nil, passes validate.
+//
+// A backend invocation error, a strict-decode failure, or a validate
+// failure is treated as transient and retried up to maxInvokeAttempts times
+// with the same prompt; a structural error (e.g. a nil build) returns
+// immediately without consuming a retry. On exhaustion, InvokeStructured
+// returns a single descriptive error rather than a zero Res disguised as
+// success.
 func InvokeStructured[Req any, Res any](
 	ctx context.Context,
 	backend Backend,
@@ -47,9 +58,34 @@ func InvokeStructured[Req any, Res any](
 	}
 
 	prompt := build(req)
+
+	var lastErr error
+	for attempt := 1; attempt <= maxInvokeAttempts; attempt++ {
+		res, err := invokeOnce[Res](ctx, backend, key, prompt, schema, validate)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+	}
+	return zero, fmt.Errorf("planningagent: invocation %q failed after %d attempts: %w", key, maxInvokeAttempts, lastErr)
+}
+
+// invokeOnce performs a single invoke->decode->validate cycle for
+// InvokeStructured, returning an error for any of: a backend invocation
+// error, a strict-decode failure, or (when no fenced block passes
+// validation either) a validate failure.
+func invokeOnce[Res any](
+	ctx context.Context,
+	backend Backend,
+	key string,
+	prompt string,
+	schema []byte,
+	validate func(Res) error,
+) (Res, error) {
+	var zero Res
 	raw, err := backend.Invoke(ctx, InvokeRequest{Key: key, Prompt: prompt, Schema: schema})
 	if err != nil {
-		return zero, fmt.Errorf("planningagent: invoke: %w", err)
+		return zero, fmt.Errorf("invoke: %w", err)
 	}
 
 	if res, err := decodeStrict[Res](raw); err == nil {
@@ -63,7 +99,7 @@ func InvokeStructured[Req any, Res any](
 
 	res, ok := extractStructuredResult(raw, validate)
 	if !ok {
-		return zero, fmt.Errorf("planningagent: no valid structured result found in backend output")
+		return zero, fmt.Errorf("no valid structured result found in backend output")
 	}
 	return res, nil
 }
