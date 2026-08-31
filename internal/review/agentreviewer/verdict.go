@@ -73,28 +73,24 @@ type axisOutcome struct {
 	env  envelope
 }
 
-// combine folds every axis's axisOutcome into one review.Result: this
-// issue's (#159) simple combine is a straight concatenation of each axis's
-// findings, in fixed axis order (bugs, quality, docs — see the axes slice
-// in agentreviewer.go), followed by the #158 verdict rule applied ONCE over
-// the combined set: VerdictChangesRequired iff at least one combined
-// Finding maps to review.SeverityError with Confidence >= confidenceFloor.
-//
-// This is deliberately the whole synthesis step for now: no cross-axis
-// dedup, confidence-fold, ranking, or tension detection. That is a
-// separate, later ticket (#160, the deterministic synthesizer) and will
-// replace this function's body — the axisOutcome slice it consumes is the
-// seam a real synthesizer plugs into without Reviewer.Review needing to
-// change.
+// combine folds every axis's axisOutcome into one review.Result: issue
+// #160's deterministic synthesizer (synthesizeFindings in synthesizer.go)
+// dedups matched cross-axis findings, folds their confidences, surfaces
+// remedy conflicts as tensions instead of dropping either side, and ranks
+// the merged set. The #158 verdict rule is then applied ONCE over that
+// merged set: VerdictChangesRequired iff at least one merged Finding maps
+// to review.SeverityError with Confidence >= confidenceFloor — recomputed
+// on the merged confidence, not on any single axis's, so cross-axis
+// agreement can push a finding neither axis was confident enough alone to
+// block on over the floor (see TestCombine_AgreementLiftsConfidenceOverFloor_ChangesRequired).
 func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
-	var findings []review.Finding
-	blocked := false
+	findings, tensions := synthesizeFindings(outcomes, confidenceFloor)
 
-	for _, o := range outcomes {
-		axisFindings, axisBlocked := findingsForAxis(o.env, o.axis, confidenceFloor)
-		findings = append(findings, axisFindings...)
-		if axisBlocked {
+	blocked := false
+	for _, f := range findings {
+		if f.Severity == review.SeverityError && f.Confidence >= confidenceFloor {
 			blocked = true
+			break
 		}
 	}
 
@@ -105,7 +101,7 @@ func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
 
 	return review.Result{
 		Verdict:  verdict,
-		Summary:  summarizeCombined(outcomes, verdict, findings),
+		Summary:  summarizeCombined(outcomes, verdict, findings, tensions),
 		Findings: findings,
 	}
 }
@@ -136,11 +132,18 @@ func summarize(axis string, verdict review.Verdict, findings []review.Finding) s
 }
 
 // summarizeCombined produces the combined Result.Summary text across every
-// axis in outcomes.
-func summarizeCombined(outcomes []axisOutcome, verdict review.Verdict, findings []review.Finding) string {
+// axis in outcomes, appending any synthesizeFindings tensions so remedy
+// conflicts are surfaced to a human/Worker reading Summary rather than only
+// being visible by diffing Findings (issue #160 acceptance criteria:
+// tensions "surfaced... never silently dropped").
+func summarizeCombined(outcomes []axisOutcome, verdict review.Verdict, findings []review.Finding, tensions []string) string {
 	axisNames := make([]string, 0, len(outcomes))
 	for _, o := range outcomes {
 		axisNames = append(axisNames, o.axis)
 	}
-	return fmt.Sprintf("axes %s: %d finding(s), verdict %s", strings.Join(axisNames, "+"), len(findings), verdict)
+	base := fmt.Sprintf("axes %s: %d finding(s), verdict %s", strings.Join(axisNames, "+"), len(findings), verdict)
+	if len(tensions) == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s; tensions: %s", base, strings.Join(tensions, "; "))
 }
