@@ -46,10 +46,16 @@ const reviewRules = "## Rules\n\n" +
 // draws on whatever the normalized Issue and Repository/Policy context
 // currently carry (see internal/agent.AgentRequest). A req in
 // agent.ModeReview is rendered by buildReviewPrompt instead — a read-only
-// analysis task with none of the implement/TDD/result-contract framing.
+// analysis task with none of the implement/TDD/result-contract framing. A
+// req in agent.ModeStructured returns req.Prompt verbatim (issue 200): the
+// caller has already built the exact prompt it wants sent, so none of the
+// Issue/Repository/Policy scaffolding below applies.
 func buildPrompt(req agent.AgentRequest) string {
 	if req.Mode == agent.ModeReview {
 		return buildReviewPrompt(req)
+	}
+	if req.Mode == agent.ModeStructured {
+		return req.Prompt
 	}
 
 	var b strings.Builder
