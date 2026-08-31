@@ -111,3 +111,23 @@ func TestResponsesAdapter_ExecuteNoStructuredResultIsFailed(t *testing.T) {
 		t.Fatalf("Status = %v, want FAILED", res.Status)
 	}
 }
+
+// A failed request (non-2xx) must still persist a diagnostic transcript
+// event — no run is ever a blank transcript (issue #257).
+func TestResponsesAdapter_ExecuteFailureNeverBlankTranscript(t *testing.T) {
+	srv := newResponsesTestServer(t, http.StatusInternalServerError, `{"error":"boom"}`, nil)
+	defer srv.Close()
+
+	a := &ResponsesAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Model: "gpt-test"}
+	sink := agent.NewTranscriptRecorder()
+	res, err := a.Execute(context.Background(), agent.AgentRequest{Transcript: sink})
+	if err != nil {
+		t.Fatalf("Execute returned error %v, want nil", err)
+	}
+	if res.Status != agent.StatusFailed {
+		t.Fatalf("Status = %v, want FAILED", res.Status)
+	}
+	if len(sink.Events()) == 0 {
+		t.Fatalf("Events() = 0, want a non-blank fallback transcript on failure")
+	}
+}

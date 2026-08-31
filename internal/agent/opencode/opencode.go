@@ -27,7 +27,10 @@ const defaultExecutable = "opencode"
 // nonInteractiveArgs invokes the opencode CLI in a headless, non-interactive
 // mode that reads the prompt from stdin and exits after one turn, mirroring
 // internal/agent/claude's claudePrintFlag/permission-mode handling.
-var nonInteractiveArgs = []string{"run", "--print-logs"}
+// --format json makes `opencode run` stream its turn events as JSONL on
+// stdout (parsed by streamParser) so Forge persists a transcript incrementally
+// as the run proceeds (issue #257) rather than one coarse blob after it exits.
+var nonInteractiveArgs = []string{"run", "--print-logs", "--format", "json"}
 
 // allowedEnvVars is the fixed base allowlist of environment variables
 // passed to the opencode CLI subprocess, matching internal/agent/claude's
@@ -82,6 +85,7 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		Runner:              a.Runner,
 		Executable:          executable,
 		Args:                nonInteractiveArgs,
+		NewStreamParser:     func() clicommon.StreamParser { return newStreamParser() },
 		AllowedEnvVars:      allowedEnvVars,
 		AuthEnvVars:         defaultAuthEnvVars,
 		ExtraEnvPassthrough: a.ExtraEnvPassthrough,

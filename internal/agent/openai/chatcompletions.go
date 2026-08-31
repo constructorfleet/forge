@@ -85,8 +85,18 @@ func (resp chatCompletionsResponseBody) text() string {
 // rather than a returned error, matching every other Agent Adapter; context
 // cancellation is the one exception, additionally surfaced as a wrapped
 // ctx.Err().
-func (a *ChatCompletionsAdapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+func (a *ChatCompletionsAdapter) Execute(ctx context.Context, req agent.AgentRequest) (res agent.AgentResult, err error) {
 	prompt := clicommon.BuildPrompt("openai-chat-completions", req)
+
+	// Never leave a failed run with a blank transcript (issue #257): if
+	// Execute returns FAILED, persist the diagnostic Summary as a fallback
+	// event. The success path emits the response text below, and a FAILED
+	// result carries no response text, so this does not double-emit.
+	defer func() {
+		if res.Status == agent.StatusFailed {
+			emitTranscript(req, res.Summary)
+		}
+	}()
 
 	client := a.HTTPClient
 	if client == nil {

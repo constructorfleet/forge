@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -14,14 +15,27 @@ type capturedCall struct {
 	env   []string
 }
 
-func fixedRunner(stdout string) (Runner, *capturedCall) {
+// fixedRunner returns a Runner that streams agentMessage as an opencode
+// `run --format json` text-part event (the shape the adapter's streamParser
+// consumes) through onLine, and returns it as the full captured stdout —
+// mirroring DefaultRunner's contract now that opencode runs in --format json
+// mode.
+func fixedRunner(agentMessage string) (Runner, *capturedCall) {
 	call := &capturedCall{}
-	return func(_ context.Context, dir string, args []string, stdin string, env []string, _ func(string)) (string, string, int, error) {
+	ev, _ := json.Marshal(opencodeEvent{
+		Type: "text",
+		Part: &opencodePart{Type: "text", Text: agentMessage},
+	})
+	line := string(ev)
+	return func(_ context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
 		call.dir = dir
 		call.args = args
 		call.stdin = stdin
 		call.env = env
-		return stdout, "", 0, nil
+		if onLine != nil {
+			onLine(line)
+		}
+		return line + "\n", "", 0, nil
 	}, call
 }
 
