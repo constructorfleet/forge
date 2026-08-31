@@ -351,6 +351,112 @@ func TestWait_UsesExplicitRequiredChecksFallbackWithoutTrackerRequirements(t *te
 	}
 }
 
+// TestWait_UnprotectedBranch_WaitsForObservedChecksInsteadOfPassingImmediately
+// covers issue 215: a branch with no tracker-declared required checks (the
+// GitHub-mode default for an unprotected branch — see
+// internal/tracker/github/merge_requirements.go) previously made Wait treat
+// "nothing is required" as "nothing to wait for" and transition straight to
+// DONE on the very first poll, ignoring whatever checks GitHub was actually
+// still running. Wait must instead fall back to waiting on every check the
+// tracker currently reports for the PR.
+func TestWait_UnprotectedBranch_WaitsForObservedChecksInsteadOfPassingImmediately(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-5", "27")
+
+	trk := &stubTracker{
+		mergeRequirements: tracker.MergeRequirements{}, // unprotected branch: no required checks
+		checkResponses: [][]tracker.PullRequestCheck{
+			{{Name: "build", State: tracker.CheckPending}},
+			{{Name: "build", State: tracker.CheckSuccess}},
+		},
+	}
+	sleep := &sleepRecorder{}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	supervisor.Sleep = sleep.Sleep
+
+	state, err := supervisor.Wait(context.Background(), "exec-5", "27")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateDone {
+		t.Fatalf("state = %s, want DONE", state)
+	}
+	if trk.checkCalls != 2 {
+		t.Fatalf("GetPullRequestChecks calls = %d, want 2 (must poll past the pending observed check)", trk.checkCalls)
+	}
+	if sleep.calls != 1 {
+		t.Fatalf("sleep calls = %d, want 1", sleep.calls)
+	}
+}
+
+// TestWait_UnprotectedBranch_ObservedCheckFailureTransitionsToCIFailed is
+// the failing-check half of issue 215's fix: an unprotected branch must
+// still route a failing observed check to CI_FAILED instead of ignoring it.
+func TestWait_UnprotectedBranch_ObservedCheckFailureTransitionsToCIFailed(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-6", "28")
+
+	trk := &stubTracker{
+		mergeRequirements: tracker.MergeRequirements{},
+		checkResponses: [][]tracker.PullRequestCheck{
+			{{Name: "build", State: tracker.CheckFailure, Details: "boom"}},
+		},
+	}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 5, 0, 0, time.UTC) }
+
+	state, err := supervisor.Wait(context.Background(), "exec-6", "28")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateCIFailed {
+		t.Fatalf("state = %s, want CI_FAILED", state)
+	}
+
+	runs, err := store.CIRunsByIssue(context.Background(), "exec-6", "28")
+	if err != nil {
+		t.Fatalf("CIRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 || runs[0].CheckName != "build" {
+		t.Fatalf("runs = %+v, want single failed run for build", runs)
+	}
+}
+
+// TestWait_NoObservedChecksAtAll_PassesAfterGracePolls pins the case Wait
+// must still handle without regression: a PR that genuinely has no checks
+// reported at all (no CI configured) has nothing to wait for. It must not,
+// however, conclude that from a single empty poll (issue 215: GitHub takes
+// a few seconds after PR creation to register its first check run, so one
+// empty poll is indistinguishable from "CI hasn't reported in yet") — Wait
+// must see the empty result hold across emptyChecksGracePolls consecutive
+// polls before passing.
+func TestWait_NoObservedChecksAtAll_PassesAfterGracePolls(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-7", "29")
+
+	trk := &stubTracker{mergeRequirements: tracker.MergeRequirements{}}
+	sleep := &sleepRecorder{}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	supervisor.Sleep = sleep.Sleep
+
+	state, err := supervisor.Wait(context.Background(), "exec-7", "29")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateDone {
+		t.Fatalf("state = %s, want DONE", state)
+	}
+	if trk.checkCalls != 2 {
+		t.Fatalf("GetPullRequestChecks calls = %d, want 2 (must not pass on the first empty poll)", trk.checkCalls)
+	}
+	if sleep.calls != 1 {
+		t.Fatalf("sleep calls = %d, want 1", sleep.calls)
+	}
+}
+
 func TestWait_TrackerErrorIsReturnedWithoutTransition(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-4", "26")

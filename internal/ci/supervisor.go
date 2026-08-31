@@ -84,6 +84,16 @@ func New(store storage.Store, trk Tracker, cfg config.Config, baseBranch string)
 	}
 }
 
+// emptyChecksGracePolls is how many consecutive polls must observe zero
+// tracker-declared required checks AND zero reported PR checks before Wait
+// concludes "no CI is configured for this PR" and passes immediately. A
+// single empty poll is not enough evidence: GitHub (and most CI systems)
+// take a few seconds after PR/commit creation to register their first check
+// run, so a lone empty poll is indistinguishable from "CI hasn't reported in
+// yet" (issue 215). Requiring the empty result to hold across a poll
+// interval rules that race out without needing a fixed grace delay.
+const emptyChecksGracePolls = 2
+
 // Wait polls the pull request attached to issueID until all required checks
 // succeed or one required check fails.
 func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (domain.IssueState, error) {
@@ -101,6 +111,7 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 	}
 	pr := prs[len(prs)-1]
 
+	emptyChecksStreak := 0
 	for {
 		// Mergeability and review feedback are checked ahead of required
 		// checks each poll (issue 109, "Merge Conflicts" / "Review
@@ -120,7 +131,12 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			return "", fmt.Errorf("ci: poll checks for issue %s: %w", issueID, err)
 		}
 
-		status, failed := evaluateChecks(required, checks)
+		if len(required) == 0 && len(checks) == 0 {
+			emptyChecksStreak++
+		} else {
+			emptyChecksStreak = 0
+		}
+		status, failed := evaluateChecks(required, checks, emptyChecksStreak >= emptyChecksGracePolls)
 		run := storage.CIRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -173,8 +189,25 @@ func (s *Supervisor) requiredChecks(ctx context.Context) ([]string, error) {
 	return mr.RequiredChecks, nil
 }
 
-func evaluateChecks(required []string, checks []tracker.PullRequestCheck) (storage.CIRunStatus, *tracker.PullRequestCheck) {
+func evaluateChecks(required []string, checks []tracker.PullRequestCheck, allowEmptyPass bool) (storage.CIRunStatus, *tracker.PullRequestCheck) {
 	if len(required) == 0 {
+		// No tracker-declared required checks (issue 215: most commonly an
+		// unprotected branch — see
+		// tracker/github.Client.GetMergeRequirements) does not mean nothing
+		// is running. Fall back to waiting on every check the tracker
+		// currently reports for the PR; only a PR with no observed checks
+		// at all has genuinely nothing to wait for.
+		required = checkNames(checks)
+	}
+	if len(required) == 0 {
+		if !allowEmptyPass {
+			// Zero required checks and zero observed checks on this poll is
+			// ambiguous: it may mean no CI is configured, or it may mean CI
+			// hasn't registered its first check run yet (issue 215). Treat
+			// it as still pending until the caller has seen this hold
+			// across emptyChecksGracePolls consecutive polls.
+			return storage.CIRunStatusPending, nil
+		}
 		return storage.CIRunStatusPassed, nil
 	}
 	for _, name := range required {
@@ -195,6 +228,17 @@ func evaluateChecks(required []string, checks []tracker.PullRequestCheck) (stora
 		}
 	}
 	return storage.CIRunStatusPassed, nil
+}
+
+func checkNames(checks []tracker.PullRequestCheck) []string {
+	if len(checks) == 0 {
+		return nil
+	}
+	names := make([]string, len(checks))
+	for i, c := range checks {
+		names[i] = c.Name
+	}
+	return names
 }
 
 func capDetails(details string, maxBytes int) string {
