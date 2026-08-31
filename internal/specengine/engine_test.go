@@ -620,6 +620,153 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 	}
 }
 
+// TestSpecEngineGenerateTicketPlan_ReviewBudgetExhausted is issue #251's
+// correctness case: when the automated ticketplanreview reviewer raises the
+// same finding on every attempt, that is a recurring, reproducible defect
+// and budget exhaustion must hard-fail with the recurring finding surfaced.
+func TestSpecEngineGenerateTicketPlan_ReviewBudgetExhausted(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	spec := &planning.Artifact{
+		Kind:  planning.KindSpec,
+		State: "approved",
+		Sections: []planning.Section{
+			{Heading: "Context", Body: "A widget builder using SQLite"},
+			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable"},
+			{Heading: "Non-Goals", Body: "Not building a gadget"},
+		},
+		DerivedFrom: []planning.DerivedFromEntry{
+			{Kind: planning.KindGoal, ID: "goal", Revision: "goal-rev"},
+			{Kind: "repository", ID: "repository", Revision: "repo-rev"},
+		},
+	}
+	spec.Revision = planning.ComputeRevision(spec)
+	spec.ApprovedRevision = spec.Revision
+
+	loader := &fakeLoaderForTest{goal: goal, spec: spec}
+
+	backend := planningagent.NewFakeBackend()
+	genResult := `{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully"],
+				"dependencies": []
+			}
+		]
+	}`
+	reviewChangesRequired := `{
+		"verdict": "CHANGES_REQUIRED",
+		"summary": "Ticket plan needs improvement",
+		"findings": [{"severity": "WARNING", "ticket_key": "TKT-001", "message": "Acceptance criteria too thin"}]
+	}`
+
+	// All 3 reviews return the same CHANGES_REQUIRED finding (default
+	// ReviewRetryLimit = 3), so it recurs across every attempt.
+	backend.ProgramResult("ticket-plan-generation", genResult)
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired)
+	backend.ProgramResult("ticket-plan-generation", genResult)
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired)
+	backend.ProgramResult("ticket-plan-generation", genResult)
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired)
+
+	engine := specengine.NewSpecEngine(backend)
+	err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader)
+	if err == nil {
+		t.Fatal("expected error for exhausted review budget, got nil")
+	}
+	if !strings.Contains(err.Error(), "Acceptance criteria too thin") {
+		t.Errorf("error should surface the recurring finding, got: %v", err)
+	}
+	if loader.ticketPlan != nil {
+		t.Error("ticket plan should not be saved when budget exhausted")
+	}
+}
+
+// TestSpecEngineGenerateTicketPlan_ReviewNoiseNotHardFailed mirrors issue
+// #249's reliability fix for ticket-plan review: when the automated reviewer
+// disagrees with itself across every retry (no finding recurs in every
+// attempt), that is reviewer noise, not a genuine defect. The ticket plan
+// already passed deterministic validation, so budget exhaustion must not
+// hard-fail the feature in this case.
+func TestSpecEngineGenerateTicketPlan_ReviewNoiseNotHardFailed(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	spec := &planning.Artifact{
+		Kind:  planning.KindSpec,
+		State: "approved",
+		Sections: []planning.Section{
+			{Heading: "Context", Body: "A widget builder using SQLite"},
+			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable"},
+			{Heading: "Non-Goals", Body: "Not building a gadget"},
+		},
+		DerivedFrom: []planning.DerivedFromEntry{
+			{Kind: planning.KindGoal, ID: "goal", Revision: "goal-rev"},
+			{Kind: "repository", ID: "repository", Revision: "repo-rev"},
+		},
+	}
+	spec.Revision = planning.ComputeRevision(spec)
+	spec.ApprovedRevision = spec.Revision
+
+	loader := &fakeLoaderForTest{goal: goal, spec: spec}
+
+	backend := planningagent.NewFakeBackend()
+	genResult := func(v string) string {
+		return fmt.Sprintf(`{
+			"tickets": [
+				{
+					"key": "TKT-001",
+					"objective": "Implement widget builder core %s",
+					"requirements": ["REQ-001"],
+					"acceptance_criteria": ["Widget builds successfully"],
+					"dependencies": []
+				}
+			]
+		}`, v)
+	}
+	reviewChangesRequired := func(msg string) string {
+		return fmt.Sprintf(`{
+			"verdict": "CHANGES_REQUIRED",
+			"summary": "Ticket plan needs improvement",
+			"findings": [{"severity": "WARNING", "ticket_key": "TKT-001", "message": %q}]
+		}`, msg)
+	}
+
+	// Default ReviewRetryLimit is 3, which drives 4 review calls before
+	// exhaustion (the 3 that trigger a repair, plus the one that observes
+	// the budget is spent). Program each with a distinct finding so none
+	// recurs across every attempt.
+	backend.ProgramResult("ticket-plan-generation", genResult("v1"))
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired("issue A"))
+	backend.ProgramResult("ticket-plan-generation", genResult("v2"))
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired("issue B"))
+	backend.ProgramResult("ticket-plan-generation", genResult("v3"))
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired("issue C"))
+	backend.ProgramResult("ticket-plan-generation", genResult("v4"))
+	backend.ProgramResult("ticket-plan-review", reviewChangesRequired("issue D"))
+
+	engine := specengine.NewSpecEngine(backend)
+	err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader)
+	if err != nil {
+		t.Fatalf("GenerateTicketPlan should not hard-fail on reviewer noise: %v", err)
+	}
+	if loader.ticketPlan == nil {
+		t.Fatal("ticket plan should still be saved when the exhausted budget reflects reviewer noise, not a real defect")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsInternal(s, substr)))
 }
