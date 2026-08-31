@@ -39,6 +39,11 @@ func Parse(raw []byte) (*Artifact, error) {
 		estimates[k] = TicketEstimate{Size: v.Size, Risk: v.Risk}
 	}
 
+	ticketKinds := make(map[string]TicketKind)
+	for k, v := range meta.TicketKinds {
+		ticketKinds[k] = v
+	}
+
 	rest := text[closeIdx+len(blockClose):]
 	rest = strings.TrimLeft(rest, "\n")
 
@@ -51,6 +56,7 @@ func Parse(raw []byte) (*Artifact, error) {
 		ApprovedAt:       meta.ApprovedAt,
 		DerivedFrom:      derivedFrom,
 		Estimates:        estimates,
+		TicketKinds:      ticketKinds,
 		Sections:         parseSections(rest),
 	}, nil
 }

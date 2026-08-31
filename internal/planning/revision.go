@@ -9,7 +9,8 @@ import (
 )
 
 // ComputeRevision returns the content revision for a: sha256 of the
-// canonicalized definitional representation (Kind, DerivedFrom, Estimates, Sections).
+// canonicalized definitional representation (Kind, DerivedFrom, Estimates,
+// TicketKinds, Sections).
 // Workflow fields (Revision, State, ApprovedRevision, ApprovedBy,
 // ApprovedAt) never participate.
 func ComputeRevision(a *Artifact) string {
@@ -49,6 +50,11 @@ func canonicalBytes(a *Artifact) []byte {
 		estimates[k] = m
 	}
 
+	ticketKinds := make(map[string]string, len(a.TicketKinds))
+	for k, v := range a.TicketKinds {
+		ticketKinds[k] = string(v)
+	}
+
 	sections := make([]map[string]any, len(a.Sections))
 	for i, s := range a.Sections {
 		sections[i] = map[string]any{
@@ -61,6 +67,7 @@ func canonicalBytes(a *Artifact) []byte {
 		"kind":         string(a.Kind),
 		"derived_from": derived,
 		"estimates":    estimates,
+		"ticket_kinds": ticketKinds,
 		"sections":     sections,
 	}
 

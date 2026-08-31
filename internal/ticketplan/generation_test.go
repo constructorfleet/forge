@@ -194,6 +194,44 @@ func TestTicketPlanGenerationWithImplementationContext(t *testing.T) {
 	}
 }
 
+func TestTicketPlanGenerationWithKinds(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", `{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"kind": "code",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully"],
+				"dependencies": []
+			},
+			{
+				"key": "TKT-002",
+				"kind": "non-code",
+				"objective": "Verify the tracker acceptance criterion is already documented",
+				"requirements": ["REQ-002"],
+				"acceptance_criteria": ["No repository diff is required"],
+				"dependencies": []
+			}
+		]
+	}`)
+
+	res, err := Generate(context.Background(), backend, pc)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if res.Tickets[0].Kind != planning.TicketKindCode {
+		t.Errorf("tickets[0].kind = %q, want %q", res.Tickets[0].Kind, planning.TicketKindCode)
+	}
+	if res.Tickets[1].Kind != planning.TicketKindNonCode {
+		t.Errorf("tickets[1].kind = %q, want %q", res.Tickets[1].Kind, planning.TicketKindNonCode)
+	}
+}
+
 func TestBuildTicketPlanGenerationPromptIncludesRepositoryStructure(t *testing.T) {
 	repo := agent.RepositoryContext{
 		BaseRevision:     "base-rev",
@@ -212,6 +250,16 @@ func TestBuildTicketPlanGenerationPromptIncludesRepositoryStructure(t *testing.T
 	}
 	if !strings.Contains(prompt, "Go, JavaScript") {
 		t.Errorf("prompt missing languages: %q", prompt)
+	}
+}
+
+func TestBuildTicketPlanGenerationPromptRequestsTicketKind(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	prompt := buildTicketPlanGenerationPrompt(ticketPlanGenerationRequest{Context: pc})
+
+	if !strings.Contains(prompt, "kind") || !strings.Contains(prompt, "non-code") || !strings.Contains(prompt, "ready-for-human") {
+		t.Fatalf("prompt missing ticket kind guidance: %q", prompt)
 	}
 }
 

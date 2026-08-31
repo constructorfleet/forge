@@ -412,9 +412,10 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 
 	// Build ticket plan artifact
 	tpArtifact := &planning.Artifact{
-		Kind:      planning.KindTicketPlan,
-		Sections:  make([]planning.Section, 0, len(tpResult.Tickets)),
-		Estimates: make(map[string]planning.TicketEstimate),
+		Kind:        planning.KindTicketPlan,
+		Sections:    make([]planning.Section, 0, len(tpResult.Tickets)),
+		Estimates:   make(map[string]planning.TicketEstimate),
+		TicketKinds: make(map[string]planning.TicketKind),
 	}
 
 	for _, t := range tpResult.Tickets {
@@ -427,6 +428,7 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 		if t.Estimate != nil {
 			tpArtifact.Estimates[t.Key] = *t.Estimate
 		}
+		tpArtifact.TicketKinds[t.Key] = t.Kind
 	}
 
 	// DerivedFrom: spec + repository
@@ -546,9 +548,10 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 
 		// Build new ticket plan artifact from repair result
 		newTPArtifact := &planning.Artifact{
-			Kind:      planning.KindTicketPlan,
-			Sections:  make([]planning.Section, 0, len(tpResult.Tickets)),
-			Estimates: make(map[string]planning.TicketEstimate),
+			Kind:        planning.KindTicketPlan,
+			Sections:    make([]planning.Section, 0, len(tpResult.Tickets)),
+			Estimates:   make(map[string]planning.TicketEstimate),
+			TicketKinds: make(map[string]planning.TicketKind),
 		}
 
 		for _, t := range tpResult.Tickets {
@@ -561,6 +564,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 			if t.Estimate != nil {
 				newTPArtifact.Estimates[t.Key] = *t.Estimate
 			}
+			newTPArtifact.TicketKinds[t.Key] = t.Kind
 		}
 
 		// DerivedFrom: spec + repository (same as original)

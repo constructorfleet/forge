@@ -354,6 +354,26 @@ func TestTicketPlanParseWithoutEstimates(t *testing.T) {
 	}
 }
 
+func TestTicketPlanParseKindDefaultsAndOverrides(t *testing.T) {
+	tp := makeTestTicketPlan()
+	tp.TicketKinds = map[string]planning.TicketKind{
+		"TKT-002": planning.TicketKindNonCode,
+	}
+	tp.Revision = planning.ComputeRevision(tp)
+
+	tickets, err := ParseTicketPlan(tp)
+	if err != nil {
+		t.Fatalf("ParseTicketPlan failed: %v", err)
+	}
+
+	if tickets[0].Kind != planning.TicketKindCode {
+		t.Errorf("tickets[0].kind = %q, want %q", tickets[0].Kind, planning.TicketKindCode)
+	}
+	if tickets[1].Kind != planning.TicketKindNonCode {
+		t.Errorf("tickets[1].kind = %q, want %q", tickets[1].Kind, planning.TicketKindNonCode)
+	}
+}
+
 func TestTicketPlanValidationValidEstimates(t *testing.T) {
 	tp := &planning.Artifact{
 		Kind: planning.KindTicketPlan,
@@ -427,5 +447,48 @@ func TestTicketPlanValidationEmptyEstimateSize(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty size") {
 		t.Errorf("error message = %q, want to contain 'empty size'", err.Error())
+	}
+}
+
+func TestTicketPlanValidationInvalidTicketKind(t *testing.T) {
+	tp := makeTestTicketPlan()
+	tp.TicketKinds = map[string]planning.TicketKind{
+		"TKT-001": "docs-only",
+	}
+	tp.Revision = planning.ComputeRevision(tp)
+
+	err := ValidateTicketPlanDeterministic(tp, []string{"REQ-001", "REQ-002"}, "spec-rev", "repo-rev")
+	if err == nil {
+		t.Fatal("expected error for invalid ticket kind, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid ticket kind") {
+		t.Errorf("error message = %q, want to contain 'invalid ticket kind'", err.Error())
+	}
+}
+
+func TestTicketPlanValidationCodeTicketCannotDependOnNonCodeTicket(t *testing.T) {
+	tp := &planning.Artifact{
+		Kind: planning.KindTicketPlan,
+		Sections: []planning.Section{
+			{Heading: "Ticket: TKT-001", Body: "### Objective\nManual verification\n\n### Requirements\nREQ-001\n\n### Acceptance Criteria\n- Verified\n\n### Dependencies\nNone"},
+			{Heading: "Ticket: TKT-002", Body: "### Objective\nImplement code after verification\n\n### Requirements\nREQ-002\n\n### Acceptance Criteria\n- Implemented\n\n### Dependencies\nTKT-001"},
+		},
+		DerivedFrom: []planning.DerivedFromEntry{
+			{Kind: planning.KindSpec, ID: "spec", Revision: "spec-rev"},
+			{Kind: "repository", ID: "repository", Revision: "repo-rev"},
+		},
+		TicketKinds: map[string]planning.TicketKind{
+			"TKT-001": planning.TicketKindNonCode,
+			"TKT-002": planning.TicketKindCode,
+		},
+	}
+	tp.Revision = planning.ComputeRevision(tp)
+
+	err := ValidateTicketPlanDeterministic(tp, []string{"REQ-001", "REQ-002"}, "spec-rev", "repo-rev")
+	if err == nil {
+		t.Fatal("expected error for code ticket depending on non-code ticket, got nil")
+	}
+	if !strings.Contains(err.Error(), "code ticket cannot depend on non-code ticket") {
+		t.Errorf("error message = %q, want code/non-code dependency explanation", err.Error())
 	}
 }

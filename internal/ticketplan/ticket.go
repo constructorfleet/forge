@@ -10,6 +10,7 @@ const TicketKeyPrefix = "TKT-"
 
 type Ticket struct {
 	Key                   string
+	Kind                  planning.TicketKind
 	Objective             string
 	Requirements          []string
 	AcceptanceCriteria    []string
@@ -27,7 +28,7 @@ func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
 		key := strings.TrimPrefix(section.Heading, "Ticket: ")
 		key = strings.TrimSpace(key)
 
-		ticket := Ticket{Key: key}
+		ticket := Ticket{Key: key, Kind: planning.TicketKindCode}
 		body := section.Body
 
 		// Parse Objective
@@ -135,6 +136,11 @@ func ParseTicketPlan(artifact *planning.Artifact) ([]Ticket, error) {
 				// Copy the estimate to avoid pointer issues
 				estCopy := est
 				ticket.Estimate = &estCopy
+			}
+		}
+		if artifact.TicketKinds != nil {
+			if kind, ok := artifact.TicketKinds[key]; ok {
+				ticket.Kind = kind
 			}
 		}
 

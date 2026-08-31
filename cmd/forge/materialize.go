@@ -130,6 +130,14 @@ func runMaterialize(args []string) int {
 	for _, key := range keys {
 		fmt.Printf("%s -> issue %s\n", key, result.IssueIDs[key])
 	}
+	manualKeys := make([]string, 0, len(result.ManualIssueIDs))
+	for key := range result.ManualIssueIDs {
+		manualKeys = append(manualKeys, key)
+	}
+	sort.Strings(manualKeys)
+	for _, key := range manualKeys {
+		fmt.Printf("%s -> manual issue %s\n", key, result.ManualIssueIDs[key])
+	}
 	return 0
 }
 
