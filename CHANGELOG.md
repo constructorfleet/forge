@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/constructorfleet/forge/compare/forge-v0.16.2...forge-v0.17.0) (2026-08-31)
+
+
+### Features
+
+* **domain:** qualify issue identity by provider ([#315](https://github.com/constructorfleet/forge/issues/315)) ([283281f](https://github.com/constructorfleet/forge/commit/283281f8340ffd1a2a48522687a5b75491ea798a))
+
 ## [0.16.2](https://github.com/constructorfleet/forge/compare/forge-v0.16.1...forge-v0.16.2) (2026-08-31)
 
 
