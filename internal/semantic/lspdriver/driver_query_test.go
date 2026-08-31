@@ -67,6 +67,22 @@ func startTestDriverWithProfile(t *testing.T, env []string, profile ServerProfil
 	return d
 }
 
+// openLog creates a temp file for fakegopls to append didOpen URIs to (see
+// FAKEGOPLS_OPEN_LOG in testdata/fakegopls/main.go) and returns its path
+// plus a reader for it.
+//
+// didOpen is an async LSP notification: the driver doesn't wait for a
+// response to it, and fakegopls's own read loop dispatches it inline before
+// moving on to the request that follows it on the wire (see that package's
+// dispatch docs), so by the time the driver observes a response to a query
+// issued after ensureOpen, the log write's fsync (see appendLine in
+// testdata/fakegopls/main.go) has already landed. That closes the race at
+// the source. lines() still polls with a bounded timeout as a second,
+// independent guard against exactly this class of read-before-flush bug:
+// it waits for the log's content to go quiet (unchanged across consecutive
+// polls) rather than merely non-empty, so a spurious *second* didOpen still
+// gets caught by the "exactly one" assertion callers make against its
+// result instead of being masked by returning as soon as anything appears.
 func openLog(t *testing.T) (path string, lines func() []string) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "opens")
@@ -76,7 +92,7 @@ func openLog(t *testing.T) (path string, lines func() []string) {
 	path = f.Name()
 	_ = f.Close()
 
-	return path, func() []string {
+	read := func() []string {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read open log: %v", err)
@@ -87,6 +103,33 @@ func openLog(t *testing.T) (path string, lines func() []string) {
 			out = append(out, sc.Text())
 		}
 		return out
+	}
+
+	return path, func() []string {
+		const (
+			timeout      = 2 * time.Second
+			pollInterval = 10 * time.Millisecond
+			quietFor     = 100 * time.Millisecond
+		)
+
+		deadline := time.Now().Add(timeout)
+		cur := read()
+		quietSince := time.Now()
+		for {
+			if time.Since(quietSince) >= quietFor {
+				return cur
+			}
+			if time.Now().After(deadline) {
+				return cur
+			}
+			time.Sleep(pollInterval)
+
+			next := read()
+			if len(next) != len(cur) {
+				quietSince = time.Now()
+			}
+			cur = next
+		}
 	}
 }
 

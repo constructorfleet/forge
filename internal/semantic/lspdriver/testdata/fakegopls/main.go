@@ -57,12 +57,21 @@ func main() {
 	<-conn.Done()
 }
 
+// appendLine appends line to the file at path and fsyncs it before
+// returning. The log files it writes (FAKEGOPLS_OPEN_LOG among them) are
+// read by a test process racing this one, and DidOpen in particular is an
+// async LSP notification with no response for the driver to await — so the
+// fsync here, done before this server's read loop moves on to dispatch the
+// next message (and thus before any response the driver is waiting on can
+// be observed), is what makes the write durably visible to a reader that
+// wakes up right after that response arrives.
 func appendLine(path, line string) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
 	_, _ = f.WriteString(line + "\n")
+	_ = f.Sync()
 	_ = f.Close()
 }
 
