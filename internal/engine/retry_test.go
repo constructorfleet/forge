@@ -250,6 +250,86 @@ func TestExecute_ReviewChangesRequired_RetriesThenApprovedReachesCommitting(t *t
 	}
 }
 
+// TestExecute_ReviewChangesRequired_EmitsFindingsRoutedEvent is issue
+// #222's regression test: the only audit-log evidence that a
+// CHANGES_REQUIRED verdict is being addressed, rather than merely
+// recorded, was the generic "issue.transitioned" (REVIEWING->IMPLEMENTING)
+// and "agent.result" Events, with nothing naming the Findings that drove
+// that particular repair attempt or linking them to it. This asserts a
+// lean "review.findings_routed" Event (mirroring "gate.failed") is
+// appended, with a count and the blocking summary, before the repair
+// Agent invocation runs.
+func TestExecute_ReviewChangesRequired_EmitsFindingsRoutedEvent(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"43": {ID: "43"},
+	})
+	te.fake.ProgramResult("43", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramResult("43", review.Result{
+		Verdict: review.VerdictChangesRequired,
+		Summary: "two blocking issues",
+		Findings: []review.Finding{
+			{Severity: review.SeverityError, File: "main.go", Line: 42, Message: "unhandled error"},
+			{Severity: review.SeverityWarning, File: "util.go", Line: 7, Message: "unused import"},
+		},
+	})
+	reviewer.ProgramResult("43", review.Result{Verdict: review.VerdictApproved, Summary: "looks good now"})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff --git a/main.go b/main.go"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "43", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
+	}
+
+	events, err := te.store.EventsByExecution(ctx, result.ExecutionID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	var routed *storage.Event
+	for i := range events {
+		if events[i].Type == "review.findings_routed" {
+			routed = &events[i]
+		}
+	}
+	if routed == nil {
+		t.Fatalf("no review.findings_routed event found among %+v", events)
+	}
+	if !strings.Contains(routed.Data, `"count":"2"`) {
+		t.Errorf("review.findings_routed event data = %s, want it to contain a count of 2", routed.Data)
+	}
+	for _, want := range []string{"unhandled error", "unused import"} {
+		if !strings.Contains(routed.Data, want) {
+			t.Errorf("review.findings_routed event data = %s, want it to contain finding message %q", routed.Data, want)
+		}
+	}
+
+	// The Event is appended before the repair Agent invocation runs, not
+	// after: it should precede the second "agent.result" Event in the log.
+	var routedIdx, secondAgentResultIdx = -1, -1
+	agentResults := 0
+	for i, e := range events {
+		if e.Type == "review.findings_routed" {
+			routedIdx = i
+		}
+		if e.Type == "agent.result" {
+			agentResults++
+			if agentResults == 2 {
+				secondAgentResultIdx = i
+			}
+		}
+	}
+	if routedIdx == -1 || secondAgentResultIdx == -1 || routedIdx >= secondAgentResultIdx {
+		t.Errorf("review.findings_routed (idx %d) should precede the repair's agent.result (idx %d)", routedIdx, secondAgentResultIdx)
+	}
+}
+
 // TestExecute_GateBudgetExhaustion_RoutesToFailed is ticket 21's budget
 // exhaustion integration test for the gate side: every repair still fails
 // the same gate, so once the gate retry budget (independent from review's)

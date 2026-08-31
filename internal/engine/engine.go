@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -685,6 +686,28 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		}
 
 		feedback := review.BuildFeedback(findings)
+
+		// The "review.findings_routed" Event is the missing link issue
+		// #222 flagged: "review.run" (storage.appendReviewRunEvent) already
+		// records that a CHANGES_REQUIRED verdict happened, and
+		// "issue.transitioned" (REVIEWING->IMPLEMENTING) already records
+		// the state change, but nothing previously named the Findings
+		// driving *this* repair attempt or linked them to it. It reuses
+		// BuildFeedback's already-rendered messages (Findings folded to
+		// text) rather than re-deriving its own summary, and is appended
+		// before the repair Agent invocation runs so the log reads as
+		// cause (findings routed) then effect (agent.result).
+		messages := make([]string, len(feedback))
+		for i, f := range feedback {
+			messages[i] = f.Message
+		}
+		if err := e.appendEvent(ctx, executionID, issueID, "review.findings_routed", map[string]string{
+			"count":    fmt.Sprint(len(findings)),
+			"findings": strings.Join(messages, "; "),
+		}); err != nil {
+			return domain.Issue{}, err
+		}
+
 		issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
 			issue.RetryBudget.ReviewExhausted(),
 			func() (domain.Issue, error) {
