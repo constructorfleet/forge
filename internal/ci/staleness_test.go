@@ -20,6 +20,7 @@ type stubTrackerWithStaleness struct {
 	stubTracker
 	behindCalls  int
 	behindUntil  int
+	mergedAfter  int
 	mergeStatErr error
 }
 
@@ -28,7 +29,10 @@ func (s *stubTrackerWithStaleness) GetPullRequestMergeStatus(context.Context, in
 	if s.mergeStatErr != nil {
 		return tracker.PullRequestMergeStatus{}, s.mergeStatErr
 	}
-	return tracker.PullRequestMergeStatus{Behind: s.behindCalls <= s.behindUntil}, nil
+	return tracker.PullRequestMergeStatus{
+		Merged: s.mergedAfter > 0 && s.behindCalls >= s.mergedAfter,
+		Behind: s.behindCalls <= s.behindUntil,
+	}, nil
 }
 
 // stubRebaser is a minimal ci.Rebaser double.
@@ -89,9 +93,12 @@ func TestWait_StalePR_RebasesAndForcePushesThenContinuesToChecks(t *testing.T) {
 		// makes two calls before the checks poll below transitions it to
 		// DONE; both must report Behind: true for pollStale to observe it.
 		behindUntil: 2,
+		mergedAfter: 4,
 	}
 
 	supervisor := ci.New(store, trk, config.Default(), "main")
+	sleep := &sleepRecorder{}
+	supervisor.Sleep = sleep.Sleep
 	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 10, 0, 0, time.UTC) }
 	rebaser := &stubRebaser{}
 	pusher := &stubBranchPusher{}
@@ -194,6 +201,7 @@ func TestWait_StalePR_NoRebaserConfigured_FallsThroughToChecks(t *testing.T) {
 			},
 		},
 		behindUntil: 100,
+		mergedAfter: 2,
 	}
 
 	supervisor := ci.New(store, trk, config.Default(), "main")

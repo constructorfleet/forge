@@ -9,14 +9,17 @@ import (
 func TestGetPullRequestMergeStatus(t *testing.T) {
 	cases := []struct {
 		mergeableState string
+		merged         bool
 		wantConflicted bool
 		wantBehind     bool
+		wantMerged     bool
 	}{
-		{"clean", false, false},
-		{"dirty", true, false},
-		{"behind", false, true},
-		{"unknown", false, false},
-		{"blocked", false, false},
+		{"clean", false, false, false, false},
+		{"dirty", false, true, false, false},
+		{"behind", false, false, true, false},
+		{"unknown", false, false, false, false},
+		{"blocked", false, false, false, false},
+		{"clean", true, false, false, true},
 	}
 
 	for _, tc := range cases {
@@ -26,7 +29,11 @@ func TestGetPullRequestMergeStatus(t *testing.T) {
 				if r.URL.Path != "/repos/acme/widgets/pulls/23" {
 					t.Fatalf("unexpected path: %s", r.URL.Path)
 				}
-				_, _ = w.Write([]byte(`{"mergeable_state":"` + tc.mergeableState + `"}`))
+				merged := "false"
+				if tc.merged {
+					merged = "true"
+				}
+				_, _ = w.Write([]byte(`{"mergeable_state":"` + tc.mergeableState + `","merged":` + merged + `}`))
 			})
 
 			status, err := c.GetPullRequestMergeStatus(context.Background(), 23)
@@ -38,6 +45,9 @@ func TestGetPullRequestMergeStatus(t *testing.T) {
 			}
 			if status.Behind != tc.wantBehind {
 				t.Fatalf("Behind = %v, want %v", status.Behind, tc.wantBehind)
+			}
+			if status.Merged != tc.wantMerged {
+				t.Fatalf("Merged = %v, want %v", status.Merged, tc.wantMerged)
 			}
 		})
 	}

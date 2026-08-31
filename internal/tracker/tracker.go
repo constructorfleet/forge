@@ -83,6 +83,11 @@ type PullRequestReview struct {
 // PullRequestMergeStatus is the normalized mergeability of a pull request
 // against its base branch (issue 109, "Merge Conflicts").
 type PullRequestMergeStatus struct {
+	// Merged is true once the pull request has actually been merged. The CI
+	// Supervisor uses this as the only terminal-success signal when the
+	// tracker can report it: green checks mean the PR is healthy, not that
+	// the Issue's work has landed.
+	Merged bool
 	// Conflicted is true when the tracker reports the pull request cannot
 	// be merged into its base due to a conflict. False covers every other
 	// state, including "not yet computed" — callers that need to

@@ -103,6 +103,24 @@ func (s *sleepRecorder) Sleep(context.Context, time.Duration) error {
 	return nil
 }
 
+type stubTrackerWithMergeSequence struct {
+	stubTracker
+	statuses    []tracker.PullRequestMergeStatus
+	statusCalls int
+}
+
+func (s *stubTrackerWithMergeSequence) GetPullRequestMergeStatus(context.Context, int) (tracker.PullRequestMergeStatus, error) {
+	s.statusCalls++
+	if len(s.statuses) == 0 {
+		return tracker.PullRequestMergeStatus{}, nil
+	}
+	idx := s.statusCalls - 1
+	if idx >= len(s.statuses) {
+		idx = len(s.statuses) - 1
+	}
+	return s.statuses[idx], nil
+}
+
 func seedIssueWithPR(t *testing.T, store *storage.SQLiteStore, executionID, issueID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -197,6 +215,57 @@ func TestWait_AllRequiredChecksGreen_TransitionsToDone(t *testing.T) {
 	}
 	if sleep.calls != 1 {
 		t.Fatalf("sleep calls = %d, want 1", sleep.calls)
+	}
+}
+
+func TestWait_AllRequiredChecksGreen_WaitsForPullRequestMerge(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-merged", "43")
+
+	trk := &stubTrackerWithMergeSequence{
+		stubTracker: stubTracker{
+			mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+			checkResponses: [][]tracker.PullRequestCheck{
+				{{Name: "build", State: tracker.CheckSuccess}},
+				{{Name: "build", State: tracker.CheckSuccess}},
+			},
+		},
+		statuses: []tracker.PullRequestMergeStatus{
+			{Merged: false},
+			{Merged: false},
+			{Merged: true},
+			{Merged: true},
+		},
+	}
+	sleep := &sleepRecorder{}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	supervisor.Sleep = sleep.Sleep
+	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 13, sleep.calls, 0, time.UTC) }
+
+	state, err := supervisor.Wait(context.Background(), "exec-merged", "43")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateDone {
+		t.Fatalf("state = %s, want DONE", state)
+	}
+	if trk.checkCalls != 2 {
+		t.Fatalf("GetPullRequestChecks calls = %d, want 2 (green checks before merge must keep polling)", trk.checkCalls)
+	}
+	if sleep.calls != 1 {
+		t.Fatalf("sleep calls = %d, want 1", sleep.calls)
+	}
+
+	runs, err := store.CIRunsByIssue(context.Background(), "exec-merged", "43")
+	if err != nil {
+		t.Fatalf("CIRunsByIssue: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d CI runs, want 2", len(runs))
+	}
+	if runs[0].Status != storage.CIRunStatusPending || runs[1].Status != storage.CIRunStatusPassed {
+		t.Fatalf("run statuses = [%s %s], want [PENDING PASSED]", runs[0].Status, runs[1].Status)
 	}
 }
 
