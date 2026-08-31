@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"testing"
+
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 func TestGetMergeRequirements_FromBranchProtection(t *testing.T) {
@@ -23,6 +25,14 @@ func TestGetMergeRequirements_FromBranchProtection(t *testing.T) {
 	sort.Strings(got)
 	if len(got) != 2 || got[0] != "build" || got[1] != "test" {
 		t.Fatalf("got %v", got)
+	}
+	gotReqs := append([]tracker.MergeRequirement(nil), mr.Requirements...)
+	sort.Slice(gotReqs, func(i, j int) bool {
+		return gotReqs[i].CheckName < gotReqs[j].CheckName
+	})
+	wantReqs := []tracker.MergeRequirement{{CheckName: "build"}, {CheckName: "test"}}
+	if len(gotReqs) != len(wantReqs) || gotReqs[0] != wantReqs[0] || gotReqs[1] != wantReqs[1] {
+		t.Fatalf("Requirements = %v, want %v", gotReqs, wantReqs)
 	}
 }
 
@@ -44,6 +54,9 @@ func TestGetMergeRequirements_FallsBackToRulesetsWhenNoProtection(t *testing.T) 
 	}
 	if len(mr.RequiredChecks) != 1 || mr.RequiredChecks[0] != "lint" {
 		t.Fatalf("got %v", mr.RequiredChecks)
+	}
+	if got, want := mr.Requirements, []tracker.MergeRequirement{{CheckName: "lint"}}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("Requirements = %v, want %v", got, want)
 	}
 }
 

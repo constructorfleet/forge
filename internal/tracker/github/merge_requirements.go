@@ -55,7 +55,7 @@ func (c *Client) GetMergeRequirements(ctx context.Context, branch string) (track
 		for _, chk := range protection.RequiredStatusChecks.Checks {
 			checks = append(checks, chk.Context)
 		}
-		return tracker.MergeRequirements{RequiredChecks: dedupe(checks)}, nil
+		return mergeRequirementsFromChecks(dedupe(checks)), nil
 	case errors.As(err, &notFound):
 		return c.getRulesetMergeRequirements(ctx, branch)
 	default:
@@ -80,7 +80,7 @@ func (c *Client) getRulesetMergeRequirements(ctx context.Context, branch string)
 				checks = append(checks, chk.Context)
 			}
 		}
-		return tracker.MergeRequirements{RequiredChecks: dedupe(checks)}, nil
+		return mergeRequirementsFromChecks(dedupe(checks)), nil
 	case errors.As(err, &notFound):
 		return tracker.MergeRequirements{}, nil
 	default:
@@ -114,4 +114,15 @@ func dedupe(in []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func mergeRequirementsFromChecks(checks []string) tracker.MergeRequirements {
+	reqs := make([]tracker.MergeRequirement, 0, len(checks))
+	for _, check := range checks {
+		reqs = append(reqs, tracker.MergeRequirement{CheckName: check})
+	}
+	return tracker.MergeRequirements{
+		Requirements:   reqs,
+		RequiredChecks: checks,
+	}
 }

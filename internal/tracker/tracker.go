@@ -20,15 +20,17 @@ type Comment struct {
 // requires before a PR can merge, queried from the Tracker rather than
 // configured in Forge (see CONTEXT.md "Merge Requirements").
 type MergeRequirements struct {
+	// Requirements lists the neutral merge requirements reported by the
+	// provider. Future orchestration should consume this representation.
+	Requirements []MergeRequirement
+
 	// RequiredChecks lists the names of checks that must pass. Optional
-	// checks are not included.
+	// checks are not included. It remains for existing CI supervisor
+	// callers while they still consume the pre-split contract.
 	RequiredChecks []string
 }
 
-// MergeRequirement is one neutral merge requirement. The existing
-// MergeRequirements aggregate remains string-based for compatibility with the
-// current CI supervisor; this singular type is the neutral vocabulary future
-// orchestration code can move to without exposing provider-native shapes.
+// MergeRequirement is one neutral merge requirement.
 type MergeRequirement struct {
 	CheckName string
 }
@@ -241,7 +243,10 @@ type Check struct {
 	Details string
 }
 
-// Review is Forge's neutral representation of one SCM review.
+// Review is Forge's neutral representation of one SCM review. Providers may
+// return multiple reviews per author over a Change Request's lifetime; this is
+// raw, unreduced review history. Callers that need a current approval verdict
+// must reduce to each author's most recent non-dismissed review themselves.
 type Review struct {
 	Author      string
 	State       ReviewState
@@ -265,10 +270,10 @@ type ChangeRequestMergeStatus struct {
 	RawDetail  string
 }
 
-// Tracker is the normalized issue-tracking capability (GitHub Issues, Linear,
-// etc.). It owns issue-domain operations only; SCM and CI behavior lives in
-// their own capability interfaces below.
-type Tracker interface {
+// IssueTracker is the normalized issue-tracking capability (GitHub Issues,
+// Linear, etc.). It owns issue-domain operations only; SCM and CI behavior
+// lives in their own capability interfaces below.
+type IssueTracker interface {
 	// GetIssue fetches a single Issue, normalized to domain.Issue, with its
 	// Dependencies parsed from the canonical `## Dependencies` block and
 	// any configured overrides applied.
@@ -327,16 +332,19 @@ type CI interface {
 	GetChecks(ctx context.Context, ref ChangeRequestRef) ([]Check, error)
 }
 
-// ReviewGetter is SCM's optional review/approval sub-capability.
+// ReviewGetter is SCM's optional review/approval sub-capability. GetReviews
+// returns raw, unreduced review history; callers that need current approval
+// state must reduce per author to the most recent non-dismissed review before
+// treating it as a verdict.
 type ReviewGetter interface {
 	GetReviews(ctx context.Context, ref ChangeRequestRef) ([]Review, error)
 }
 
-// LegacyProvider is the pre-split combined provider contract. It remains for
-// callers and tests that still depend on the old all-in-one shape while new
-// orchestration code migrates to Tracker, SCM, and CI independently.
-type LegacyProvider interface {
-	Tracker
+// Tracker is the pre-split combined provider contract. It remains for callers
+// and tests that still depend on the old all-in-one shape while new
+// orchestration code migrates to IssueTracker, SCM, and CI independently.
+type Tracker interface {
+	IssueTracker
 
 	// GetMergeRequirements returns the Merge Requirements for branch,
 	// sourced from the tracker's native branch protection/rulesets (see
@@ -353,6 +361,9 @@ type LegacyProvider interface {
 	// CONTEXT.md "COMMITTING"/"PR_CREATING" (ticket 22).
 	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
 }
+
+// LegacyProvider is an alias for the pre-split combined provider contract.
+type LegacyProvider = Tracker
 
 // AuthPreflighter is an optional capability a Tracker adapter implements
 // when it needs a credential and can verify it cheaply up front. cmd/forge

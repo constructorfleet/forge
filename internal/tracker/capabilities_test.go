@@ -9,8 +9,10 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
-var _ tracker.Tracker = (*issueOnlyTracker)(nil)
-var _ tracker.LegacyProvider = (*tracker.FakeTracker)(nil)
+var _ tracker.IssueTracker = (*issueOnlyTracker)(nil)
+var _ tracker.Tracker = (*combinedTracker)(nil)
+var _ tracker.LegacyProvider = (*combinedTracker)(nil)
+var _ tracker.Tracker = (*tracker.FakeTracker)(nil)
 var _ tracker.SCM = (*scmOnly)(nil)
 var _ tracker.CI = (*ciOnly)(nil)
 var _ tracker.ReviewGetter = (*reviewOnly)(nil)
@@ -41,6 +43,20 @@ func (issueOnlyTracker) UpdateIssue(context.Context, string, tracker.UpdateIssue
 }
 func (issueOnlyTracker) Capabilities() tracker.Capabilities { return tracker.Capabilities{} }
 
+type combinedTracker struct {
+	issueOnlyTracker
+}
+
+func (combinedTracker) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
+	return tracker.MergeRequirements{}, nil
+}
+func (combinedTracker) GetPullRequestChecks(context.Context, int) ([]tracker.PullRequestCheck, error) {
+	return nil, nil
+}
+func (combinedTracker) CreatePullRequest(context.Context, tracker.PullRequestRequest) (tracker.PullRequest, error) {
+	return tracker.PullRequest{}, nil
+}
+
 type scmOnly struct{}
 
 func (scmOnly) CreateChangeRequest(context.Context, tracker.ChangeRequestRequest) (tracker.ChangeRequest, error) {
@@ -53,7 +69,7 @@ func (scmOnly) GetChangeRequestMergeStatus(context.Context, tracker.ChangeReques
 type ciOnly struct{}
 
 func (ciOnly) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
-	return tracker.MergeRequirements{}, nil
+	return tracker.MergeRequirements{Requirements: []tracker.MergeRequirement{{CheckName: "build"}}}, nil
 }
 func (ciOnly) GetChecks(context.Context, tracker.ChangeRequestRef) ([]tracker.Check, error) {
 	return nil, nil
