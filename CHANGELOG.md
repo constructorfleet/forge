@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/constructorfleet/forge/compare/forge-v0.18.0...forge-v0.19.0) (2026-08-31)
+
+
+### Features
+
+* Provider split · 5: DependencyStore read ([#323](https://github.com/constructorfleet/forge/issues/323)) ([d6c951a](https://github.com/constructorfleet/forge/commit/d6c951a6a4c24090f746bb2c4419e0505b96b085))
+
 ## [0.18.0](https://github.com/constructorfleet/forge/compare/forge-v0.17.0...forge-v0.18.0) (2026-08-31)
 
 
