@@ -10,7 +10,6 @@ import (
 )
 
 var _ tracker.Tracker = (*issueOnlyTracker)(nil)
-var _ tracker.LegacyProvider = (*combinedTracker)(nil)
 var _ tracker.Tracker = (*tracker.FakeTracker)(nil)
 var _ tracker.SCM = (*scmOnly)(nil)
 var _ tracker.CI = (*ciOnly)(nil)
@@ -42,20 +41,6 @@ func (issueOnlyTracker) UpdateIssue(context.Context, string, tracker.UpdateIssue
 	return nil
 }
 func (issueOnlyTracker) Capabilities() tracker.Capabilities { return tracker.Capabilities{} }
-
-type combinedTracker struct {
-	issueOnlyTracker
-}
-
-func (combinedTracker) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
-	return tracker.MergeRequirements{}, nil
-}
-func (combinedTracker) GetPullRequestChecks(context.Context, int) ([]tracker.PullRequestCheck, error) {
-	return nil, nil
-}
-func (combinedTracker) CreatePullRequest(context.Context, tracker.PullRequestRequest) (tracker.PullRequest, error) {
-	return tracker.PullRequest{}, nil
-}
 
 type scmOnly struct{}
 
@@ -123,18 +108,11 @@ func TestMergeBlockerCarriesReasonSourceAndRawProviderDetail(t *testing.T) {
 	}
 }
 
-func TestTrackerIsIssueDomainOnlyAndLegacyProviderPreservesCombinedContract(t *testing.T) {
+func TestTrackerIsIssueDomainOnly(t *testing.T) {
 	trackerType := reflect.TypeOf((*tracker.Tracker)(nil)).Elem()
 	for _, legacyMethod := range []string{"CreatePullRequest", "GetPullRequestChecks", "GetMergeRequirements"} {
 		if _, ok := trackerType.MethodByName(legacyMethod); ok {
 			t.Fatalf("tracker.Tracker must not expose legacy change-request method %s", legacyMethod)
-		}
-	}
-
-	legacyType := reflect.TypeOf((*tracker.LegacyProvider)(nil)).Elem()
-	for _, method := range []string{"GetIssue", "CreateIssue", "CreatePullRequest", "GetPullRequestChecks", "GetMergeRequirements"} {
-		if _, ok := legacyType.MethodByName(method); !ok {
-			t.Fatalf("tracker.LegacyProvider missing method %s", method)
 		}
 	}
 }

@@ -10,15 +10,14 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 )
 
-// var declarations ensure FakeTracker satisfies both the issue-only Tracker
-// and the pre-split combined LegacyProvider at compile time.
+// var declaration ensures FakeTracker satisfies the issue-only Tracker at
+// compile time.
 var _ Tracker = (*FakeTracker)(nil)
-var _ LegacyProvider = (*FakeTracker)(nil)
 
-// FakeTracker is an in-memory Tracker and LegacyProvider implementation for
-// tests: it never hits a real tracker API. It includes the old combined
-// pull-request and CI methods so existing tests do not need an httptest-backed
-// github.Client double.
+// FakeTracker is an in-memory Tracker implementation for tests: it never
+// hits a real tracker API. It also implements the pull-request and CI
+// methods so existing tests do not need an httptest-backed github.Client
+// double.
 type FakeTracker struct {
 	mu sync.Mutex
 

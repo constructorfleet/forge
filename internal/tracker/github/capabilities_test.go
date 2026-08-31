@@ -16,7 +16,6 @@ var _ tracker.Tracker = (*github.Client)(nil)
 var _ tracker.SCM = (*github.Client)(nil)
 var _ tracker.CI = (*github.Client)(nil)
 var _ tracker.ReviewGetter = (*github.Client)(nil)
-var _ tracker.LegacyProvider = (*github.Client)(nil)
 var _ tracker.DependencyStore = (*github.Client)(nil)
 
 func TestGetDependenciesReturnsNeutralBlocksEdgesFromBodyBlock(t *testing.T) {
