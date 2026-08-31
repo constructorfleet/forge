@@ -51,6 +51,19 @@ type Supervisor struct {
 	// as engine.Engine's handleNeedsInfo does for the IMPLEMENTING-side
 	// NEEDS_INFO path.
 	NeedsInfoTracker NeedsInfoTracker
+
+	// Rebaser is the workspace-level capability Wait uses to move a stale
+	// pull request's Workspace branch onto BaseBranch (issue 233). Optional
+	// like StatusTracker/NeedsInfoTracker: nil leaves Wait's staleness poll
+	// a no-op, so existing callers of New keep compiling and behaving
+	// unchanged until cmd/forge wires a production implementation.
+	Rebaser Rebaser
+
+	// Pusher force-pushes a rebased Workspace branch back to its tracker
+	// remote once Rebaser has moved it (issue 233). Optional alongside
+	// Rebaser: both must be set for Wait to attempt automatic staleness
+	// remediation.
+	Pusher BranchPusher
 }
 
 // NeedsInfoTracker is the subset of tracker.Tracker Wait needs when routing
@@ -117,13 +130,18 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 	haveLastCheckNames := false
 	settledStreak := 0
 	for {
-		// Mergeability and review feedback are checked ahead of required
-		// checks each poll (issue 109, "Merge Conflicts" / "Review
-		// Rectification"): both are optional Tracker capabilities (see
-		// tracker.MergeStatusGetter/ReviewsGetter), so a Tracker that
-		// doesn't implement them (including every existing test double)
-		// leaves this exactly the pre-issue-109 check-only behavior.
+		// Mergeability, staleness, and review feedback are checked ahead of
+		// required checks each poll (issue 109, "Merge Conflicts" / "Review
+		// Rectification"; issue 233, staleness): all are optional Tracker
+		// (and, for staleness remediation, Rebaser/Pusher) capabilities (see
+		// tracker.MergeStatusGetter/ReviewsGetter), so a Tracker/Supervisor
+		// that doesn't implement/configure them (including every existing
+		// test double) leaves this exactly the pre-issue-109 check-only
+		// behavior.
 		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr.Number); handled || err != nil {
+			return state, err
+		}
+		if handled, state, err := s.pollStale(ctx, executionID, issueID, pr.Number); handled || err != nil {
 			return state, err
 		}
 		if handled, state, err := s.pollReviews(ctx, executionID, issueID, pr.Number); handled || err != nil {

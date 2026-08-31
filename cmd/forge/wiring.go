@@ -192,6 +192,14 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		// ambiguous PR review feedback to NEEDS_INFO (issue 109) using the
 		// same label/comment side effects eng.NeedsInfoTracker uses above.
 		sup.NeedsInfoTracker = trk
+		// wsMgr (workspace.Manager) implements ci.Rebaser (its Rebase
+		// method), and gitPublisher implements ci.BranchPusher: together
+		// they let Wait rebase and force-push a stale pull request's
+		// Workspace branch onto eng.BaseBranch (issue 233) instead of
+		// polling checks evaluated against a base GitHub already considers
+		// out of date.
+		sup.Rebaser = wsMgr
+		sup.Pusher = gitPublisher{locks: locks}
 		eng.CIWaiter = sup
 	}
 	return eng, nil
@@ -282,6 +290,10 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		sup := ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
 		sup.StatusTracker = trk
 		sup.NeedsInfoTracker = trk
+		// See buildEngine's identical wiring for why wsMgr/gitPublisher
+		// satisfy ci.Rebaser/ci.BranchPusher (issue 233).
+		sup.Rebaser = wsMgr
+		sup.Pusher = gitPublisher{locks: repolock.New(repoRoot)}
 		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}

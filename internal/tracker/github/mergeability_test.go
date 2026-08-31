@@ -10,11 +10,13 @@ func TestGetPullRequestMergeStatus(t *testing.T) {
 	cases := []struct {
 		mergeableState string
 		wantConflicted bool
+		wantBehind     bool
 	}{
-		{"clean", false},
-		{"dirty", true},
-		{"unknown", false},
-		{"blocked", false},
+		{"clean", false, false},
+		{"dirty", true, false},
+		{"behind", false, true},
+		{"unknown", false, false},
+		{"blocked", false, false},
 	}
 
 	for _, tc := range cases {
@@ -33,6 +35,9 @@ func TestGetPullRequestMergeStatus(t *testing.T) {
 			}
 			if status.Conflicted != tc.wantConflicted {
 				t.Fatalf("Conflicted = %v, want %v", status.Conflicted, tc.wantConflicted)
+			}
+			if status.Behind != tc.wantBehind {
+				t.Fatalf("Behind = %v, want %v", status.Behind, tc.wantBehind)
 			}
 		})
 	}

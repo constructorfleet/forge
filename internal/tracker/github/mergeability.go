@@ -17,15 +17,20 @@ type ghPullRequestMergeability struct {
 // GetPullRequestMergeStatus returns pull request number's current
 // mergeability against its base branch. GitHub computes mergeable_state
 // asynchronously after a push; "dirty" is the only value that
-// unambiguously means "conflicts with the base branch" — every other
-// value (including "unknown", returned while GitHub is still computing)
-// normalizes to Conflicted: false rather than being guessed at, so a
-// still-computing PR is never misreported as conflicted.
+// unambiguously means "conflicts with the base branch" and "behind" is the
+// only value that unambiguously means "stale relative to the base branch"
+// — every other value (including "unknown", returned while GitHub is
+// still computing) normalizes to both Conflicted: false and Behind: false
+// rather than being guessed at, so a still-computing PR is never
+// misreported as either.
 func (c *Client) GetPullRequestMergeStatus(ctx context.Context, number int) (tracker.PullRequestMergeStatus, error) {
 	var pr ghPullRequestMergeability
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", c.owner, c.repo, number)
 	if err := c.do(ctx, http.MethodGet, path, nil, &pr); err != nil {
 		return tracker.PullRequestMergeStatus{}, err
 	}
-	return tracker.PullRequestMergeStatus{Conflicted: pr.MergeableState == "dirty"}, nil
+	return tracker.PullRequestMergeStatus{
+		Conflicted: pr.MergeableState == "dirty",
+		Behind:     pr.MergeableState == "behind",
+	}, nil
 }
