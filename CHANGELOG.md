@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.2](https://github.com/constructorfleet/forge/compare/forge-v0.15.1...forge-v0.15.2) (2026-08-31)
+
+
+### Bug Fixes
+
+* execution-phase adapters persist transcript_events as they occur + never blank ([#257](https://github.com/constructorfleet/forge/issues/257)) ([#258](https://github.com/constructorfleet/forge/issues/258)) ([65f46ad](https://github.com/constructorfleet/forge/commit/65f46ad5c12f10a9f6448a5fda05c1c94de69af6))
+
 ## [0.15.1](https://github.com/constructorfleet/forge/compare/forge-v0.15.0...forge-v0.15.1) (2026-08-31)
 
 
