@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/constructorfleet/forge/compare/forge-v0.11.0...forge-v0.11.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* add agent review mode so the findings envelope survives the claude backend ([#184](https://github.com/constructorfleet/forge/issues/184)) ([33e55c2](https://github.com/constructorfleet/forge/commit/33e55c2b7ef0dda171d435d8671b2e4efd0ef1aa)), closes [#183](https://github.com/constructorfleet/forge/issues/183)
+
 ## [0.11.0](https://github.com/constructorfleet/forge/compare/forge-v0.10.0...forge-v0.11.0) (2026-08-31)
 
 
