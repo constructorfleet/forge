@@ -252,6 +252,11 @@ func TestReview_RunsAllThreeAxesConcurrently_ThreeInvocationsAgainstWorkspace(t 
 			t.Errorf("invocation Policy.Notes matched no known axis marker: %q", inv.Policy.Notes)
 		}
 	}
+	for _, inv := range invocations {
+		if inv.Mode != agent.ModeReview {
+			t.Errorf("axis invocation Mode = %q, want %q (issue #183: the backend must not enforce the implement-mode result schema on a review)", inv.Mode, agent.ModeReview)
+		}
+	}
 	for _, axis := range []string{"bugs", "quality", "docs"} {
 		if !seen[axis] {
 			t.Errorf("axis %q was never invoked", axis)

@@ -31,10 +31,27 @@ const rules = "## Rules\n\n" +
 	"- Do NOT manage labels or other issue-tracker metadata.\n" +
 	"- Do NOT decide workflow state; Forge's orchestrator owns all workflow mechanics.\n"
 
+// reviewRules is implement-mode `rules`' read-only counterpart for
+// agent.ModeReview (issue #183): a review invocation inspects the change and
+// emits a report — it must not modify the Workspace, and it takes its output
+// format from the rubric carried in the Workflow Policy rather than from the
+// implement-mode {status, summary} result contract.
+const reviewRules = "## Rules\n\n" +
+	"- You are REVIEWING a change, not implementing one. Do NOT modify, create, or delete any files in this Workspace.\n" +
+	"- Do NOT create pull requests or manage issue-tracker metadata.\n" +
+	"- Do NOT decide workflow state; Forge's orchestrator owns all workflow mechanics.\n" +
+	"- Produce your review by following the rubric in the Workflow Policy above, including its output contract, exactly: your final message must be that output and nothing else.\n"
+
 // buildPrompt renders req into the prompt piped to Claude Code on stdin. It
 // draws on whatever the normalized Issue and Repository/Policy context
-// currently carry (see internal/agent.AgentRequest).
+// currently carry (see internal/agent.AgentRequest). A req in
+// agent.ModeReview is rendered by buildReviewPrompt instead — a read-only
+// analysis task with none of the implement/TDD/result-contract framing.
 func buildPrompt(req agent.AgentRequest) string {
+	if req.Mode == agent.ModeReview {
+		return buildReviewPrompt(req)
+	}
+
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Forge Task: Issue %s\n\n", req.Issue.ID)
@@ -112,6 +129,48 @@ func buildPrompt(req agent.AgentRequest) string {
 	}
 
 	b.WriteString(resultContract)
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+// buildReviewPrompt renders an agent.ModeReview invocation (issue #183): a
+// read-only review task. Unlike buildPrompt it omits every implement-mode
+// element — the "Implement the Issue's requirements" rules, the TDD
+// guidance, and the {status, summary} result contract — because those steer
+// the agent toward writing a prose implementation summary, which the CLI's
+// `--json-schema` enforcement (also omitted for review mode, see Execute)
+// then locks in, clobbering the findings envelope the reviewer parses out of
+// the final message. The concrete review context (rubric, Issue, diff, gate
+// results) arrives via req.Policy.Notes, exactly as the implement-mode path
+// renders Workflow Policy; the rubric there carries the output contract.
+func buildReviewPrompt(req agent.AgentRequest) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "# Forge Review: Issue %s\n\n", req.Issue.ID)
+
+	b.WriteString("You are REVIEWING the changes in this Workspace for one review axis. ")
+	b.WriteString("Inspect the change and produce a review report; do not modify anything.\n\n")
+
+	b.WriteString("## Issue\n\n")
+	fmt.Fprintf(&b, "- ID: %s\n", req.Issue.ID)
+	if req.Issue.Title != "" {
+		fmt.Fprintf(&b, "- Title: %s\n", req.Issue.Title)
+	}
+	b.WriteString("\n")
+	if req.Issue.Body != "" {
+		b.WriteString("### Description\n\n")
+		b.WriteString(req.Issue.Body)
+		b.WriteString("\n\n")
+	}
+
+	if req.Policy.Notes != "" {
+		b.WriteString("## Workflow Policy\n\n")
+		b.WriteString(req.Policy.Notes)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(reviewRules)
 	b.WriteString("\n")
 
 	return b.String()

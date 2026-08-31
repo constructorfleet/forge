@@ -327,6 +327,7 @@ func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax 
 // it (issue #162) for Result.Envelopes.
 func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
 	result, err := r.Agent.Execute(ctx, agent.AgentRequest{
+		Mode:          agent.ModeReview,
 		Issue:         req.Issue,
 		Repository:    req.Repository,
 		Policy:        agent.WorkflowPolicy{Notes: buildPolicyNotes(req, ax.rubric)},

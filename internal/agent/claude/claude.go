@@ -210,7 +210,13 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	}
 	args := []string{claudePrintFlag, "--permission-mode", permissionMode}
 	args = append(args, streamingArgs...)
-	args = append(args, jsonSchemaArgs...)
+	// Review mode (issue #183) is a raw-analysis task: the agent's final
+	// message IS the deliverable (a findings envelope the reviewer parses),
+	// so the {status, summary} result schema must NOT be enforced — it would
+	// force the answer into that envelope and clobber the findings.
+	if req.Mode != agent.ModeReview {
+		args = append(args, jsonSchemaArgs...)
+	}
 
 	// A non-empty Semantic.NativeServers (the SemanticProvider seam's
 	// InjectionChannelLSPPlugin fill, e.g. {go, gopls}) means Claude Code's
@@ -312,6 +318,27 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 			Status:  agent.StatusFailed,
 			Summary: diagnosticSummary(msg, finalText, stderr),
 		}, nil
+	}
+
+	// Review mode (issue #183) does not go through the {status, summary}
+	// result schema: the agent's reconstructed final message is the review
+	// deliverable itself, returned verbatim as Summary for the reviewer to
+	// parse (internal/review/agentreviewer). Status is IMPLEMENTED whenever
+	// there is output to review; an empty final message is the one failure
+	// this mode can detect on its own, surfaced as FAILED so the reviewer's
+	// per-axis retry can react. The ctx/timeout/subprocess/CLI-error guards
+	// above already handled every other failure before this point.
+	if req.Mode == agent.ModeReview {
+		if strings.TrimSpace(finalText) == "" {
+			return agent.AgentResult{
+				Status: agent.StatusFailed,
+				Summary: diagnosticSummary(
+					fmt.Sprintf("claude adapter: review produced no output (exit code %d)", exitCode),
+					finalText, stderr,
+				),
+			}, nil
+		}
+		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
 	}
 
 	// parseSchemaResult decodes the `--json-schema`-conforming result
