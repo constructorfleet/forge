@@ -3,6 +3,7 @@ package clicommon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -119,5 +120,116 @@ func TestExecuteCLI_PassesPromptOnStdinAndSanitizedEnv(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("env = %v, want FORGE_CLICOMMON_TEST_ALLOWED=yes", gotEnv)
+	}
+}
+
+// lineRunner drives onLine with each of lines in order (simulating a CLI
+// that streams stdout line by line), then returns the joined lines as the
+// full captured stdout — mirroring DefaultRunner's contract.
+func lineRunner(lines []string, stderr string, exitCode int, err error) Runner {
+	return func(_ context.Context, _ string, _ []string, _ string, _ []string, onLine func(string)) (string, string, int, error) {
+		var joined string
+		for _, l := range lines {
+			if onLine != nil {
+				onLine(l)
+			}
+			joined += l + "\n"
+		}
+		return joined, stderr, exitCode, err
+	}
+}
+
+// echoParser is a trivial StreamParser: every non-blank line becomes one
+// assistant message event, and Result concatenates them so a fenced result
+// envelope embedded across the lines is still recoverable.
+type echoParser struct{ acc string }
+
+func (p *echoParser) Line(line string) []agent.TranscriptEvent {
+	if line == "" {
+		return nil
+	}
+	p.acc += line + "\n"
+	return []agent.TranscriptEvent{{Type: agent.TranscriptEventMessage, Role: "assistant", Text: line}}
+}
+
+func (p *echoParser) Result() string { return p.acc }
+
+// A subprocess error must never leave a blank transcript (issue #257): the
+// captured stderr/stdout is persisted as a fallback event so a failed run is
+// diagnosable.
+func TestExecuteCLI_SubprocessErrorStillPersistsTranscript(t *testing.T) {
+	cfg := CLIConfig{
+		BackendName: "codex",
+		Runner:      fixedRunner("", "error: unexpected argument '--full-auto' found", 2, errors.New("exec failed")),
+	}
+	sink := agent.NewTranscriptRecorder()
+	res, err := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{Transcript: sink})
+	if err != nil {
+		t.Fatalf("ExecuteCLI returned error %v, want nil", err)
+	}
+	if res.Status != agent.StatusFailed {
+		t.Fatalf("Status = %v, want FAILED", res.Status)
+	}
+	events := sink.Events()
+	if len(events) == 0 {
+		t.Fatalf("Events() = 0, want a non-blank fallback transcript on failure")
+	}
+	found := false
+	for _, e := range events {
+		if strings.Contains(e.Text, "--full-auto") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("fallback transcript did not carry the captured stderr diagnostic: %+v", events)
+	}
+}
+
+// A cancelled run must also persist whatever it captured, not go blank.
+func TestExecuteCLI_CancellationStillPersistsTranscript(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := CLIConfig{
+		BackendName: "codex",
+		Runner:      fixedRunner("partial output before kill", "", -1, context.Canceled),
+	}
+	sink := agent.NewTranscriptRecorder()
+	_, err := ExecuteCLI(ctx, cfg, agent.AgentRequest{Transcript: sink})
+	if err == nil {
+		t.Fatalf("ExecuteCLI: want a wrapped context error, got nil")
+	}
+	if len(sink.Events()) == 0 {
+		t.Fatalf("Events() = 0, want the pre-kill output persisted")
+	}
+}
+
+// With a StreamParser, events are emitted per line as they arrive (not one
+// coarse blob), and the result envelope is read from the parser's
+// reconstructed text.
+func TestExecuteCLI_StreamParserEmitsPerLineAndParsesResult(t *testing.T) {
+	lines := []string{
+		"working on it",
+		"almost done",
+		"```json",
+		`{"status":"IMPLEMENTED","summary":"streamed"}`,
+		"```",
+	}
+	cfg := CLIConfig{
+		BackendName:     "codex",
+		Runner:          lineRunner(lines, "", 0, nil),
+		NewStreamParser: func() StreamParser { return &echoParser{} },
+	}
+	sink := agent.NewTranscriptRecorder()
+	res, err := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{Transcript: sink})
+	if err != nil {
+		t.Fatalf("ExecuteCLI: %v", err)
+	}
+	if res.Status != agent.StatusImplemented || res.Summary != "streamed" {
+		t.Fatalf("result = %+v, want IMPLEMENTED/streamed parsed from the stream", res)
+	}
+	// One event per non-blank streamed line — proof of incremental capture,
+	// not a single terminal emit.
+	if got := len(sink.Events()); got != len(lines) {
+		t.Fatalf("Events() = %d, want %d (one per streamed line)", got, len(lines))
 	}
 }

@@ -2,20 +2,33 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
 
-func fixedRunner(stdout string) (Runner, *capturedCall) {
+// fixedRunner returns a Runner that streams agentMessage as a Codex
+// `exec --json` agent_message event (the shape the adapter's streamParser
+// consumes) through onLine, and returns it as the full captured stdout —
+// mirroring DefaultRunner's contract now that codex runs in --json mode.
+func fixedRunner(agentMessage string) (Runner, *capturedCall) {
 	call := &capturedCall{}
-	return func(_ context.Context, dir string, args []string, stdin string, env []string, _ func(string)) (string, string, int, error) {
+	ev, _ := json.Marshal(codexEvent{
+		Type: "item.completed",
+		Item: &codexItem{ID: "item_0", Type: "agent_message", Text: agentMessage},
+	})
+	line := string(ev)
+	return func(_ context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
 		call.dir = dir
 		call.args = args
 		call.stdin = stdin
 		call.env = env
-		return stdout, "", 0, nil
+		if onLine != nil {
+			onLine(line)
+		}
+		return line + "\n", "", 0, nil
 	}, call
 }
 
