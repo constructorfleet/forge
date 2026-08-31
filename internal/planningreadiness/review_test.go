@@ -49,7 +49,7 @@ func TestReview_ReadyForSpec(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	pc := makePlanningContext(goal, decisions)
 
@@ -80,11 +80,9 @@ func TestReview_NotReadyMaterializesDecisions(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-readiness-review", "```json\n"+
-		`{"status":"NOT_READY","decisions":[`+
+	backend.ProgramResult("planning-readiness-review", `{"status":"NOT_READY","decisions":[`+
 		`{"temp_key":"a","title":"Pick auth","question":"Which auth strategy?","depends_on":[],"consequential":true}`+
-		`]}`+
-		"\n```\n")
+		`]}`)
 
 	pc := makePlanningContext(goal, decisions)
 
@@ -125,7 +123,7 @@ func TestReview_NotReadyWithNoDecisionsErrors(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"status":"NOT_READY","decisions":[]}` + "\n```\n")
+	backend.ProgramDefault(`{"status":"NOT_READY","decisions":[]}`)
 
 	pc := makePlanningContext(goal, decisions)
 
@@ -144,7 +142,7 @@ func TestReview_ReadyForSpecWithDecisionsErrors(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"status":"READY_FOR_SPEC","decisions":[{"temp_key":"a","title":"Pick auth","question":"Which?","depends_on":[],"consequential":true}]}` + "\n```\n")
+	backend.ProgramDefault(`{"status":"READY_FOR_SPEC","decisions":[{"temp_key":"a","title":"Pick auth","question":"Which?","depends_on":[],"consequential":true}]}`)
 
 	pc := makePlanningContext(goal, decisions)
 
@@ -163,7 +161,7 @@ func TestReview_InvalidStatusErrors(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"status":"INVALID","decisions":[]}` + "\n```\n")
+	backend.ProgramDefault(`{"status":"INVALID","decisions":[]}`)
 
 	pc := makePlanningContext(goal, decisions)
 
@@ -182,8 +180,8 @@ func TestReview_FreshInvocationEachTime(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	pc := makePlanningContext(goal, decisions)
 

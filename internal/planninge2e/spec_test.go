@@ -25,7 +25,7 @@ func storageDecision(goal *planning.Artifact) map[string]*planning.Artifact {
 // programApprovedSpec scripts a one-shot, immediately-approved
 // SpecificationGeneration + SpecificationReview pair.
 func programApprovedSpec(backend *planningagent.FakeBackend) {
-	backend.ProgramResult("specification-generation", fenced(`{
+	backend.ProgramResult("specification-generation", bareJSON(`{
 		"summary": "A widget service backed by SQLite",
 		"requirements": [
 			{"id":"REQ-001","description":"Widgets persist across restarts"},
@@ -34,7 +34,7 @@ func programApprovedSpec(backend *planningagent.FakeBackend) {
 		"non_goals": ["No distributed storage"],
 		"decision_refs": ["001-storage-engine"]
 	}`))
-	backend.ProgramResult("specification-review", fenced(`{"verdict":"APPROVED","summary":"clear","findings":[]}`))
+	backend.ProgramResult("specification-review", bareJSON(`{"verdict":"APPROVED","summary":"clear","findings":[]}`))
 }
 
 // TestScenario05_SpecReviewRejectionAndRepair exercises the bounded spec
@@ -48,20 +48,20 @@ func TestScenario05_SpecReviewRejectionAndRepair(t *testing.T) {
 	loader.decisions = storageDecision(goal)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-generation", fenced(`{
+	backend.ProgramResult("specification-generation", bareJSON(`{
 		"summary": "A widget service",
 		"requirements": [{"id":"REQ-001","description":"Widgets persist across restarts"}],
 		"non_goals": ["No distributed storage"],
 		"decision_refs": ["001-storage-engine"]
 	}`))
-	backend.ProgramResult("specification-review", fenced(`{
+	backend.ProgramResult("specification-review", bareJSON(`{
 		"verdict":"CHANGES_REQUIRED",
 		"summary":"the durability requirement is untestable as written",
 		"findings":[{"severity":"ERROR","file":"","line":0,
 			"message":"REQ-001 has no observable acceptance signal"}]
 	}`))
 	// The repair pass tightens REQ-001 and adds the missing requirement.
-	backend.ProgramResult("specification-generation", fenced(`{
+	backend.ProgramResult("specification-generation", bareJSON(`{
 		"summary": "A widget service backed by SQLite",
 		"requirements": [
 			{"id":"REQ-001","description":"Widgets are readable after a process restart"},
@@ -70,7 +70,7 @@ func TestScenario05_SpecReviewRejectionAndRepair(t *testing.T) {
 		"non_goals": ["No distributed storage"],
 		"decision_refs": ["001-storage-engine"]
 	}`))
-	backend.ProgramResult("specification-review", fenced(`{"verdict":"APPROVED","summary":"repaired","findings":[]}`))
+	backend.ProgramResult("specification-review", bareJSON(`{"verdict":"APPROVED","summary":"repaired","findings":[]}`))
 
 	if err := specengine.NewSpecEngine(backend).GenerateSpec(ctx, "widget", loader); err != nil {
 		t.Fatalf("GenerateSpec: %v", err)

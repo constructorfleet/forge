@@ -84,11 +84,11 @@ func TestTicketPlanReview_Approved(t *testing.T) {
 	pc := makeTestTicketPlanPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-review", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-review", `{
 		"verdict": "APPROVED",
 		"summary": "Ticket plan is well-structured with clear boundaries and full coverage",
 		"findings": []
-	}`+"\n```\n")
+	}`)
 
 	res, err := Review(context.Background(), backend, pc, sampleTicketPlan, []string{"REQ-001", "REQ-002"}, "spec-rev")
 	if err != nil {
@@ -110,14 +110,14 @@ func TestTicketPlanReview_ChangesRequired(t *testing.T) {
 	pc := makeTestTicketPlanPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-review", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Ticket plan has issues with sizing and coupling",
 		"findings": [
 			{"severity": "ERROR", "ticket_key": "TKT-001", "requirement": "REQ-001", "message": "Ticket TKT-001 is too large, covers multiple unrelated responsibilities"},
 			{"severity": "WARNING", "ticket_key": "TKT-002", "requirement": "", "message": "Ticket TKT-002 has vague acceptance criteria: 'Coverage > 80%' is not measurable"}
 		]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Review(context.Background(), backend, pc, sampleTicketPlan, []string{"REQ-001", "REQ-002"}, "spec-rev")
 	if err != nil {
@@ -199,7 +199,7 @@ func TestTicketPlanReviewValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pc := makeTestTicketPlanPC()
 			backend := planningagent.NewFakeBackend()
-			backend.ProgramResult("ticket-plan-review", "```json\n"+tt.json+"\n```\n")
+			backend.ProgramResult("ticket-plan-review", tt.json)
 
 			_, err := Review(context.Background(), backend, pc, sampleTicketPlan, []string{"REQ-001", "REQ-002"}, "spec-rev")
 			if tt.wantErr {

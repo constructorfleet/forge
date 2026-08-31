@@ -52,13 +52,13 @@ func TestScenario07_TicketPlanCycleRejected(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	seedApprovedSpec(t, ctx, backend, loader)
 
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":["TKT-002"]},
 		{"key":"TKT-002","objective":"List widgets","requirements":["REQ-002"],
 		 "acceptance_criteria":["listing returns every widget"],"dependencies":["TKT-001"]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"n/a","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"n/a","findings":[]}`))
 
 	err := specengine.NewSpecEngine(backend).GenerateTicketPlan(ctx, "widget", loader)
 	if err == nil {
@@ -89,11 +89,11 @@ func TestScenario08_MissingRequirementCoverageRejected(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	seedApprovedSpec(t, ctx, backend, loader)
 
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":[]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"n/a","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"n/a","findings":[]}`))
 
 	err := specengine.NewSpecEngine(backend).GenerateTicketPlan(ctx, "widget", loader)
 	if err == nil {
@@ -128,19 +128,19 @@ func TestScenario09_TicketPlanReviewRepair(t *testing.T) {
 	seedApprovedSpec(t, ctx, backend, loader)
 
 	// One oversized ticket covering both requirements...
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Build the whole widget service",
 		 "requirements":["REQ-001","REQ-002"],
 		 "acceptance_criteria":["everything works"],"dependencies":[]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{
 		"verdict":"CHANGES_REQUIRED",
 		"summary":"TKT-001 bundles unrelated requirements",
 		"findings":[{"severity":"ERROR","ticket_key":"TKT-001","requirement":"REQ-002",
 			"message":"split listing out of the persistence ticket"}]
 	}`))
 	// ...split into two on repair.
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":[],
 		 "estimate":{"size":"M","risk":"new_tech"}},
@@ -148,7 +148,7 @@ func TestScenario09_TicketPlanReviewRepair(t *testing.T) {
 		 "acceptance_criteria":["listing returns every widget"],"dependencies":["TKT-001"],
 		 "estimate":{"size":"S"}}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"well scoped","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"well scoped","findings":[]}`))
 
 	if err := specengine.NewSpecEngine(backend).GenerateTicketPlan(ctx, "widget", loader); err != nil {
 		t.Fatalf("GenerateTicketPlan: %v", err)
@@ -230,13 +230,13 @@ func TestScenario10_HumanApprovalRevisionMismatch(t *testing.T) {
 	approveArtifact(loader.spec)
 	approvedSpecRev := loader.spec.ApprovedRevision
 
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":[]},
 		{"key":"TKT-002","objective":"List widgets","requirements":["REQ-002"],
 		 "acceptance_criteria":["listing returns every widget"],"dependencies":["TKT-001"]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"good","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"good","findings":[]}`))
 	if err := eng.GenerateTicketPlan(ctx, "widget", loader); err != nil {
 		t.Fatalf("GenerateTicketPlan after approval: %v", err)
 	}

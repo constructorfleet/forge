@@ -36,7 +36,7 @@ func TestSpecEngineGenerateSpec(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -44,12 +44,12 @@ func TestSpecEngineGenerateSpec(t *testing.T) {
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	}`)
+	backend.ProgramResult("specification-review", `{
 		"verdict": "APPROVED",
 		"summary": "Specification is clear, complete, and well-structured",
 		"findings": []
-	}`+"\n```\n")
+	}`)
 
 	engine := specengine.NewSpecEngine(backend)
 	err := engine.GenerateSpec(context.Background(), "feature-1", loader)
@@ -129,7 +129,7 @@ func TestSpecEngineGenerateSpec_ReviewChangesRequiredThenApproved(t *testing.T) 
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -137,15 +137,15 @@ func TestSpecEngineGenerateSpec_ReviewChangesRequiredThenApproved(t *testing.T) 
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
+	}`)
 	// First review returns CHANGES_REQUIRED
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	backend.ProgramResult("specification-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Specification needs improvement",
 		"findings": [{"severity": "WARNING", "file": "", "line": 0, "message": "Non-Goals section is too brief"}]
-	}`+"\n```\n")
+	}`)
 	// Second generation (repair) produces improved spec
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite with improved non-goals",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -153,13 +153,13 @@ func TestSpecEngineGenerateSpec_ReviewChangesRequiredThenApproved(t *testing.T) 
 		],
 		"non_goals": ["Not building a gadget", "Not building a doohickey"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
+	}`)
 	// Second review returns APPROVED
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	backend.ProgramResult("specification-review", `{
 		"verdict": "APPROVED",
 		"summary": "Specification is clear, complete, and well-structured",
 		"findings": []
-	}`+"\n```\n")
+	}`)
 
 	engine := specengine.NewSpecEngine(backend)
 	err := engine.GenerateSpec(context.Background(), "feature-1", loader)
@@ -216,7 +216,7 @@ func TestSpecEngineGenerateSpec_ReviewBudgetExhausted(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -224,14 +224,14 @@ func TestSpecEngineGenerateSpec_ReviewBudgetExhausted(t *testing.T) {
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
+	}`)
 	// All 3 reviews return CHANGES_REQUIRED (default ReviewRetryLimit = 3)
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	backend.ProgramResult("specification-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Specification needs improvement",
 		"findings": [{"severity": "WARNING", "file": "", "line": 0, "message": "Non-Goals section is too brief"}]
-	}`+"\n```\n")
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	}`)
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite v2",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -239,13 +239,13 @@ func TestSpecEngineGenerateSpec_ReviewBudgetExhausted(t *testing.T) {
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	}`)
+	backend.ProgramResult("specification-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Specification still needs improvement",
 		"findings": [{"severity": "WARNING", "file": "", "line": 0, "message": "Non-Goals section is too brief"}]
-	}`+"\n```\n")
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	}`)
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder using SQLite v3",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -253,12 +253,12 @@ func TestSpecEngineGenerateSpec_ReviewBudgetExhausted(t *testing.T) {
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	}`)
+	backend.ProgramResult("specification-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Specification still needs improvement",
 		"findings": [{"severity": "WARNING", "file": "", "line": 0, "message": "Non-Goals section is too brief"}]
-	}`+"\n```\n")
+	}`)
 
 	engine := specengine.NewSpecEngine(backend)
 	err := engine.GenerateSpec(context.Background(), "feature-1", loader)
@@ -347,7 +347,7 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-generation", `{
 		"tickets": [
 			{
 				"key": "TKT-001",
@@ -364,12 +364,12 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 				"dependencies": ["TKT-001"]
 			}
 		]
-	}`+"\n```\n")
-	backend.ProgramResult("ticket-plan-review", "```json\n"+`{
+	}`)
+	backend.ProgramResult("ticket-plan-review", `{
 		"verdict": "APPROVED",
 		"summary": "Ticket plan is well-structured with clear boundaries and full coverage",
 		"findings": []
-	}`+"\n```\n")
+	}`)
 
 	engine := specengine.NewSpecEngine(backend)
 	err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader)

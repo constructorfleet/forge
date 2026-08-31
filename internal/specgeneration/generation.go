@@ -70,15 +70,13 @@ func buildSpecGenerationPrompt(req specGenerationRequest) string {
 	prompt += "2. **Requirements** - A list of requirements with stable IDs (REQ-001, REQ-002, ...)\n"
 	prompt += "3. **Non-Goals** - Things explicitly NOT in scope\n"
 	prompt += "4. **Decision Refs** - List of decision IDs that informed this spec\n\n"
-	prompt += "Return your response as a JSON object in a fenced code block:\n"
-	prompt += "```json\n"
+	prompt += "Return your response as a JSON object with this shape:\n"
 	prompt += "{\n"
 	prompt += `  "summary": "...",` + "\n"
 	prompt += `  "requirements": [{"id": "REQ-001", "description": "..."}, ...],` + "\n"
 	prompt += `  "non_goals": ["...", ...],` + "\n"
 	prompt += `  "decision_refs": ["...", ...]` + "\n"
 	prompt += "}\n"
-	prompt += "```\n"
 
 	return prompt
 }

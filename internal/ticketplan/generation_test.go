@@ -57,7 +57,7 @@ func TestTicketPlanGeneration(t *testing.T) {
 	pc := makeTestTicketPlanPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-generation", `{
 		"tickets": [
 			{
 				"key": "TKT-001",
@@ -74,7 +74,7 @@ func TestTicketPlanGeneration(t *testing.T) {
 				"dependencies": ["TKT-001"]
 			}
 		]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Generate(context.Background(), backend, pc)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestTicketPlanGenerationWithEstimates(t *testing.T) {
 	pc := makeTestTicketPlanPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-generation", `{
 		"tickets": [
 			{
 				"key": "TKT-001",
@@ -132,7 +132,7 @@ func TestTicketPlanGenerationWithEstimates(t *testing.T) {
 				"estimate": {"size": "L", "risk": "complex_refactor"}
 			}
 		]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Generate(context.Background(), backend, pc)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestTicketPlanGenerationWithImplementationContext(t *testing.T) {
 	pc := makeTestTicketPlanPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("ticket-plan-generation", "```json\n"+`{
+	backend.ProgramResult("ticket-plan-generation", `{
 		"tickets": [
 			{
 				"key": "TKT-001",
@@ -179,7 +179,7 @@ func TestTicketPlanGenerationWithImplementationContext(t *testing.T) {
 				"implementation_context": ["internal/widget/builder.go: extend Build() with the new option"]
 			}
 		]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Generate(context.Background(), backend, pc)
 	if err != nil {
@@ -328,7 +328,7 @@ func TestTicketPlanGenerationValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pc := makeTestTicketPlanPC()
 			backend := planningagent.NewFakeBackend()
-			backend.ProgramResult("ticket-plan-generation", "```json\n"+tt.json+"\n```\n")
+			backend.ProgramResult("ticket-plan-generation", tt.json)
 
 			_, err := Generate(context.Background(), backend, pc)
 			if tt.wantErr {

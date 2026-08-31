@@ -99,15 +99,13 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "- Every requirement from the spec must be covered by at least one ticket\n"
 	prompt += "- Every ticket must reference at least one requirement\n"
 	prompt += "- If estimate is provided, size must be S, M, L, or XL\n\n"
-	prompt += "Return your response as a JSON object in a fenced code block:\n"
-	prompt += "```json\n"
+	prompt += "Return your response as a JSON object with this shape:\n"
 	prompt += "{\n"
 	prompt += `  "tickets": [` + "\n"
 	prompt += `    {"key": "TKT-001", "objective": "...", "requirements": ["REQ-001"], "acceptance_criteria": ["..."], "dependencies": [], "implementation_context": ["internal/foo/bar.go: extend Baz() with ..."], "estimate": {"size": "M", "risk": "new_tech"}},` + "\n"
 	prompt += `    ...` + "\n"
 	prompt += `  ]` + "\n"
 	prompt += "}\n"
-	prompt += "```\n"
 
 	return prompt
 }

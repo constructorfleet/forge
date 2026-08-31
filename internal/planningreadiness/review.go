@@ -88,7 +88,7 @@ func buildPrompt(pc planningagent.PlanningContext) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("Respond with exactly one fenced json block containing:\n" +
+	b.WriteString("Respond with a JSON object containing:\n" +
 		`{"status":"READY_FOR_SPEC|NOT_READY","decisions":[{"temp_key":"...","title":"...",` +
 		`"question":"...","depends_on":["..."],"consequential":true}]}` + "\n")
 

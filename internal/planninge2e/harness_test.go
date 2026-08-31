@@ -185,10 +185,10 @@ func sectionBody(a *planning.Artifact, heading string) string {
 // Fake backend scripting helpers
 // ---------------------------------------------------------------------------
 
-// fenced wraps raw JSON in the fenced ```json block every planning contract's
-// structured-result extractor (planningagent.InvokeStructured) scans for.
-func fenced(raw string) string {
-	return "```json\n" + raw + "\n```\n"
+// bareJSON returns raw as-is: the bare JSON every planning contract's strict
+// decode path (planningagent.InvokeStructured) expects from the backend.
+func bareJSON(raw string) string {
+	return raw
 }
 
 // invocationKeys returns the ordered list of stage keys the backend was

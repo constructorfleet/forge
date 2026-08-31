@@ -35,12 +35,11 @@ func TestResolve_DecodesResult(t *testing.T) {
 	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("Where does state live?")})
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" +
+	backend.ProgramDefault(
 		`{"outcome":"SQLite","rationale":"simplest for MVP","consequences":"single-writer",` +
-		`"assumptions":"low concurrency","new_unknowns":[` +
-		`{"temp_key":"a","title":"Pick migration tool","question":"?","depends_on":[],"consequential":true}` +
-		`]}` +
-		"\n```\n")
+			`"assumptions":"low concurrency","new_unknowns":[` +
+			`{"temp_key":"a","title":"Pick migration tool","question":"?","depends_on":[],"consequential":true}` +
+			`]}`)
 
 	res, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"})
 	if err != nil {
@@ -65,7 +64,7 @@ func TestResolve_DecodesResult(t *testing.T) {
 func TestResolve_RejectsUnknownTarget(t *testing.T) {
 	pc := planningContext(t)
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"outcome":"x"}` + "\n```\n")
+	backend.ProgramDefault(`{"outcome":"x"}`)
 
 	if _, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "missing"}); err == nil {
 		t.Fatal("Resolve: want error for target not present in context, got nil")
@@ -78,7 +77,7 @@ func TestResolve_RejectsUnknownTarget(t *testing.T) {
 func TestResolve_RejectsBlankOutcome(t *testing.T) {
 	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("?")})
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"outcome":""}` + "\n```\n")
+	backend.ProgramDefault(`{"outcome":""}`)
 
 	if _, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"}); err == nil {
 		t.Fatal("Resolve: want error for blank outcome, got nil")
@@ -88,9 +87,7 @@ func TestResolve_RejectsBlankOutcome(t *testing.T) {
 func TestResolve_RejectsInvalidNewUnknown(t *testing.T) {
 	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("?")})
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" +
-		`{"outcome":"SQLite","new_unknowns":[{"temp_key":"","title":"x","consequential":true}]}` +
-		"\n```\n")
+	backend.ProgramDefault(`{"outcome":"SQLite","new_unknowns":[{"temp_key":"","title":"x","consequential":true}]}`)
 
 	if _, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"}); err == nil {
 		t.Fatal("Resolve: want error for blank new_unknown temp_key, got nil")
@@ -101,9 +98,7 @@ func TestResolve_DecodesNeedsHuman(t *testing.T) {
 	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("Which vendor do we pick?")})
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" +
-		`{"needs_human":{"question":"Which vendor do we pick?","context":"Both meet requirements."}}` +
-		"\n```\n")
+	backend.ProgramDefault(`{"needs_human":{"question":"Which vendor do we pick?","context":"Both meet requirements."}}`)
 
 	res, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"})
 	if err != nil {
@@ -126,7 +121,7 @@ func TestResolve_DecodesNeedsHuman(t *testing.T) {
 func TestResolve_RejectsBlankNeedsHumanQuestion(t *testing.T) {
 	pc := planningContext(t, planningagent.NamedArtifact{ID: "001-storage", Artifact: questionDecision("?")})
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"needs_human":{"question":""}}` + "\n```\n")
+	backend.ProgramDefault(`{"needs_human":{"question":""}}`)
 
 	if _, err := decisionresolution.Resolve(context.Background(), backend, decisionresolution.Request{Context: pc, TargetID: "001-storage"}); err == nil {
 		t.Fatal("Resolve: want error for blank needs_human question, got nil")
