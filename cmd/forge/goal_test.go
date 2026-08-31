@@ -26,6 +26,18 @@ func writeFakeEditor(t *testing.T, dir string) string {
 	return script
 }
 
+func writeFakeGH(t *testing.T, dir string, body string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake gh script requires a POSIX shell")
+	}
+	script := filepath.Join(dir, "gh")
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return script
+}
+
 // TestRunGoalInit_CreatesValidSkeleton is the core acceptance criterion:
 // `forge goal init foo` on a clean repo must produce a goal.md that is
 // kind: goal, state: draft, has a non-empty revision, carries the four
@@ -379,6 +391,230 @@ func TestRunGoalInit_FromWithoutHeadings(t *testing.T) {
 	}
 	if a.Sections[0].Body != "Just some freeform notes with no headings." {
 		t.Fatalf("section body = %q", a.Sections[0].Body)
+	}
+}
+
+// TestRunGoalInit_FromIssueDefaultsToFeatureID confirms --from-issue fetches
+// the feature-id issue through gh, includes both title and body, and writes a
+// freshly stamped draft goal.md.
+func TestRunGoalInit_FromIssueDefaultsToFeatureID(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeGH(t, binDir, `#!/bin/sh
+if [ "$1" != "issue" ] || [ "$2" != "view" ] || [ "$3" != "245" ]; then
+  echo "unexpected args: $*" >&2
+  exit 2
+fi
+cat <<'JSON'
+{"title":"Seed from tracker","body":"## Context\n\nIssue context.\n\n## Success Criteria\n\nIt works."}
+JSON
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if code := runGoalInit([]string{"init", "245", "--from-issue"}); code != 0 {
+		t.Fatalf("runGoalInit --from-issue = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "245", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.State != "draft" {
+		t.Fatalf("State = %q, want draft", a.State)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+	wantSections := []planning.Section{
+		{Heading: "Goal", Body: "Seed from tracker"},
+		{Heading: "Context", Body: "Issue context."},
+		{Heading: "Success Criteria", Body: "It works."},
+	}
+	if len(a.Sections) != len(wantSections) {
+		t.Fatalf("got %d sections, want %d: %+v", len(a.Sections), len(wantSections), a.Sections)
+	}
+	for i, want := range wantSections {
+		if a.Sections[i].Heading != want.Heading || a.Sections[i].Body != want.Body {
+			t.Errorf("section %d = %+v, want %+v", i, a.Sections[i], want)
+		}
+	}
+}
+
+// TestRunGoalInit_FromIssueOverrideFetchesDifferentIssue confirms an
+// explicit --from-issue value selects the source issue independently of the
+// feature-id path being initialized.
+func TestRunGoalInit_FromIssueOverrideFetchesDifferentIssue(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeGH(t, binDir, `#!/bin/sh
+if [ "$3" != "999" ]; then
+  echo "expected issue 999, got $3" >&2
+  exit 2
+fi
+cat <<'JSON'
+{"title":"Override source","body":"Overridden body."}
+JSON
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if code := runGoalInit([]string{"init", "local-feature", "--from-issue", "999"}); code != 0 {
+		t.Fatalf("runGoalInit --from-issue 999 = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "local-feature", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Sections) != 1 {
+		t.Fatalf("got %d sections, want 1: %+v", len(a.Sections), a.Sections)
+	}
+	if a.Sections[0].Heading != "Goal" || a.Sections[0].Body != "Override source\n\nOverridden body." {
+		t.Fatalf("section = %+v, want title and overridden body under Goal", a.Sections[0])
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+}
+
+// TestRunGoalInit_FromIssueWithForce confirms --from-issue composes with
+// --force to overwrite an existing goal.md.
+func TestRunGoalInit_FromIssueWithForce(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	if code := runGoalInit([]string{"init", "245"}); code != 0 {
+		t.Fatalf("runGoalInit = %d, want 0", code)
+	}
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeGH(t, binDir, `#!/bin/sh
+cat <<'JSON'
+{"title":"Forced source","body":"Replacement body."}
+JSON
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if code := runGoalInit([]string{"init", "245", "--from-issue", "--force"}); code != 0 {
+		t.Fatalf("runGoalInit --from-issue --force = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "245", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Sections) != 1 || a.Sections[0].Body != "Forced source\n\nReplacement body." {
+		t.Fatalf("--force did not overwrite with fetched issue content: %+v", a.Sections)
+	}
+}
+
+// TestRunGoalInit_FromIssueWithEdit confirms --from-issue composes with
+// --edit and re-stamps the revision after the author edits the fetched draft.
+func TestRunGoalInit_FromIssueWithEdit(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeGH(t, binDir, `#!/bin/sh
+cat <<'JSON'
+{"title":"Editable source","body":"Initial body."}
+JSON
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	editor := writeFakeEditor(t, dir)
+	t.Setenv("EDITOR", editor)
+	t.Setenv("VISUAL", "")
+
+	if code := runGoalInit([]string{"init", "245", "--from-issue", "--edit"}); code != 0 {
+		t.Fatalf("runGoalInit --from-issue --edit = %d, want 0", code)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "245", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !containsLine(a.Sections[len(a.Sections)-1].Body, "Edited in-editor.") {
+		t.Fatalf("edited content missing from fetched goal: %+v", a.Sections)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("edited artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+}
+
+// TestRunGoalInit_FromIssueMissingGHFailsWithoutWriting confirms a missing gh
+// executable is reported before any goal.md is created.
+func TestRunGoalInit_FromIssueMissingGHFailsWithoutWriting(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	emptyPath := filepath.Join(dir, "empty-path")
+	if err := os.MkdirAll(emptyPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", emptyPath)
+
+	if code := runGoalInit([]string{"init", "245", "--from-issue"}); code == 0 {
+		t.Fatal("runGoalInit --from-issue without gh = 0, want non-zero")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
+		t.Fatalf(".forge dir was created despite missing gh, stat err = %v", err)
+	}
+}
+
+// TestRunGoalInit_FromIssueMissingIssueFailsWithoutWriting confirms a gh
+// lookup failure, such as a missing issue, is reported before any goal.md is
+// created.
+func TestRunGoalInit_FromIssueMissingIssueFailsWithoutWriting(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeGH(t, binDir, `#!/bin/sh
+echo 'GraphQL: Could not resolve to an Issue with the number of 404.' >&2
+exit 1
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if code := runGoalInit([]string{"init", "404", "--from-issue"}); code == 0 {
+		t.Fatal("runGoalInit --from-issue for missing issue = 0, want non-zero")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
+		t.Fatalf(".forge dir was created despite missing issue, stat err = %v", err)
 	}
 }
 

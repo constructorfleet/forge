@@ -2,6 +2,7 @@ package ticketplanreview
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/planning"
@@ -212,5 +213,26 @@ func TestTicketPlanReviewValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildTicketPlanReviewPromptFlagsNoCodeDeliverables(t *testing.T) {
+	pc := makeTestTicketPlanPC()
+
+	prompt := buildTicketPlanReviewPrompt(ticketPlanReviewRequest{
+		Context:      pc,
+		TicketPlan:   sampleTicketPlan,
+		SpecReqIDs:   []string{"REQ-001", "REQ-002"},
+		SpecRevision: "spec-rev",
+	})
+
+	for _, want := range []string{
+		"Flag executable tickets whose only deliverable is verification-only",
+		"tracker-only",
+		"cannot produce a git diff",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q: %q", want, prompt)
+		}
 	}
 }

@@ -263,6 +263,25 @@ func TestBuildTicketPlanGenerationPromptRequestsTicketKind(t *testing.T) {
 	}
 }
 
+func TestBuildTicketPlanGenerationPromptExcludesNoCodeDeliverables(t *testing.T) {
+	pc, err := planningagent.Compile(agent.RepositoryContext{BaseRevision: "base-rev"}, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	prompt := buildTicketPlanGenerationPrompt(ticketPlanGenerationRequest{Context: pc})
+
+	for _, want := range []string{
+		"Do not create executable tickets for verification-only outcomes",
+		"tracker-only deliverables",
+		"cannot produce a git diff",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
 func TestRenderTicketBodyIncludesImplementationContext(t *testing.T) {
 	t.Run("with entries", func(t *testing.T) {
 		body := RenderTicketBody(TicketGenResult{

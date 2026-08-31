@@ -31,6 +31,25 @@ func TestGitDiffProducer_ReturnsDiffBetweenBaseAndHead(t *testing.T) {
 	}
 }
 
+func TestGitDiffProducer_IncludesUncommittedWorktreeChanges(t *testing.T) {
+	root, base := gittest.NewTempRepo(t)
+
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+
+	diff, err := gitDiffProducer{}.Diff(context.Background(), root, base)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff == "" {
+		t.Fatal("Diff returned empty string, want uncommitted worktree changes to be visible")
+	}
+	if want := "feature.txt"; !strings.Contains(diff, want) {
+		t.Errorf("Diff = %q, want it to mention %q", diff, want)
+	}
+}
+
 func TestGitDiffProducer_ReturnsErrorForInvalidBase(t *testing.T) {
 	root, _ := gittest.NewTempRepo(t)
 
