@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.4](https://github.com/constructorfleet/forge/compare/forge-v0.15.3...forge-v0.15.4) (2026-08-31)
+
+
+### Bug Fixes
+
+* agent IMPLEMENTED + empty diff hard-FAILs instead of routing to NEEDS_INFO (no-code deliverables can't complete) ([#262](https://github.com/constructorfleet/forge/issues/262)) ([1f884f1](https://github.com/constructorfleet/forge/commit/1f884f1b368479365d4de70e3b240aa496965c61))
+
 ## [0.15.3](https://github.com/constructorfleet/forge/compare/forge-v0.15.2...forge-v0.15.3) (2026-08-31)
 
 
