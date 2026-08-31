@@ -10,6 +10,10 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
+	"github.com/Teagan42/forge/internal/agent/codex"
+	"github.com/Teagan42/forge/internal/agent/openai"
+	"github.com/Teagan42/forge/internal/agent/opencode"
+	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -140,13 +144,18 @@ func TestRepoFromOrigin_ErrorsOnUnrecognizedRemote(t *testing.T) {
 func TestBuildAgent_SelectsByProvider(t *testing.T) {
 	cases := []struct {
 		provider string
-		wantFake bool
+		wantType any
 		wantErr  bool
 	}{
-		{"fake", true, false},
-		{"claude-code", false, false},
-		{"", false, false},
-		{"unknown-provider", false, true},
+		{"fake", (*agent.FakeAgent)(nil), false},
+		{"claude-code", (*claude.Adapter)(nil), false},
+		{"", (*claude.Adapter)(nil), false},
+		{"codex", (*codex.Adapter)(nil), false},
+		{"opencode", (*opencode.Adapter)(nil), false},
+		{"pi", (*pi.Adapter)(nil), false},
+		{"openai-responses", (*openai.ResponsesAdapter)(nil), false},
+		{"openai-chat-completions", (*openai.ChatCompletionsAdapter)(nil), false},
+		{"unknown-provider", nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
@@ -162,13 +171,10 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buildAgent: %v", err)
 			}
-			if tc.wantFake {
-				if _, ok := ag.(*agent.FakeAgent); !ok {
-					t.Errorf("buildAgent(%q) = %T, want *agent.FakeAgent", tc.provider, ag)
-				}
-			} else if adapter, ok := ag.(*claude.Adapter); !ok {
-				t.Errorf("buildAgent(%q) = %T, want *claude.Adapter", tc.provider, ag)
-			} else if adapter.PermissionMode != string(cfg.Agent.PermissionMode) {
+			if reflect.TypeOf(ag) != reflect.TypeOf(tc.wantType) {
+				t.Fatalf("buildAgent(%q) = %T, want %T", tc.provider, ag, tc.wantType)
+			}
+			if adapter, ok := ag.(*claude.Adapter); ok && adapter.PermissionMode != string(cfg.Agent.PermissionMode) {
 				t.Errorf("buildAgent(%q).PermissionMode = %q, want %q", tc.provider, adapter.PermissionMode, cfg.Agent.PermissionMode)
 			}
 		})
@@ -184,6 +190,11 @@ func TestBuildPlanningBackend_SelectsByProvider(t *testing.T) {
 		{"fake", true, false},
 		{"claude-code", false, false},
 		{"", false, false},
+		{"codex", false, false},
+		{"opencode", false, false},
+		{"pi", false, false},
+		{"openai-responses", false, false},
+		{"openai-chat-completions", false, false},
 		{"unknown-provider", false, true},
 	}
 	for _, tc := range cases {

@@ -13,6 +13,10 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
+	"github.com/Teagan42/forge/internal/agent/codex"
+	"github.com/Teagan42/forge/internal/agent/openai"
+	"github.com/Teagan42/forge/internal/agent/opencode"
+	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/ci"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
@@ -616,8 +620,8 @@ func (g gitReachabilityChecker) IsAncestor(ctx context.Context, commit, branch s
 // buildAgent selects the Agent Adapter per cfg.Agent.Provider. "fake" opts
 // into a FakeAgent programmed to report IMPLEMENTED, so `forge execute` is
 // demoable end-to-end without a real coding backend (see ticket 18: "run it
-// with the fake adapter and watch state flow"). Any other provider value
-// invokes the real Claude Code CLI adapter (ticket 25).
+// with the fake adapter and watch state flow"). Empty defaults to the real
+// Claude Code CLI adapter (ticket 25).
 //
 // The same Agent this returns is also wrapped by agentreviewer.Reviewer
 // (issue #158, see buildEngine's eng.Reviewer wiring) whenever
@@ -639,15 +643,25 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 			PermissionMode: string(cfg.Agent.PermissionMode),
 			Timeout:        cfg.Agent.Timeout,
 		}, nil
+	case "codex":
+		return &codex.Adapter{}, nil
+	case "opencode":
+		return &opencode.Adapter{}, nil
+	case "pi":
+		return &pi.Adapter{}, nil
+	case "openai-responses":
+		return &openai.ResponsesAdapter{}, nil
+	case "openai-chat-completions":
+		return &openai.ChatCompletionsAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}
 }
 
 // buildPlanningBackend selects the planning Backend `forge plan` runs
-// against, per cfg.Agent.Provider -- mirroring buildAgent's provider switch.
+// against, per cfg.Agent.Provider -- reusing buildAgent's provider switch.
 // "fake" returns the scripted planningagent.FakeBackend used by tests and
-// demos; "claude-code"/"" wraps buildAgent's production agent.Agent in
+// demos; every production provider wraps buildAgent's agent.Agent in
 // planningagent.AgentBackend so planning genuinely invokes the configured
 // coding backend. Any other provider value is an error, matching buildAgent.
 //
@@ -669,14 +683,12 @@ func buildPlanningBackend(cfg config.Config, store planningagent.TranscriptStore
 	switch cfg.Agent.Provider {
 	case "fake":
 		return planningagent.NewFakeBackend(), nil
-	case "claude-code", "":
+	default:
 		ag, err := buildAgent(cfg)
 		if err != nil {
 			return nil, err
 		}
 		return planningagent.NewPersistingAgentBackend(ag, store, featureID, featureID), nil
-	default:
-		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}
 }
 
