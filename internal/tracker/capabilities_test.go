@@ -15,6 +15,7 @@ var _ tracker.Tracker = (*tracker.FakeTracker)(nil)
 var _ tracker.SCM = (*scmOnly)(nil)
 var _ tracker.CI = (*ciOnly)(nil)
 var _ tracker.ReviewGetter = (*reviewOnly)(nil)
+var _ tracker.DependencyStore = (*dependencyStoreOnly)(nil)
 
 type issueOnlyTracker struct{}
 
@@ -78,6 +79,27 @@ type reviewOnly struct{}
 
 func (reviewOnly) GetReviews(context.Context, tracker.ChangeRequestRef) ([]tracker.Review, error) {
 	return nil, nil
+}
+
+type dependencyStoreOnly struct{}
+
+func (dependencyStoreOnly) GetDependencies(context.Context, string) ([]tracker.DependencyEdge, error) {
+	return nil, nil
+}
+
+func TestDependencyEdgeIsNeutralAndSingleProviderBlocksOnly(t *testing.T) {
+	edge := tracker.DependencyEdge{
+		Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+		DependsOn: domain.IssueRef{Provider: "github", ID: "1"},
+		Kind:      tracker.DependencyBlocks,
+	}
+
+	if edge.Kind != tracker.DependencyBlocks {
+		t.Fatalf("Kind = %q, want %q", edge.Kind, tracker.DependencyBlocks)
+	}
+	if edge.Issue.Provider != edge.DependsOn.Provider {
+		t.Fatalf("expected a single-provider edge, got %+v", edge)
+	}
 }
 
 func TestMergeBlockerCarriesReasonSourceAndRawProviderDetail(t *testing.T) {

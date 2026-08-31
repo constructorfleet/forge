@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -38,19 +39,27 @@ func (e *CycleError) Error() string {
 	return fmt.Sprintf("tracker: dependency cycle detected: %s", strings.Join(e.Cycle, " -> "))
 }
 
-// BuildDAG constructs the Dependency DAG from a set of Issues and detects
-// cycles before returning. A non-nil error is always a *CycleError.
-func BuildDAG(issues []domain.Issue) (*DAG, error) {
+// buildDAG is the shared graph-construction core for BuildDAG and
+// BuildDAGFromStore: allocate an empty DAG, add ids as nodes plus whatever
+// dependsOn edges next reports for each, then run cycle detection before
+// returning. The two public constructors differ only in how next resolves
+// an Issue ID's DependsOn IDs (a pre-populated field vs. a DependencyStore
+// read), so that is the only thing they pass in.
+func buildDAG(ids []string, next func(id string) ([]string, error)) (*DAG, error) {
 	d := &DAG{
 		nodes: make(map[string]bool),
 		edges: make(map[string][]string),
 	}
 
-	for _, issue := range issues {
-		d.nodes[issue.ID] = true
-		for _, dp := range issue.Dependencies {
-			d.nodes[dp.DependsOnID] = true
-			d.edges[issue.ID] = append(d.edges[issue.ID], dp.DependsOnID)
+	for _, id := range ids {
+		d.nodes[id] = true
+		dependsOn, err := next(id)
+		if err != nil {
+			return nil, err
+		}
+		for _, dependsOnID := range dependsOn {
+			d.nodes[dependsOnID] = true
+			d.edges[id] = append(d.edges[id], dependsOnID)
 		}
 	}
 
@@ -59,6 +68,46 @@ func BuildDAG(issues []domain.Issue) (*DAG, error) {
 	}
 
 	return d, nil
+}
+
+// BuildDAG constructs the Dependency DAG from a set of Issues and detects
+// cycles before returning. A non-nil error is always a *CycleError.
+func BuildDAG(issues []domain.Issue) (*DAG, error) {
+	ids := make([]string, len(issues))
+	dependsOnByID := make(map[string][]string, len(issues))
+	for i, issue := range issues {
+		ids[i] = issue.ID
+		dependsOn := make([]string, len(issue.Dependencies))
+		for j, dp := range issue.Dependencies {
+			dependsOn[j] = dp.DependsOnID
+		}
+		dependsOnByID[issue.ID] = dependsOn
+	}
+
+	return buildDAG(ids, func(id string) ([]string, error) {
+		return dependsOnByID[id], nil
+	})
+}
+
+// BuildDAGFromStore constructs the Dependency DAG the same way BuildDAG
+// does, but reads each Issue's DependencyEdges through the DependencyStore
+// capability (GetDependencies) instead of a pre-populated
+// domain.Issue.Dependencies field — this is the DependencyStore read path
+// callers (the scheduler, the single-Issue engine) build the DAG from. As
+// with BuildDAG, External Issues named only as a DependsOn (see CONTEXT.md
+// "External Issue") become observed nodes even though ids never names them.
+func BuildDAGFromStore(ctx context.Context, store DependencyStore, ids []string) (*DAG, error) {
+	return buildDAG(ids, func(id string) ([]string, error) {
+		edges, err := store.GetDependencies(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("tracker: fetch dependencies for issue %s: %w", id, err)
+		}
+		dependsOn := make([]string, len(edges))
+		for i, edge := range edges {
+			dependsOn[i] = edge.DependsOn.ID
+		}
+		return dependsOn, nil
+	})
 }
 
 // findCycle runs DFS from every node, tracking the current path so a cycle

@@ -216,6 +216,36 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesCommitting(t *testing.T) {
 	}
 }
 
+// TestExecute_DetectsCycleInIssueDependencies proves Execute builds its
+// single-Issue DAG check from the domain.Issue.Dependencies field GetIssue
+// returns (see tracker.BuildDAG) and rejects a cycle before any Worker
+// launches — here a self-dependency, the smallest possible cycle.
+func TestExecute_DetectsCycleInIssueDependencies(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{
+		"7": {
+			ID:           "7",
+			Dependencies: []domain.Dependency{{IssueID: "7", DependsOnID: "7"}},
+		},
+	}}
+	mgr, err := workspace.NewManager(repoRoot)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	fake := agent.NewFakeAgent()
+	eng := engine.New(store, trk, mgr, fake, config.Default(), repoRoot)
+
+	_, err = eng.Execute(context.Background(), "7", base)
+	if err == nil {
+		t.Fatal("Execute: want a dependency-cycle error, got nil")
+	}
+	var cycleErr *tracker.CycleError
+	if !errors.As(err, &cycleErr) {
+		t.Fatalf("Execute error = %v, want it to wrap *tracker.CycleError", err)
+	}
+}
+
 func TestExecuteInExecution_UsesExistingExecutionWithoutMintingAnother(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"84": {ID: "84"},

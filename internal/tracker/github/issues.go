@@ -28,23 +28,37 @@ type ghIssue struct {
 // block in the issue body otherwise; any configured DependencyOverrides
 // then take precedence (see CONTEXT.md "Dependency Source" and ADR 0003).
 func (c *Client) GetIssue(ctx context.Context, id string) (domain.Issue, error) {
-	number, err := parseIssueID(id)
-	if err != nil {
-		return domain.Issue{}, err
-	}
-
-	var gh ghIssue
-	path := c.issuePath(number, "")
-	if err := c.do(ctx, http.MethodGet, path, nil, &gh); err != nil {
-		return domain.Issue{}, err
-	}
-
-	native, nativeOK, err := c.fetchBlockedBy(ctx, number)
+	gh, native, nativeOK, err := c.fetchIssueAndDeps(ctx, id)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 
 	return c.normalizeIssue(gh, native, nativeOK)
+}
+
+// fetchIssueAndDeps fetches id's raw GitHub issue and its native "blocked
+// by" dependency IDs in one round-trip sequence. GetIssue and GetDependencies
+// both need this exact fetch (issue body, then native relationships) before
+// diverging into domain.Issue normalization vs. DependencyEdge resolution;
+// sharing it here keeps that sequence — and any future change to it, such as
+// retry behavior or error wrapping — from drifting between the two callers.
+func (c *Client) fetchIssueAndDeps(ctx context.Context, id string) (gh ghIssue, native []string, nativeOK bool, err error) {
+	number, err := parseIssueID(id)
+	if err != nil {
+		return ghIssue{}, nil, false, err
+	}
+
+	path := c.issuePath(number, "")
+	if err := c.do(ctx, http.MethodGet, path, nil, &gh); err != nil {
+		return ghIssue{}, nil, false, err
+	}
+
+	native, nativeOK, err = c.fetchBlockedBy(ctx, number)
+	if err != nil {
+		return ghIssue{}, nil, false, err
+	}
+
+	return gh, native, nativeOK, nil
 }
 
 // GetIssues fetches multiple Issues by ID, normalized to domain.Issue.
@@ -113,30 +127,17 @@ func (c *Client) Capabilities() tracker.Capabilities {
 func (c *Client) normalizeIssue(gh ghIssue, native []string, nativeOK bool) (domain.Issue, error) {
 	issueID := strconv.Itoa(gh.Number)
 
-	base := native
-	if !nativeOK || len(native) == 0 {
-		// No native relationships to read here — fall back to the body
-		// block. Its strict syntax still fails closed on freeform text
-		// rather than guessing (see tracker.ParseDependencyBlock).
-		parsed, err := tracker.ParseDependencyBlock(gh.Body)
-		if err != nil {
-			return domain.Issue{}, fmt.Errorf("github: issue #%d: %w", gh.Number, err)
-		}
-		base = parsed
+	edges, err := c.dependencyEdges(gh, native, nativeOK)
+	if err != nil {
+		return domain.Issue{}, err
 	}
-	final := tracker.ApplyOverrides(issueID, base, c.DependencyOverrides)
-	provider := c.Provider
-	if provider == "" {
-		provider = "github"
-	}
-
-	deps := make([]domain.Dependency, len(final))
-	for i, dependsOn := range final {
+	deps := make([]domain.Dependency, len(edges))
+	for i, edge := range edges {
 		deps[i] = domain.Dependency{
-			IssueID:      issueID,
-			DependsOnID:  dependsOn,
-			IssueRef:     domain.IssueRef{Provider: provider, ID: issueID},
-			DependsOnRef: domain.IssueRef{Provider: provider, ID: dependsOn},
+			IssueID:      edge.Issue.ID,
+			DependsOnID:  edge.DependsOn.ID,
+			IssueRef:     edge.Issue,
+			DependsOnRef: edge.DependsOn,
 		}
 	}
 
@@ -146,7 +147,7 @@ func (c *Client) normalizeIssue(gh ghIssue, native []string, nativeOK bool) (dom
 	// there is exactly one writer of the field.
 	return domain.Issue{
 		ID:           issueID,
-		Provider:     provider,
+		Provider:     c.providerID(),
 		Title:        gh.Title,
 		Body:         gh.Body,
 		Dependencies: deps,

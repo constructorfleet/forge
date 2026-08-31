@@ -22,7 +22,7 @@ import (
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
-// stubTracker is a minimal scheduler.IssueFetcher double.
+// stubTracker is a minimal tracker.DependencyStore double.
 type stubTracker struct {
 	issues map[string]domain.Issue
 }
@@ -35,7 +35,41 @@ func (s *stubTracker) GetIssue(_ context.Context, id string) (domain.Issue, erro
 	return issue, nil
 }
 
-var _ scheduler.IssueFetcher = (*stubTracker)(nil)
+// GetDependencies implements tracker.DependencyStore by deriving edges from
+// the canned Issue's own Dependencies field — the same source the scheduler's
+// removed GetIssue-based fallback read, so existing tests build the identical
+// DAG through the single DependencyStore path.
+func (s *stubTracker) GetDependencies(_ context.Context, id string) ([]tracker.DependencyEdge, error) {
+	issue, ok := s.issues[id]
+	if !ok {
+		return nil, errors.New("stubTracker: no issue " + id)
+	}
+	edges := make([]tracker.DependencyEdge, len(issue.Dependencies))
+	for i, dp := range issue.Dependencies {
+		edges[i] = tracker.DependencyEdge{
+			Issue:     domain.IssueRef{ID: id},
+			DependsOn: domain.IssueRef{ID: dp.DependsOnID},
+		}
+	}
+	return edges, nil
+}
+
+var _ tracker.DependencyStore = (*stubTracker)(nil)
+
+// storeBackedTracker is a stubTracker that additionally implements
+// tracker.DependencyStore, with dependency edges configured independently
+// of each Issue's (empty) Dependencies field — proving Run builds the DAG
+// from DependencyStore reads rather than domain.Issue.Dependencies.
+type storeBackedTracker struct {
+	stubTracker
+	edges map[string][]tracker.DependencyEdge
+}
+
+func (s *storeBackedTracker) GetDependencies(_ context.Context, id string) ([]tracker.DependencyEdge, error) {
+	return s.edges[id], nil
+}
+
+var _ tracker.DependencyStore = (*storeBackedTracker)(nil)
 
 // alwaysSatisfied is a DependencyResolver reporting every Dependency
 // satisfied immediately, for tests exercising concurrency rather than
@@ -1110,6 +1144,50 @@ func TestRun_CycleRejected_NoWorkDispatched(t *testing.T) {
 	}
 	if exec.CallCount("a") != 0 || exec.CallCount("b") != 0 {
 		t.Errorf("Executor was invoked despite a cycle: calls a=%d b=%d", exec.CallCount("a"), exec.CallCount("b"))
+	}
+}
+
+// TestRun_DAGBuiltFromDependencyStoreNotIssueDependenciesField proves Run
+// builds the Dependency DAG from a DependencyStore read (GetDependencies)
+// rather than the domain.Issue.Dependencies field GetIssue returns: both
+// Issues here have an empty Dependencies field, so the old direct-parse
+// path would treat them as independent and dispatch "b" immediately. The
+// DependencyStore instead names "b" as depending on "a", and a resolver
+// that never reports satisfaction means "b" can only end up recorded
+// unsatisfiable if that store-sourced edge actually gated it.
+func TestRun_DAGBuiltFromDependencyStoreNotIssueDependenciesField(t *testing.T) {
+	trk := &storeBackedTracker{
+		stubTracker: stubTracker{issues: issueSet("a", "b")},
+		edges: map[string][]tracker.DependencyEdge{
+			"b": {{
+				Issue:     domain.IssueRef{Provider: "github", ID: "b"},
+				DependsOn: domain.IssueRef{Provider: "github", ID: "a"},
+				Kind:      tracker.DependencyBlocks,
+			}},
+		},
+	}
+	exec := &scriptedExecutor{outcomes: map[string]scheduler.ExecuteOutcome{
+		"a": {ExecutionID: "exec-a", State: domain.StateDone},
+	}}
+	neverSatisfied := scheduler.DependencyResolverFunc(func(context.Context, string, string) (bool, error) {
+		return false, nil
+	})
+
+	sch := scheduler.New(trk, exec, neverSatisfied, scheduler.FixedBase("base"), 2)
+	sch.PollInterval = time.Millisecond
+
+	results, err := sch.Run(context.Background(), []string{"a", "b"})
+	if err == nil {
+		t.Fatal("Run: want a non-nil error (b's dependency is never satisfiable), got nil")
+	}
+	if results["a"].State != domain.StateDone {
+		t.Fatalf("results[a].State = %s, want DONE", results["a"].State)
+	}
+	if results["b"].Err == nil || !strings.Contains(results["b"].Err.Error(), "unsatisfiable dependency on a") {
+		t.Fatalf("results[b].Err = %v, want an unsatisfiable-dependency-on-a error", results["b"].Err)
+	}
+	if exec.CallCount("b") != 0 {
+		t.Fatalf("Executor invoked for b despite its store-sourced dependency on a never being satisfied")
 	}
 }
 

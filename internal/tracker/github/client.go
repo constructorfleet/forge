@@ -75,6 +75,7 @@ func NewClient(httpClient *http.Client, baseURL, owner, repo string) *Client {
 }
 
 var _ tracker.Tracker = (*Client)(nil)
+var _ tracker.DependencyStore = (*Client)(nil)
 
 // do issues an HTTP request against the GitHub API and decodes a JSON
 // response body into out (if out is non-nil and the response has a body).
@@ -246,6 +247,16 @@ func nextPageURL(headers http.Header) string {
 		return ""
 	}
 	return m[1]
+}
+
+// providerID returns c.Provider, defaulting to "github" when unset — the
+// single source of truth for the provider ID stamped onto domain.Issue and
+// tracker.DependencyEdge values this Client produces.
+func (c *Client) providerID() string {
+	if c.Provider == "" {
+		return "github"
+	}
+	return c.Provider
 }
 
 // issuePath builds the "/repos/{owner}/{repo}/issues/{number}{suffix}" path

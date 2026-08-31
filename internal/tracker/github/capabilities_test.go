@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
 )
@@ -16,6 +17,40 @@ var _ tracker.SCM = (*github.Client)(nil)
 var _ tracker.CI = (*github.Client)(nil)
 var _ tracker.ReviewGetter = (*github.Client)(nil)
 var _ tracker.LegacyProvider = (*github.Client)(nil)
+var _ tracker.DependencyStore = (*github.Client)(nil)
+
+func TestGetDependenciesReturnsNeutralBlocksEdgesFromBodyBlock(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":42,"body":"## Dependencies\n- #1\n- #2\n"}`))
+	})
+
+	edges, err := c.GetDependencies(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("got %d edges, want 2: %+v", len(edges), edges)
+	}
+	want := []tracker.DependencyEdge{
+		{
+			Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+			DependsOn: domain.IssueRef{Provider: "github", ID: "1"},
+			Kind:      tracker.DependencyBlocks,
+		},
+		{
+			Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+			DependsOn: domain.IssueRef{Provider: "github", ID: "2"},
+			Kind:      tracker.DependencyBlocks,
+		},
+	}
+	if edges[0] != want[0] || edges[1] != want[1] {
+		t.Fatalf("edges = %+v, want %+v", edges, want)
+	}
+}
 
 func TestCreateChangeRequestDelegatesToPullRequestCreation(t *testing.T) {
 	var sawPost bool

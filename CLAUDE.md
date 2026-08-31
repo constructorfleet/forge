@@ -22,3 +22,20 @@ Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-f
 ### Domain docs
 
 Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Writing standard
+
+Write all comments and documentation in ASD-STE100 Simplified Technical English
+(STE). This applies to code comments, doc comments, `CONTEXT.md`, ADRs, docs under
+`docs/`, and issue and PR text.
+
+Follow the STE rules:
+- Use short sentences (procedure sentences 20 words or fewer; descriptive sentences
+  25 words or fewer). One instruction per sentence.
+- Use the active voice and the present tense.
+- Use approved words in their one approved meaning; keep one term for one thing (do
+  not use synonyms for the same concept).
+- Use simple, direct words; avoid jargon, idioms, and figurative language.
+- Start each paragraph with its topic sentence.
+- Keep noun clusters to three words or fewer.
+- Use articles (a, an, the) and complete sentences; do not drop words to save space.
