@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/constructorfleet/forge/compare/forge-v0.15.5...forge-v0.16.0) (2026-08-31)
+
+
+### Features
+
+* **tracker/github:** read native issue "blocked by" relationships ([#306](https://github.com/constructorfleet/forge/issues/306)) ([b010c32](https://github.com/constructorfleet/forge/commit/b010c32f883d06ba425e3d3ae3921240438cd75c))
+
 ## [0.15.5](https://github.com/constructorfleet/forge/compare/forge-v0.15.4...forge-v0.15.5) (2026-08-31)
 
 
