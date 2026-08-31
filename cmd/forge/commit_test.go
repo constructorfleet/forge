@@ -86,3 +86,26 @@ func TestGitPublisherPush_PushesBranchToOrigin(t *testing.T) {
 		t.Fatal("expected remote branch to exist")
 	}
 }
+
+func TestGitPublisherReset_RestoresWorkspaceToCommit(t *testing.T) {
+	t.Parallel()
+
+	root, base := gittest.NewTempRepo(t)
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	gittest.RunGit(t, root, "add", "feature.txt")
+	gittest.RunGit(t, root, "commit", "-q", "-m", "candidate")
+
+	if err := (gitPublisher{}).Reset(context.Background(), root, base); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	head := strings.TrimSpace(gittest.RunGit(t, root, "rev-parse", "HEAD"))
+	if head != base {
+		t.Fatalf("HEAD = %s, want %s", head, base)
+	}
+	if _, err := os.Stat(filepath.Join(root, "feature.txt")); !os.IsNotExist(err) {
+		t.Fatalf("feature.txt stat err = %v, want file removed by reset", err)
+	}
+}

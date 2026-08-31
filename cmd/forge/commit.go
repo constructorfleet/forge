@@ -97,6 +97,22 @@ func (p gitPublisher) ForcePush(ctx context.Context, workspacePath, branch strin
 	return p.locks.WithLock(ctx, "branch:"+branch, push)
 }
 
+// Reset implements ci.BranchResetter, restoring a Forge-owned Workspace
+// branch to the pull request head recorded before an automatic conflict
+// repair candidate was attempted.
+func (p gitPublisher) Reset(ctx context.Context, workspacePath, commitSHA string) error {
+	reset := func() error {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "reset", "--hard", commitSHA).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git reset --hard %s in %s: %w: %s", commitSHA, workspacePath, err, out)
+		}
+		return nil
+	}
+	if p.locks == nil {
+		return reset()
+	}
+	return p.locks.WithLock(ctx, "workspace:"+workspacePath, reset)
+}
+
 // baseBranchName strips a "origin/" remote prefix from a configured
 // cfg.Git.Base (e.g. "origin/main" -> "main"), since buildTracker/
 // buildEngine always resolve the tracked repository from the "origin"

@@ -21,6 +21,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/replan"
@@ -202,8 +203,10 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		// Workspace branch onto eng.BaseBranch (issue 233) instead of
 		// polling checks evaluated against a base GitHub already considers
 		// out of date.
+		publisher := gitPublisher{locks: locks}
 		sup.Rebaser = wsMgr
-		sup.Pusher = gitPublisher{locks: locks}
+		sup.Pusher = publisher
+		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, publisher, gate.ExecCommandRunner{}, cfg)
 		eng.CIWaiter = sup
 	}
 	return eng, nil
@@ -296,8 +299,10 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		sup.NeedsInfoTracker = trk
 		// See buildEngine's identical wiring for why wsMgr/gitPublisher
 		// satisfy ci.Rebaser/ci.BranchPusher (issue 233).
+		publisher := gitPublisher{locks: repolock.New(repoRoot)}
 		sup.Rebaser = wsMgr
-		sup.Pusher = gitPublisher{locks: repolock.New(repoRoot)}
+		sup.Pusher = publisher
+		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, publisher, gate.ExecCommandRunner{}, cfg)
 		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}

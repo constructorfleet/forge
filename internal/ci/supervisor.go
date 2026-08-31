@@ -64,6 +64,11 @@ type Supervisor struct {
 	// Rebaser: both must be set for Wait to attempt automatic staleness
 	// remediation.
 	Pusher BranchPusher
+
+	// ConflictResolver attempts the narrow automatic pull-request conflict
+	// repair allowed by ADR 0017. Optional: nil preserves the conservative
+	// issue-109 behavior of routing merge conflicts to NEEDS_INFO.
+	ConflictResolver ConflictResolver
 }
 
 // NeedsInfoTracker is the subset of tracker.Tracker Wait needs when routing
