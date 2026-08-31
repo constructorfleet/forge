@@ -353,28 +353,6 @@ type ReviewGetter interface {
 	GetReviews(ctx context.Context, ref ChangeRequestRef) ([]Review, error)
 }
 
-// LegacyProvider is the pre-split combined provider contract. It remains for
-// callers and tests that still depend on the old all-in-one shape while new
-// orchestration code migrates to Tracker, SCM, and CI independently.
-type LegacyProvider interface {
-	Tracker
-
-	// GetMergeRequirements returns the Merge Requirements for branch,
-	// sourced from the tracker's native branch protection/rulesets (see
-	// CONTEXT.md "Merge Requirements").
-	GetMergeRequirements(ctx context.Context, branch string) (MergeRequirements, error)
-
-	// GetPullRequestChecks returns the current normalized checks attached to
-	// pull request number.
-	GetPullRequestChecks(ctx context.Context, number int) ([]PullRequestCheck, error)
-
-	// CreatePullRequest idempotently creates a pull request from
-	// req.Head into req.Base. If an open pull request already exists for
-	// req.Head, it is recovered (returned) rather than duplicated —
-	// CONTEXT.md "COMMITTING"/"PR_CREATING" (ticket 22).
-	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
-}
-
 // AuthPreflighter is an optional capability a Tracker adapter implements
 // when it needs a credential and can verify it cheaply up front. cmd/forge
 // type-asserts for this interface and, when present, calls VerifyAuth
