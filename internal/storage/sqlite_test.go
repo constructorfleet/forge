@@ -93,13 +93,19 @@ func TestExecutionRoundTrip(t *testing.T) {
 
 	issue := domain.Issue{
 		ID:          "issue-1",
+		Provider:    "linear",
 		ExecutionID: exec.ID,
 		Title:       "Add widget support",
 		Body:        "Widgets should render before gadgets.",
 		State:       domain.StateReady,
 		Scope:       domain.ScopeManaged,
 		Dependencies: []domain.Dependency{
-			{IssueID: "issue-1", DependsOnID: "issue-0"},
+			{
+				IssueID:      "issue-1",
+				DependsOnID:  "issue-0",
+				IssueRef:     domain.IssueRef{Provider: "linear", ID: "issue-1"},
+				DependsOnRef: domain.IssueRef{Provider: "linear", ID: "issue-0"},
+			},
 		},
 		RetryBudget: domain.NewRetryBudgetFrom(domain.RetryLimits{Gate: 2, Review: 2, CI: 2}, 1, 0, 0),
 	}
@@ -129,8 +135,17 @@ func TestExecutionRoundTrip(t *testing.T) {
 	if got.Title != issue.Title || got.Body != issue.Body {
 		t.Fatalf("issue title/body mismatch: got %+v", got)
 	}
+	if got.Provider != "linear" {
+		t.Fatalf("issue provider mismatch: got %q, want linear", got.Provider)
+	}
 	if len(got.Dependencies) != 1 || got.Dependencies[0].DependsOnID != "issue-0" {
 		t.Fatalf("dependencies mismatch: got %+v", got.Dependencies)
+	}
+	if got.Dependencies[0].IssueRef != (domain.IssueRef{Provider: "linear", ID: "issue-1"}) {
+		t.Fatalf("dependency issue ref mismatch: got %+v", got.Dependencies[0])
+	}
+	if got.Dependencies[0].DependsOnRef != (domain.IssueRef{Provider: "linear", ID: "issue-0"}) {
+		t.Fatalf("dependency depends-on ref mismatch: got %+v", got.Dependencies[0])
 	}
 	if got.RetryBudget.GateFailures() != 1 || got.RetryBudget.RemainingGate() != 1 {
 		t.Fatalf("retry budget mismatch: got %+v", got.RetryBudget)

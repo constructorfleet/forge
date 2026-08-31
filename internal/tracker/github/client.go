@@ -36,6 +36,7 @@ type Client struct {
 	baseURL    string
 	owner      string
 	repo       string
+	Provider   string
 
 	// DependencyOverrides configures the `.forge.yaml` Dependency Source
 	// escape hatch (see CONTEXT.md "Dependency Source"). Keys and values
@@ -69,6 +70,7 @@ func NewClient(httpClient *http.Client, baseURL, owner, repo string) *Client {
 		baseURL:    baseURL,
 		owner:      owner,
 		repo:       repo,
+		Provider:   "github",
 	}
 }
 

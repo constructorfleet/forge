@@ -42,6 +42,9 @@ func validate(cfg Config) error {
 	if cfg.Tracker.Type != "github" {
 		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github"))
 	}
+	if strings.TrimSpace(cfg.Tracker.Provider) == "" {
+		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))
+	}
 
 	if strings.TrimSpace(cfg.Git.Base) == "" {
 		errs = append(errs, fieldErr("git.base", cfg.Git.Base, "must not be empty"))

@@ -30,6 +30,9 @@ func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
 	if issue.ID != "42" {
 		t.Fatalf("got ID %q, want 42", issue.ID)
 	}
+	if issue.Provider != "github" {
+		t.Fatalf("got Provider %q, want github", issue.Provider)
+	}
 	if issue.Title != "Do the thing" {
 		t.Fatalf("got Title %q, want %q", issue.Title, "Do the thing")
 	}
@@ -41,6 +44,12 @@ func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
 	}
 	if issue.Dependencies[0].IssueID != "42" || issue.Dependencies[0].DependsOnID != "1" {
 		t.Fatalf("unexpected dependency: %+v", issue.Dependencies[0])
+	}
+	if issue.Dependencies[0].IssueRef != (domain.IssueRef{Provider: "github", ID: "42"}) {
+		t.Fatalf("unexpected dependency issue ref: %+v", issue.Dependencies[0])
+	}
+	if issue.Dependencies[0].DependsOnRef != (domain.IssueRef{Provider: "github", ID: "1"}) {
+		t.Fatalf("unexpected dependency depends-on ref: %+v", issue.Dependencies[0])
 	}
 }
 

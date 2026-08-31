@@ -22,9 +22,10 @@ func (s *SQLiteStore) CreateIssue(ctx context.Context, issue domain.Issue) error
 	}
 	for _, dep := range issue.Dependencies {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO dependencies (execution_id, issue_id, depends_on_id)
-			VALUES (?, ?, ?)`,
+			INSERT INTO dependencies (execution_id, issue_id, depends_on_id, issue_provider, depends_on_provider)
+			VALUES (?, ?, ?, ?, ?)`,
 			issue.ExecutionID, dep.IssueID, dep.DependsOnID,
+			dependencyIssueProvider(issue, dep), dependencyDependsOnProvider(issue, dep),
 		); err != nil {
 			return fmt.Errorf("storage: create issue %s dependency: %w", issue.ID, err)
 		}
@@ -40,17 +41,31 @@ func insertIssue(ctx context.Context, tx *sql.Tx, issue domain.Issue) error {
 	limits := issue.RetryBudget.Limits()
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO execution_issues (
-			execution_id, issue_id, title, body, state, scope,
+			execution_id, issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		issue.ExecutionID, issue.ID, issue.Title, issue.Body, string(issue.State), string(issue.Scope),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		issue.ExecutionID, issue.ID, issue.Provider, issue.Title, issue.Body, string(issue.State), string(issue.Scope),
 		limits.Gate, issue.RetryBudget.GateFailures(),
 		limits.Review, issue.RetryBudget.ReviewFailures(),
 		limits.CI, issue.RetryBudget.CIFailures(),
 	)
 	return err
+}
+
+func dependencyIssueProvider(issue domain.Issue, dep domain.Dependency) string {
+	if dep.IssueRef.Provider != "" {
+		return dep.IssueRef.Provider
+	}
+	return issue.Provider
+}
+
+func dependencyDependsOnProvider(issue domain.Issue, dep domain.Dependency) string {
+	if dep.DependsOnRef.Provider != "" {
+		return dep.DependsOnRef.Provider
+	}
+	return issue.Provider
 }
 
 // GetIssue reloads a single Issue by Execution and Issue ID.
@@ -60,7 +75,7 @@ func (s *SQLiteStore) GetIssue(ctx context.Context, executionID, issueID string)
 
 func (s *SQLiteStore) getIssue(ctx context.Context, q querier, executionID, issueID string) (domain.Issue, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT issue_id, title, body, state, scope,
+		SELECT issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used
@@ -96,7 +111,7 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 	)
 	issue := domain.Issue{ExecutionID: executionID}
 	if err := row.Scan(
-		&issue.ID, &issue.Title, &issue.Body, &state, &scope,
+		&issue.ID, &issue.Provider, &issue.Title, &issue.Body, &state, &scope,
 		&gateLimit, &gateUsed,
 		&reviewLimit, &reviewUsed,
 		&ciLimit, &ciUsed,
@@ -114,7 +129,7 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 
 func loadDependencies(ctx context.Context, q querier, executionID, issueID string) ([]domain.Dependency, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT depends_on_id FROM dependencies
+		SELECT issue_provider, depends_on_id, depends_on_provider FROM dependencies
 		WHERE execution_id = ? AND issue_id = ?
 		ORDER BY depends_on_id`,
 		executionID, issueID,
@@ -126,11 +141,16 @@ func loadDependencies(ctx context.Context, q querier, executionID, issueID strin
 
 	var deps []domain.Dependency
 	for rows.Next() {
-		var dependsOn string
-		if err := rows.Scan(&dependsOn); err != nil {
+		var issueProvider, dependsOn, dependsOnProvider string
+		if err := rows.Scan(&issueProvider, &dependsOn, &dependsOnProvider); err != nil {
 			return nil, err
 		}
-		deps = append(deps, domain.Dependency{IssueID: issueID, DependsOnID: dependsOn})
+		deps = append(deps, domain.Dependency{
+			IssueID:      issueID,
+			DependsOnID:  dependsOn,
+			IssueRef:     domain.IssueRef{Provider: issueProvider, ID: issueID},
+			DependsOnRef: domain.IssueRef{Provider: dependsOnProvider, ID: dependsOn},
+		})
 	}
 	return deps, rows.Err()
 }
@@ -164,7 +184,7 @@ func (s *SQLiteStore) ListIssues(ctx context.Context, executionID string) ([]dom
 
 func listIssueRows(ctx context.Context, q querier, executionID string) (map[string]domain.Issue, []string, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT issue_id, title, body, state, scope,
+		SELECT issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used
@@ -196,7 +216,7 @@ func listIssueRows(ctx context.Context, q querier, executionID string) (map[stri
 
 func listDependencyRows(ctx context.Context, q querier, executionID string) (map[string][]domain.Dependency, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT issue_id, depends_on_id FROM dependencies
+		SELECT issue_id, issue_provider, depends_on_id, depends_on_provider FROM dependencies
 		WHERE execution_id = ?
 		ORDER BY issue_id, depends_on_id`,
 		executionID,
@@ -208,11 +228,16 @@ func listDependencyRows(ctx context.Context, q querier, executionID string) (map
 
 	deps := make(map[string][]domain.Dependency)
 	for rows.Next() {
-		var issueID, dependsOn string
-		if err := rows.Scan(&issueID, &dependsOn); err != nil {
+		var issueID, issueProvider, dependsOn, dependsOnProvider string
+		if err := rows.Scan(&issueID, &issueProvider, &dependsOn, &dependsOnProvider); err != nil {
 			return nil, err
 		}
-		deps[issueID] = append(deps[issueID], domain.Dependency{IssueID: issueID, DependsOnID: dependsOn})
+		deps[issueID] = append(deps[issueID], domain.Dependency{
+			IssueID:      issueID,
+			DependsOnID:  dependsOn,
+			IssueRef:     domain.IssueRef{Provider: issueProvider, ID: issueID},
+			DependsOnRef: domain.IssueRef{Provider: dependsOnProvider, ID: dependsOn},
+		})
 	}
 	return deps, rows.Err()
 }
