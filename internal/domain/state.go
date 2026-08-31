@@ -53,10 +53,10 @@ func (e *InvalidTransitionError) Error() string {
 // transitions is the forward-edge table, derived from IDEATION.md §16
 // "State transitions" plus the retry-exhaustion paths to FAILED (CONTEXT.md
 // "Retry Budget"; issue 09), the needs-info resume flow (issue 07), and the
-// empty-diff pre-PR guard's COMMITTING -> FAILED edge (engine.guardEmptyDiff;
-// issue 09/26): an Agent that reports StatusImplemented without actually
-// changing anything is caught right before PR_CREATING rather than opening
-// an empty pull request.
+// empty-diff pre-publication guard's COMMITTING -> NEEDS_INFO edge
+// (engine.guardEmptyDiff): an Agent that reports StatusImplemented without
+// actually changing anything is caught before Forge commits, pushes, or
+// opens an empty pull request.
 //
 // Manual cancellation (-> CANCELLED) is legal from any non-terminal state
 // and is handled once in ValidateTransition rather than repeated per row.
@@ -94,7 +94,7 @@ var transitions = map[IssueState][]IssueState{
 	// something an automated repair attempt should improvise past. See
 	// engine.escalateReviewToNeedsInfo.
 	StateReviewing:  {StateImplementing, StateCommitting, StateNeedsInfo, StateFailed},
-	StateCommitting: {StatePRCreating, StateNeedsReplan, StateFailed},
+	StateCommitting: {StatePRCreating, StateNeedsReplan, StateNeedsInfo, StateFailed},
 	StatePRCreating: {StateCIPending},
 	// CIPending -> NeedsInfo (issue 109, "PR supervision"): the CI
 	// Supervisor's poll loop (internal/ci.Supervisor.Wait) also inspects

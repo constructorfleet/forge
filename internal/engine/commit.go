@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -108,15 +109,19 @@ var conventionalCommitTypeKeywords = []struct {
 // Issues implement new functionality, so "feat" is the safest default.
 const defaultConventionalCommitType = "feat"
 
+const emptyDiffNeedsInfoQuestion = "The agent reported IMPLEMENTED, but there is no code diff against the worker base. Is this a legitimate no-code deliverable?"
+
+const emptyDiffNeedsInfoContext = "Forge refuses to open an empty pull request. Confirm whether this issue should be handled as verification-only or tracker-only work, or send it back for a code change."
+
 // runCommitAndPR implements ticket 22's COMMITTING and PR_CREATING stages,
 // entered once Review approves an implementation (or, with no Reviewer
-// configured, once Quality Gates pass — see runReview): commit the
-// Workspace's validated work (Publisher.Commit) with a configurable
-// message template, push the branch (Publisher.Push), guard against an
-// empty diff (see guardEmptyDiff), create or recover a pull request
-// (PRTracker.CreatePullRequest, idempotent by head branch), persist the PR
-// id/url and commit SHA, and transition the Issue through PR_CREATING to
-// CI_PENDING.
+// configured, once Quality Gates pass — see runReview): first refuse an
+// empty diff by routing the Issue to NEEDS_INFO before publication, then
+// commit the Workspace's validated work (Publisher.Commit) with a
+// configurable message template, push the branch (Publisher.Push), create
+// or recover a pull request (PRTracker.CreatePullRequest, idempotent by
+// head branch), persist the PR id/url and commit SHA, and transition the
+// Issue through PR_CREATING to CI_PENDING.
 //
 // Both Publisher and PRTracker are optional seams, like Reviewer/Diff
 // before them (see Engine.Reviewer's doc comment): nil leaves COMMITTING a
@@ -125,6 +130,14 @@ const defaultConventionalCommitType = "feat"
 // production implementations.
 func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, workerBase string, ws domain.Workspace, issue domain.Issue) (domain.Issue, error) {
 	if e.Publisher == nil || e.PRTracker == nil {
+		return issue, nil
+	}
+
+	issue, guarded, err := e.guardEmptyDiff(ctx, executionID, issueID, workerBase, ws.Path, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if guarded {
 		return issue, nil
 	}
 
@@ -150,14 +163,6 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		"branch": ws.Branch,
 	}); err != nil {
 		return domain.Issue{}, err
-	}
-
-	issue, guarded, err := e.guardEmptyDiff(ctx, executionID, issueID, workerBase, ws.Path, issue)
-	if err != nil {
-		return domain.Issue{}, err
-	}
-	if guarded {
-		return issue, nil
 	}
 
 	// The Feature may have been frozen by another Worker's REPLAN_REQUIRED
@@ -202,18 +207,21 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 	return e.transition(ctx, executionID, issueID, domain.StateCIPending)
 }
 
-// guardEmptyDiff is the empty-diff pre-PR guard: after the Workspace is
-// committed and pushed, it re-derives the diff against workerBase (the same
-// DiffProducer seam runReview uses) and, if the Agent's overall change set
-// is empty, fails the Issue instead of letting runCommitAndPR open a
-// pull request with nothing in it. This catches an Agent that reported
-// StatusImplemented (and, with no Reviewer configured, sailed straight
-// through REVIEWING) without actually changing anything.
+// guardEmptyDiff is the empty-diff pre-publication guard: before the
+// Workspace is committed or pushed, it re-derives the diff against
+// workerBase (the same DiffProducer seam runReview uses; production includes
+// staged, unstaged, and untracked worktree changes) and, if the Agent's
+// overall change set is empty, routes the Issue to NEEDS_INFO
+// instead of letting runCommitAndPR publish an empty branch or PR. This
+// catches an Agent that reported StatusImplemented (and, with no Reviewer
+// configured, sailed straight through REVIEWING) without actually changing
+// anything, while leaving room for a human to confirm legitimate no-code
+// deliverables.
 //
 // guarded reports whether the guard tripped: true means issue has already
-// been driven to FAILED and runCommitAndPR must stop (no PR_CREATING
-// transition, no CreatePullRequest call); false means the diff is
-// non-empty and runCommitAndPR should proceed as normal.
+// been driven to NEEDS_INFO and runCommitAndPR must stop (no commit, push,
+// PR_CREATING transition, or CreatePullRequest call); false means the diff
+// is non-empty and runCommitAndPR should proceed as normal.
 func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, workerBase, workspacePath string, issue domain.Issue) (_ domain.Issue, guarded bool, _ error) {
 	if e.Diff == nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: Publisher is set but Diff (DiffProducer) is nil for issue %s", issueID)
@@ -232,7 +240,14 @@ func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, worke
 	}); err != nil {
 		return domain.Issue{}, false, err
 	}
-	issue, err = e.transition(ctx, executionID, issueID, domain.StateFailed)
+	issue, err = e.handleNeedsInfo(ctx, executionID, issueID, workerRef(executionID, issueID), agent.AgentResult{
+		Status:  agent.StatusNeedsInfo,
+		Summary: "Agent reported IMPLEMENTED, but Forge found no diff against the worker base.",
+		NeedsInfo: &agent.NeedsInfoDetail{
+			Question: emptyDiffNeedsInfoQuestion,
+			Context:  emptyDiffNeedsInfoContext,
+		},
+	})
 	return issue, true, err
 }
 
