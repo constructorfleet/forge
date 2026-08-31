@@ -12,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent/claude"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/tracker/github"
 )
 
@@ -168,6 +169,42 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 				t.Errorf("buildAgent(%q) = %T, want *claude.Adapter", tc.provider, ag)
 			} else if adapter.PermissionMode != string(cfg.Agent.PermissionMode) {
 				t.Errorf("buildAgent(%q).PermissionMode = %q, want %q", tc.provider, adapter.PermissionMode, cfg.Agent.PermissionMode)
+			}
+		})
+	}
+}
+
+func TestBuildPlanningBackend_SelectsByProvider(t *testing.T) {
+	cases := []struct {
+		provider string
+		wantFake bool
+		wantErr  bool
+	}{
+		{"fake", true, false},
+		{"claude-code", false, false},
+		{"", false, false},
+		{"unknown-provider", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Agent.Provider = tc.provider
+			backend, err := buildPlanningBackend(cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("buildPlanningBackend: want error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildPlanningBackend: %v", err)
+			}
+			if tc.wantFake {
+				if _, ok := backend.(*planningagent.FakeBackend); !ok {
+					t.Errorf("buildPlanningBackend(%q) = %T, want *planningagent.FakeBackend", tc.provider, backend)
+				}
+			} else if _, ok := backend.(*planningagent.AgentBackend); !ok {
+				t.Errorf("buildPlanningBackend(%q) = %T, want *planningagent.AgentBackend", tc.provider, backend)
 			}
 		})
 	}

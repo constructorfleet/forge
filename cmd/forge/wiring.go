@@ -18,6 +18,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/planengine"
+	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/review/agentreviewer"
@@ -621,6 +622,27 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 			PermissionMode: string(cfg.Agent.PermissionMode),
 			Timeout:        cfg.Agent.Timeout,
 		}, nil
+	default:
+		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
+	}
+}
+
+// buildPlanningBackend selects the planning Backend `forge plan` runs
+// against, per cfg.Agent.Provider -- mirroring buildAgent's provider switch.
+// "fake" returns the scripted planningagent.FakeBackend used by tests and
+// demos; "claude-code"/"" wraps buildAgent's production agent.Agent in
+// planningagent.AgentBackend so planning genuinely invokes the configured
+// coding backend. Any other provider value is an error, matching buildAgent.
+func buildPlanningBackend(cfg config.Config) (planningagent.Backend, error) {
+	switch cfg.Agent.Provider {
+	case "fake":
+		return planningagent.NewFakeBackend(), nil
+	case "claude-code", "":
+		ag, err := buildAgent(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return planningagent.NewAgentBackend(ag), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}
