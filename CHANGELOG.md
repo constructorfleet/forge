@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/constructorfleet/forge/compare/forge-v0.14.1...forge-v0.14.2) (2026-08-31)
+
+
+### Bug Fixes
+
+* Detect and rebase stale PRs onto their target branch during CI_PENDING ([#237](https://github.com/constructorfleet/forge/issues/237)) ([92e9b36](https://github.com/constructorfleet/forge/commit/92e9b36fc06f61c611b08cd89ff0f1f9811e9406)), closes [#233](https://github.com/constructorfleet/forge/issues/233)
+
 ## [0.14.1](https://github.com/constructorfleet/forge/compare/forge-v0.14.0...forge-v0.14.1) (2026-08-31)
 
 
