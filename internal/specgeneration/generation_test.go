@@ -2,6 +2,7 @@ package specgeneration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -35,6 +36,27 @@ func makeTestPC() planningagent.PlanningContext {
 		panic(err)
 	}
 	return pc
+}
+
+func TestBuildSpecGenerationPromptIncludesRepositoryStructure(t *testing.T) {
+	repo := agent.RepositoryContext{
+		BaseRevision:     "base-rev",
+		ProjectStructure: "cmd/\ninternal/\ngo.mod",
+		Languages:        []string{"Go", "JavaScript"},
+	}
+	pc, err := planningagent.Compile(repo, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	prompt := buildSpecGenerationPrompt(specGenerationRequest{Context: pc})
+
+	if !strings.Contains(prompt, "cmd/\ninternal/\ngo.mod") {
+		t.Errorf("prompt missing project structure: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Go, JavaScript") {
+		t.Errorf("prompt missing languages: %q", prompt)
+	}
 }
 
 func TestSpecificationGeneration(t *testing.T) {

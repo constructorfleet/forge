@@ -3,6 +3,7 @@ package specgeneration
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/planningagent"
 )
@@ -46,6 +47,12 @@ func buildSpecGenerationPrompt(req specGenerationRequest) string {
 	prompt += "You are generating a specification for a feature based on the planning context.\n\n"
 	prompt += "## Repository Context\n"
 	prompt += fmt.Sprintf("Base Revision: %s\n\n", req.Context.Repository.BaseRevision)
+	if req.Context.Repository.ProjectStructure != "" {
+		prompt += fmt.Sprintf("### Project Structure\n%s\n\n", req.Context.Repository.ProjectStructure)
+	}
+	if len(req.Context.Repository.Languages) > 0 {
+		prompt += fmt.Sprintf("### Languages\n%s\n\n", strings.Join(req.Context.Repository.Languages, ", "))
+	}
 
 	if req.Context.Goal != nil {
 		prompt += "## Goal\n"

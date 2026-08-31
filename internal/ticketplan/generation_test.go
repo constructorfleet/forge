@@ -194,6 +194,27 @@ func TestTicketPlanGenerationWithImplementationContext(t *testing.T) {
 	}
 }
 
+func TestBuildTicketPlanGenerationPromptIncludesRepositoryStructure(t *testing.T) {
+	repo := agent.RepositoryContext{
+		BaseRevision:     "base-rev",
+		ProjectStructure: "cmd/\ninternal/\ngo.mod",
+		Languages:        []string{"Go", "JavaScript"},
+	}
+	pc, err := planningagent.Compile(repo, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
+
+	prompt := buildTicketPlanGenerationPrompt(ticketPlanGenerationRequest{Context: pc})
+
+	if !strings.Contains(prompt, "cmd/\ninternal/\ngo.mod") {
+		t.Errorf("prompt missing project structure: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Go, JavaScript") {
+		t.Errorf("prompt missing languages: %q", prompt)
+	}
+}
+
 func TestRenderTicketBodyIncludesImplementationContext(t *testing.T) {
 	t.Run("with entries", func(t *testing.T) {
 		body := RenderTicketBody(TicketGenResult{

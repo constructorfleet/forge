@@ -18,6 +18,13 @@ type SpecEngine struct {
 	Backend          planningagent.Backend
 	ReviewRetryLimit int
 
+	// Repository is the compiled Repository Context (see
+	// internal/repocontext.Compile) supplied to every PlanningContext this
+	// engine compiles, so spec and ticket-plan generation prompts are
+	// grounded in the repository's real structure and languages rather than
+	// carrying only a base revision.
+	Repository agent.RepositoryContext
+
 	// ImplementedFacts is the Feature's already-completed, merged work
 	// (ticket 22, acceptance item 3), attached to every PlanningContext this
 	// engine compiles. A replan must write its new spec and ticket plan
@@ -88,7 +95,7 @@ func (e *SpecEngine) GenerateSpec(ctx context.Context, featureID string, loader 
 	for id, dec := range decisions {
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
 	}
-	pc, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil, e.ImplementedFacts)
+	pc, err := planningagent.CompileWithFacts(e.Repository, artifacts, nil, e.ImplementedFacts)
 	if err != nil {
 		return fmt.Errorf("specengine: compile planning context: %w", err)
 	}
@@ -166,7 +173,7 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 			artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
 		}
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
-		reviewPC, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil, e.ImplementedFacts)
+		reviewPC, err := planningagent.CompileWithFacts(e.Repository, artifacts, nil, e.ImplementedFacts)
 		if err != nil {
 			return fmt.Errorf("specengine: compile planning context for review: %w", err)
 		}
@@ -208,7 +215,7 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 		for id, dec := range decisions {
 			artifactsForRepair = append(artifactsForRepair, planningagent.NamedArtifact{ID: id, Artifact: dec})
 		}
-		repairPC, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifactsForRepair, humanInputs, e.ImplementedFacts)
+		repairPC, err := planningagent.CompileWithFacts(e.Repository, artifactsForRepair, humanInputs, e.ImplementedFacts)
 		if err != nil {
 			return fmt.Errorf("specengine: compile planning context for repair: %w", err)
 		}
@@ -316,7 +323,7 @@ func (e *SpecEngine) GenerateTicketPlan(ctx context.Context, featureID string, l
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
 	}
 	artifacts = append(artifacts, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
-	pc, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil, e.ImplementedFacts)
+	pc, err := planningagent.CompileWithFacts(e.Repository, artifacts, nil, e.ImplementedFacts)
 	if err != nil {
 		return fmt.Errorf("specengine: compile planning context: %w", err)
 	}
@@ -393,7 +400,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 			artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: dec})
 		}
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
-		reviewPC, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifacts, nil, e.ImplementedFacts)
+		reviewPC, err := planningagent.CompileWithFacts(e.Repository, artifacts, nil, e.ImplementedFacts)
 		if err != nil {
 			return fmt.Errorf("specengine: compile planning context for ticket plan review: %w", err)
 		}
@@ -436,7 +443,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 			artifactsForRepair = append(artifactsForRepair, planningagent.NamedArtifact{ID: id, Artifact: dec})
 		}
 		artifactsForRepair = append(artifactsForRepair, planningagent.NamedArtifact{ID: "spec", Artifact: specArtifact})
-		repairPC, err := planningagent.CompileWithFacts(agent.RepositoryContext{BaseRevision: "base"}, artifactsForRepair, humanInputs, e.ImplementedFacts)
+		repairPC, err := planningagent.CompileWithFacts(e.Repository, artifactsForRepair, humanInputs, e.ImplementedFacts)
 		if err != nil {
 			return fmt.Errorf("specengine: compile planning context for ticket plan repair: %w", err)
 		}

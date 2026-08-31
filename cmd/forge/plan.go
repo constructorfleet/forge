@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/decisiongraph"
 	"github.com/Teagan42/forge/internal/domain"
@@ -15,6 +14,7 @@ import (
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/replan"
+	"github.com/Teagan42/forge/internal/repocontext"
 	"github.com/Teagan42/forge/internal/specengine"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -139,15 +139,39 @@ func runPlan(args []string) int {
 		return 0
 	}
 
-	specEngine := specengine.NewSpecEngine(backend)
 	facts, err := replan.GatherImplementedFacts(ctx, store, featureID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge plan: gather implemented facts: %v\n", err)
 		return 1
 	}
-	specEngine.ImplementedFacts = facts
+
+	// specEngine is only built (and only then resolves a base revision and
+	// compiles the Repository Context, both of which shell out to git) once
+	// generation is actually about to happen -- spec.md/ticket-plan.md may
+	// already exist and be merely awaiting approval, in which case forge
+	// plan does no git-dependent work at all (see the idempotency tests).
+	var specEngine *specengine.SpecEngine
+	ensureSpecEngine := func() (*specengine.SpecEngine, error) {
+		if specEngine != nil {
+			return specEngine, nil
+		}
+		baseRevision, err := resolveBaseRevision(repoRoot, cfg.Git.Base)
+		if err != nil {
+			return nil, fmt.Errorf("resolve base revision: %w", err)
+		}
+		specEngine, err = buildSpecEngine(cfg, backend, repoRoot, baseRevision, facts)
+		if err != nil {
+			return nil, err
+		}
+		return specEngine, nil
+	}
 
 	if specArtifact == nil {
+		specEngine, err := ensureSpecEngine()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
+			return 1
+		}
 		if err := specEngine.GenerateSpec(ctx, featureID, loader); err != nil {
 			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 			return 1
@@ -178,6 +202,11 @@ func runPlan(args []string) int {
 	}
 
 	if ticketPlanArtifact == nil {
+		specEngine, err := ensureSpecEngine()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
+			return 1
+		}
 		if err := specEngine.GenerateTicketPlan(ctx, featureID, loader); err != nil {
 			fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 			return 1
@@ -199,6 +228,23 @@ func runPlan(args []string) int {
 
 	fmt.Fprintf(os.Stdout, "planning complete for feature %s; run `forge materialize %s`\n", featureID, featureID)
 	return 0
+}
+
+// buildSpecEngine compiles the full Repository Context for repoRoot via the
+// repo-context compiler (ProjectStructure and Languages populated, not just
+// BaseRevision) and returns a SpecEngine grounded in it, so the ticket-plan
+// (and spec) generation prompts point at the repository's real directories
+// and languages instead of guesses.
+func buildSpecEngine(cfg config.Config, backend planningagent.Backend, repoRoot, baseRevision string, facts []planningagent.ImplementedFact) (*specengine.SpecEngine, error) {
+	repo, err := repocontext.Compile(cfg, repoRoot, baseRevision)
+	if err != nil {
+		return nil, fmt.Errorf("compile repository context: %w", err)
+	}
+
+	engine := specengine.NewSpecEngine(backend)
+	engine.Repository = repo
+	engine.ImplementedFacts = facts
+	return engine, nil
 }
 
 // parsePlanArgs parses forge plan's arguments: a single positional
@@ -297,7 +343,10 @@ func runWayfindingStage(
 		return loader.SaveDecision(ctx, featureID, id, artifact)
 	})
 
-	repo := agent.RepositoryContext{BaseRevision: baseRevision}
+	repo, err := repocontext.Compile(cfg, repoRoot, baseRevision)
+	if err != nil {
+		return false, exec.ID, fmt.Errorf("compile repository context: %w", err)
+	}
 
 	if err := wayfinding.Loop(ctx, backend, repo, goalArtifact, goalRef, decisions, persist, pause.Handle); err != nil {
 		return false, exec.ID, fmt.Errorf("wayfinding: %w", err)

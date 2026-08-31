@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planning"
+	"github.com/Teagan42/forge/internal/planningagent"
 )
 
 // chdirTemp changes the working directory to dir for the duration of the
@@ -54,6 +57,46 @@ func writeApprovedSpecFixture(t *testing.T, dir, featureID string) {
 	spec.ApprovedRevision = spec.Revision
 	spec.State = "approved"
 	writeSpecFixture(t, dir, featureID, spec)
+}
+
+// TestBuildSpecEngine_CompilesFullRepositoryContext confirms `forge plan`
+// grounds the SpecEngine it builds in the repository's real structure
+// (ticket 206) rather than a base-revision-only Repository Context: the
+// repo-context compiler must actually run against repoRoot, so
+// ProjectStructure and Languages are populated from real repository files.
+func TestBuildSpecEngine_CompilesFullRepositoryContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/widget\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "internal"), 0o755); err != nil {
+		t.Fatalf("mkdir internal: %v", err)
+	}
+
+	backend := planningagent.NewFakeBackend()
+	engine, err := buildSpecEngine(config.Default(), backend, dir, "base-rev", nil)
+	if err != nil {
+		t.Fatalf("buildSpecEngine: %v", err)
+	}
+
+	if engine.Repository.BaseRevision != "base-rev" {
+		t.Errorf("Repository.BaseRevision = %q, want base-rev", engine.Repository.BaseRevision)
+	}
+	if !strings.Contains(engine.Repository.ProjectStructure, "go.mod") {
+		t.Errorf("Repository.ProjectStructure = %q, want to contain go.mod", engine.Repository.ProjectStructure)
+	}
+	if !strings.Contains(engine.Repository.ProjectStructure, "internal/") {
+		t.Errorf("Repository.ProjectStructure = %q, want to contain internal/", engine.Repository.ProjectStructure)
+	}
+	found := false
+	for _, lang := range engine.Repository.Languages {
+		if lang == "Go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Repository.Languages = %v, want to contain Go", engine.Repository.Languages)
+	}
 }
 
 // TestRunPlan_NoGoal_StopsCleanly confirms `forge plan` stops with a clean
