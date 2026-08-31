@@ -103,15 +103,14 @@ func TestResume_NewHumanComment_TransitionsNeedsInfoToReady(t *testing.T) {
 
 // TestResume_ClockSkewAndOwnComment_DoesNotFalseTrigger is the fix for the
 // bug where Resume classified "new human input" solely by
-// c.CreatedAt.After(checkpoint.CreatedAt) with no author check, comparing a
+// c.CreatedAt.After(checkpoint.CreatedAt) with no marker check, comparing a
 // tracker-server-clock timestamp against a locally captured one. It
 // simulates the engine's local clock running behind the tracker's: even
 // though forge's own posted comment's server CreatedAt lands "after" the
 // skewed local checkpoint.CreatedAt, Resume must not treat it as new human
-// input (both because it uses checkpoint.CommentPostedAt — the same
-// tracker-server clock — as the baseline, and because it excludes the
-// comment by author). Only once a genuinely new, human-authored comment
-// exists does Resume trigger.
+// input because it uses checkpoint.CommentPostedAt — the same tracker-server
+// clock — as the baseline and excludes Forge's own marked comment. Only once
+// a genuinely new, human-authored comment exists does Resume trigger.
 func TestResume_ClockSkewAndOwnComment_DoesNotFalseTrigger(t *testing.T) {
 	eng, store, trk, fake, base := newNeedsInfoTestEngine(t, map[string]domain.Issue{
 		"11": {ID: "11"},
@@ -157,6 +156,43 @@ func TestResume_ClockSkewAndOwnComment_DoesNotFalseTrigger(t *testing.T) {
 	}
 	if len(resumeResult.Context.NewComments) != 1 || resumeResult.Context.NewComments[0].Author != "alice" {
 		t.Errorf("Context.NewComments = %+v, want exactly alice's comment", resumeResult.Context.NewComments)
+	}
+}
+
+// TestResume_SameIdentityHumanComment_TransitionsNeedsInfoToReady covers the
+// dogfooding path where Forge posts tracker comments through the same account
+// the human operator uses. The human reply has the same Author as Forge's own
+// NEEDS_INFO comment, so Resume must distinguish Forge's comment by its body
+// marker instead of by tracker identity.
+func TestResume_SameIdentityHumanComment_TransitionsNeedsInfoToReady(t *testing.T) {
+	eng, store, trk, fake, base := newNeedsInfoTestEngine(t, map[string]domain.Issue{
+		"12": {ID: "12"},
+	})
+	fake.ProgramResult("12", agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which token should this use?"},
+	})
+
+	ctx := context.Background()
+	result, err := eng.Execute(ctx, "12", base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	trk.AddHumanComment("12", botAuthor, "use the operator token", time.Now().Add(time.Minute))
+
+	resumeResult, err := engine.Resume(ctx, store, trk, result.ExecutionID, "12", time.Now)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !resumeResult.Resumed {
+		t.Fatal("Resumed = false, want true for same-identity human reply")
+	}
+	if resumeResult.Issue.State != domain.StateReady {
+		t.Fatalf("Issue.State = %s, want READY", resumeResult.Issue.State)
+	}
+	if len(resumeResult.Context.NewComments) != 1 || resumeResult.Context.NewComments[0].Body != "use the operator token" {
+		t.Errorf("Context.NewComments = %+v, want exactly the same-identity human reply", resumeResult.Context.NewComments)
 	}
 }
 

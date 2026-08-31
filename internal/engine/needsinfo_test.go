@@ -12,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
@@ -186,6 +187,9 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 	}
 	if !strings.Contains(body, "two plausible flags exist in .forge.yaml") {
 		t.Errorf("comment body missing context: %s", body)
+	}
+	if !strings.Contains(body, needsinfo.CommentMarker(result.ExecutionID, "7")) {
+		t.Errorf("comment body missing needs-info marker: %s", body)
 	}
 
 	checkpoint, err := store.GetNeedsInfoCheckpoint(ctx, result.ExecutionID, "7")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -84,6 +85,7 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 
 	if e.Config.Blocked.Comment && e.NeedsInfoTracker != nil && !checkpoint.CommentPosted {
 		body := needsInfoCommentBody(result.NeedsInfo, result.Summary)
+		body = needsinfo.AppendCommentMarker(body, executionID, issueID)
 		posted, err := e.NeedsInfoTracker.AddComment(ctx, issueID, body)
 		if err != nil {
 			return domain.Issue{}, fmt.Errorf("engine: post needs-info comment on issue %s: %w", issueID, err)

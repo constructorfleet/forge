@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -70,14 +71,15 @@ type ResumeResult struct {
 // "New" is judged against checkpoint.CommentPostedAt — the tracker-server
 // clock timestamp of forge's own posted comment, as returned by
 // tracker.Tracker.AddComment — rather than checkpoint.CreatedAt (a local
-// clock), and any comment authored by checkpoint.CommentAuthor is excluded
-// outright. Both guard against forge's own needs-info comment being
-// misread as new human input under local/tracker clock skew, which a naive
-// "after the checkpoint's local timestamp" comparison would not catch. If
-// no comment was ever posted (e.g. Blocked.Comment configured false),
-// checkpoint.CommentPostedAt is zero and Resume falls back to
-// checkpoint.CreatedAt — a real, if lesser, skew exposure in that
-// configuration, since there is no tracker-clock anchor to compare against.
+// clock), and Forge's own NEEDS_INFO comment is excluded by its hidden body
+// marker rather than by tracker author identity. Both guard against forge's
+// own needs-info comment being misread as new human input under local/tracker
+// clock skew, which a naive "after the checkpoint's local timestamp"
+// comparison would not catch. If no comment was ever posted (e.g.
+// Blocked.Comment configured false), checkpoint.CommentPostedAt is zero and
+// Resume falls back to checkpoint.CreatedAt — a real, if lesser, skew exposure
+// in that configuration, since there is no tracker-clock anchor to compare
+// against.
 //
 // The READY transition is performed last, after the checkpoint's resumed
 // context and the "needsinfo.resumed" Event are durably saved: if either of
@@ -108,8 +110,8 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 
 	var newComments []tracker.Comment
 	for _, c := range comments {
-		if checkpoint.CommentAuthor != "" && c.Author == checkpoint.CommentAuthor {
-			continue // forge's own posted comment, never "new human input"
+		if needsinfo.IsForgeComment(c.Body, executionID, issueID) {
+			continue // Forge's own posted comment, never "new human input".
 		}
 		if c.CreatedAt.After(baseline) {
 			newComments = append(newComments, c)

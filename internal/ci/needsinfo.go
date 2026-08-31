@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -43,6 +44,7 @@ func (s *Supervisor) routeToNeedsInfo(ctx context.Context, executionID, issueID,
 		if context != "" {
 			body += "\n\n**Context:** " + context
 		}
+		body = needsinfo.AppendCommentMarker(body, executionID, issueID)
 		posted, err := s.NeedsInfoTracker.AddComment(ctx, issueID, body)
 		if err != nil {
 			return "", fmt.Errorf("ci: post needs-info comment on issue %s: %w", issueID, err)
