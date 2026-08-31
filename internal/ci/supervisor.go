@@ -150,10 +150,14 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 		// that doesn't implement/configure them (including every existing
 		// test double) leaves this exactly the pre-issue-109 check-only
 		// behavior.
-		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr); handled || err != nil {
+		mergeStatus, haveMergeStatus, err := s.mergeStatus(ctx, issueID, pr.Number)
+		if err != nil {
+			return "", err
+		}
+		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr, mergeStatus, haveMergeStatus); handled || err != nil {
 			return state, err
 		}
-		if handled, state, err := s.pollStale(ctx, executionID, issueID, pr.Number); handled || err != nil {
+		if handled, state, err := s.pollStale(ctx, executionID, issueID, pr.Number, mergeStatus, haveMergeStatus); handled || err != nil {
 			return state, err
 		}
 		if handled, state, err := s.pollReviews(ctx, executionID, issueID, pr.Number); handled || err != nil {
@@ -173,16 +177,9 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 		}
 		lastCheckNames = currentCheckNames
 		haveLastCheckNames = true
-		status, failed := evaluateChecks(required, checks, settledStreak >= checksSettleGracePolls)
-		if status == storage.CIRunStatusPassed {
-			merged, err := s.pullRequestMerged(ctx, issueID, pr.Number)
-			if err != nil {
-				return "", err
-			}
-			if !merged {
-				status = storage.CIRunStatusPending
-			}
-		}
+		checksSettled := settledStreak >= checksSettleGracePolls
+
+		status, failed := s.evaluateMergeEligibility(required, checks, checksSettled, mergeStatus, haveMergeStatus)
 		run := storage.CIRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -227,16 +224,115 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 	}
 }
 
-func (s *Supervisor) pullRequestMerged(ctx context.Context, issueID string, number int) (bool, error) {
+// evaluateMergeEligibility resolves the required-check set (falling back to
+// whatever the tracker currently observes, and waiting out the
+// checksSettleGracePolls race exactly as before — both polling-specific
+// concerns that stay local to internal/ci) and then runs the CI Supervisor's
+// merge decision through tracker.EvaluateMergeEligibility, the composed,
+// provider-neutral verdict generalized from CI's checks/requirements slice
+// (issue #284/#296). mergeStatus/haveMergeStatus is the single SCM merge-
+// status fetch Wait already made this poll (see Supervisor.mergeStatus) —
+// evaluateMergeEligibility does not fetch it again.
+func (s *Supervisor) evaluateMergeEligibility(required []string, checks []tracker.PullRequestCheck, checksSettled bool, mergeStatus tracker.PullRequestMergeStatus, haveMergeStatus bool) (storage.CIRunStatus, *tracker.PullRequestCheck) {
+	usingObservedFallback := len(required) == 0
+	effectiveRequired := required
+	if usingObservedFallback {
+		effectiveRequired = checkNames(checks)
+	}
+
+	checksBlocker, failed := classifyRequiredChecks(effectiveRequired, checks)
+
+	if checksBlocker == nil && usingObservedFallback && !checksSettled {
+		// No tracker-declared required checks (issue 215) and, under the
+		// observed-fallback, the checks set can still grow (issue 231): wait
+		// for it to hold steady before trusting "all currently green" as
+		// complete.
+		return storage.CIRunStatusPending, nil
+	}
+
+	// Conflict/Behind are deliberately not carried into this composition:
+	// pollConflict/pollStale already own those gates ahead of this point in
+	// Wait's loop, each with its own optional-capability/collaborator
+	// degradation (e.g. Behind with no Rebaser configured is a permanent,
+	// intentional no-op — see staleness.go). Re-checking them here would
+	// contradict that degradation and could block forever on a signal Wait
+	// has already decided not to act on this poll. Leaving MergeEligibilityInput's
+	// SCM slice (MergeStatus) unwired is therefore correct for GitHub, not an
+	// omission — that slice is the provider-general path a future SCM adapter
+	// wires when it has no such upstream gate (spec #284, US10; see
+	// tracker.MergeEligibilityInput).
+	eligibility := tracker.EvaluateMergeEligibility(tracker.MergeEligibilityInput{
+		ChecksBlocker: checksBlocker,
+	})
+
+	// Merged — "has the externally-observed merge actually happened yet" —
+	// is the terminal-success signal EvaluateMergeEligibility's neutral
+	// verdict does not itself model (see MergeEligibilityInput), so it is
+	// checked directly here rather than threaded through the composition.
+	// A Tracker that doesn't report merge status at all degrades to
+	// Merged: true, exactly like an absent tracker.ReviewsGetter degrades
+	// review gating (internal/ci/review.go) rather than failing closed.
+	merged := !haveMergeStatus || mergeStatus.Merged
+
+	switch {
+	case eligibility.Mergeable && !merged:
+		return storage.CIRunStatusPending, nil
+	case eligibility.Mergeable:
+		return storage.CIRunStatusPassed, nil
+	case checksBlocker != nil && checksBlocker.Reason == tracker.ChecksFailing:
+		return storage.CIRunStatusFailed, failed
+	default:
+		return storage.CIRunStatusPending, nil
+	}
+}
+
+// classifyRequiredChecks compares required against checks in order,
+// returning the CI capability's neutral blocker (nil when every required
+// check currently reports Success) and, for a ChecksFailing blocker, the
+// concrete failing check for CI-run diagnostics. It stops at the first
+// required check that is not a reported Success, matching the priority a
+// single poll must resolve to (a later check's failure does not override an
+// earlier check that is merely still pending).
+func classifyRequiredChecks(required []string, checks []tracker.PullRequestCheck) (*tracker.MergeBlocker, *tracker.PullRequestCheck) {
+	for _, name := range required {
+		idx := slices.IndexFunc(checks, func(check tracker.PullRequestCheck) bool {
+			return check.Name == name
+		})
+		if idx == -1 {
+			return &tracker.MergeBlocker{Reason: tracker.ChecksPending, Source: tracker.CapabilityCI, RawDetail: name + ": not yet reported"}, nil
+		}
+		switch checks[idx].State {
+		case tracker.CheckSuccess:
+			continue
+		case tracker.CheckFailure:
+			failed := checks[idx]
+			return &tracker.MergeBlocker{Reason: tracker.ChecksFailing, Source: tracker.CapabilityCI, RawDetail: failed.Name + ": " + failed.Details}, &failed
+		default:
+			return &tracker.MergeBlocker{Reason: tracker.ChecksPending, Source: tracker.CapabilityCI, RawDetail: checks[idx].Name + ": pending"}, nil
+		}
+	}
+	return nil, nil
+}
+
+// mergeStatus fetches the pull request's merge status at most once per Wait
+// iteration, via tracker.MergeStatusGetter, and hands the single result to
+// pollConflict, pollStale, and evaluateMergeEligibility — each of which
+// previously type-asserted the Tracker and fetched independently, hitting
+// the same GitHub mergeability endpoint up to three times per poll. haveStatus
+// is false when s.Tracker doesn't implement tracker.MergeStatusGetter, in
+// which case every caller degrades exactly as it did when it fetched nothing
+// itself (pollConflict/pollStale no-op; evaluateMergeEligibility treats
+// Merged as true).
+func (s *Supervisor) mergeStatus(ctx context.Context, issueID string, number int) (status tracker.PullRequestMergeStatus, haveStatus bool, err error) {
 	getter, ok := s.Tracker.(tracker.MergeStatusGetter)
 	if !ok {
-		return true, nil
+		return tracker.PullRequestMergeStatus{}, false, nil
 	}
-	status, err := getter.GetPullRequestMergeStatus(ctx, number)
+	status, err = getter.GetPullRequestMergeStatus(ctx, number)
 	if err != nil {
-		return false, fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
+		return tracker.PullRequestMergeStatus{}, false, fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
 	}
-	return status.Merged, nil
+	return status, true, nil
 }
 
 func (s *Supervisor) requiredChecks(ctx context.Context) ([]string, error) {
@@ -248,59 +344,6 @@ func (s *Supervisor) requiredChecks(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return mr.RequiredChecks, nil
-}
-
-func evaluateChecks(required []string, checks []tracker.PullRequestCheck, checksSettled bool) (storage.CIRunStatus, *tracker.PullRequestCheck) {
-	usingObservedFallback := len(required) == 0
-	if usingObservedFallback {
-		// No tracker-declared required checks (issue 215: most commonly an
-		// unprotected branch — see
-		// tracker/github.Client.GetMergeRequirements) does not mean nothing
-		// is running. Fall back to waiting on every check the tracker
-		// currently reports for the PR; only a PR with no observed checks
-		// at all has genuinely nothing to wait for.
-		required = checkNames(checks)
-	}
-	if len(required) == 0 {
-		if !checksSettled {
-			// Zero required checks and zero observed checks on this poll is
-			// ambiguous: it may mean no CI is configured, or it may mean CI
-			// hasn't registered its first check run yet (issue 215). Treat
-			// it as still pending until the caller has seen this hold
-			// across checksSettleGracePolls consecutive polls.
-			return storage.CIRunStatusPending, nil
-		}
-		return storage.CIRunStatusPassed, nil
-	}
-	for _, name := range required {
-		idx := slices.IndexFunc(checks, func(check tracker.PullRequestCheck) bool {
-			return check.Name == name
-		})
-		if idx == -1 {
-			return storage.CIRunStatusPending, nil
-		}
-		switch checks[idx].State {
-		case tracker.CheckSuccess:
-			continue
-		case tracker.CheckFailure:
-			failed := checks[idx]
-			return storage.CIRunStatusFailed, &failed
-		default:
-			return storage.CIRunStatusPending, nil
-		}
-	}
-	if usingObservedFallback && !checksSettled {
-		// Every check the tracker currently reports is green, but under
-		// the observed-fallback (no tracker-declared required checks) that
-		// set can still grow: a PR's checks can register across more than
-		// one workflow, so an early poll may see only a fast job and miss
-		// a slower one that hasn't reported in at all yet (issue 231).
-		// Wait until the observed set has held steady across
-		// checksSettleGracePolls consecutive polls before trusting it as
-		// the complete set.
-		return storage.CIRunStatusPending, nil
-	}
-	return storage.CIRunStatusPassed, nil
 }
 
 func checkNames(checks []tracker.PullRequestCheck) []string {

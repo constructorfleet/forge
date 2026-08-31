@@ -230,10 +230,13 @@ func TestWait_AllRequiredChecksGreen_WaitsForPullRequestMerge(t *testing.T) {
 				{{Name: "build", State: tracker.CheckSuccess}},
 			},
 		},
+		// Wait's loop makes exactly one merge-status fetch per iteration
+		// (shared by pollConflict/pollStale/evaluateMergeEligibility, see
+		// supervisor.go's mergeStatus), so one entry per poll below is
+		// enough: not-merged on the first poll (still waiting after green
+		// checks), merged on the second.
 		statuses: []tracker.PullRequestMergeStatus{
 			{Merged: false},
-			{Merged: false},
-			{Merged: true},
 			{Merged: true},
 		},
 	}

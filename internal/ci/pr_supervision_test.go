@@ -309,8 +309,12 @@ func TestWait_MergeConflict_ResolverSuccessRecordsRepairAndContinuesToChecks(t *
 				{{Name: "build", State: tracker.CheckSuccess}},
 			},
 		},
+		// Wait fetches merge status once per iteration (shared by
+		// pollConflict/pollStale/evaluateMergeEligibility), so the resolver's
+		// repair, the checks poll, and the merge-eligibility decision all
+		// observe this same call-1 status within one iteration.
 		conflictedUntil: 1,
-		mergedAfter:     2,
+		mergedAfter:     1,
 	}
 
 	supervisor := ci.New(store, trk, config.Default(), "main")

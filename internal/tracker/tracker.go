@@ -112,6 +112,10 @@ type PullRequestMergeStatus struct {
 	// False covers every other state, including "not yet computed" — same
 	// caveat as Conflicted.
 	Behind bool
+	// RawDetail is the tracker's raw mergeability diagnostic (e.g. GitHub's
+	// mergeable_state string), preserved for human-facing detail even though
+	// Conflicted/Behind are what orchestration acts on.
+	RawDetail string
 }
 
 // Capability identifies which provider capability reported a merge blocker.

@@ -41,10 +41,16 @@ func (c *Client) GetChangeRequestMergeStatus(ctx context.Context, ref tracker.Ch
 	if err != nil {
 		return tracker.ChangeRequestMergeStatus{}, err
 	}
+	// The neutral and legacy structs are identical today, so staticcheck
+	// (S1016) suggests a whole-struct conversion; mapped field by field
+	// instead to keep the neutral SCM vocabulary decoupled as either evolves
+	// (see CreateChangeRequest above).
+	//nolint:staticcheck // S1016: intentional field mapping, not a struct convert
 	return tracker.ChangeRequestMergeStatus{
 		Merged:     status.Merged,
 		Conflicted: status.Conflicted,
 		Behind:     status.Behind,
+		RawDetail:  status.RawDetail,
 	}, nil
 }
 
@@ -76,6 +82,7 @@ func (c *Client) GetReviews(ctx context.Context, ref tracker.ChangeRequestRef) (
 			State:       review.State,
 			Body:        review.Body,
 			SubmittedAt: review.SubmittedAt,
+			RawDetail:   string(review.State),
 		})
 	}
 	return out, nil

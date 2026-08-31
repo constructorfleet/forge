@@ -35,23 +35,16 @@ type ConflictResolver interface {
 }
 
 // pollConflict checks pull request number's mergeability against its base
-// branch (issue 109, "Merge Conflicts"). It is a no-op — handled false, no
-// error — when s.Tracker doesn't implement tracker.MergeStatusGetter.
-// A detected conflict is first offered to ConflictResolver when configured.
-// A successful automatic repair records a passed conflict CIRun and lets Wait
-// continue normal CI supervision; an unconfigured or unresolved conflict is
-// recorded as failed and routed to NEEDS_INFO.
-func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID string, pr storage.PullRequest) (handled bool, state domain.IssueState, err error) {
-	getter, ok := s.Tracker.(tracker.MergeStatusGetter)
-	if !ok {
-		return false, "", nil
-	}
-
-	status, err := getter.GetPullRequestMergeStatus(ctx, pr.Number)
-	if err != nil {
-		return true, "", fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
-	}
-	if !status.Conflicted {
+// branch (issue 109, "Merge Conflicts"), using the merge status Wait already
+// fetched once this poll (see Supervisor.mergeStatus). It is a no-op —
+// handled false, no error — when haveStatus is false (s.Tracker doesn't
+// implement tracker.MergeStatusGetter). A detected conflict is first offered
+// to ConflictResolver when configured. A successful automatic repair records
+// a passed conflict CIRun and lets Wait continue normal CI supervision; an
+// unconfigured or unresolved conflict is recorded as failed and routed to
+// NEEDS_INFO.
+func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID string, pr storage.PullRequest, status tracker.PullRequestMergeStatus, haveStatus bool) (handled bool, state domain.IssueState, err error) {
+	if !haveStatus || !status.Conflicted {
 		return false, "", nil
 	}
 

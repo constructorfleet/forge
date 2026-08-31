@@ -49,6 +49,9 @@ func TestGetPullRequestMergeStatus(t *testing.T) {
 			if status.Merged != tc.wantMerged {
 				t.Fatalf("Merged = %v, want %v", status.Merged, tc.wantMerged)
 			}
+			if status.RawDetail != tc.mergeableState {
+				t.Fatalf("RawDetail = %q, want raw mergeable_state %q", status.RawDetail, tc.mergeableState)
+			}
 		})
 	}
 }
