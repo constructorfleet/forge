@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // When GitHub exposes native "blocked by" relationships, they are the
@@ -125,5 +128,67 @@ func TestGetIssue_NativeServerErrorFailsClosed(t *testing.T) {
 
 	if _, err := c.GetIssue(context.Background(), "42"); err == nil {
 		t.Fatal("expected GetIssue to fail when the native deps probe errors")
+	}
+}
+
+// GetDependencies, the DependencyStore capability's own entry point,
+// resolves through the same native-first-then-body-block precedence as
+// GetIssue rather than a separate code path.
+func TestGetDependencies_PrefersNativeOverBody(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			_, _ = w.Write([]byte(`[{"number":284}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":42,"body":"## Dependencies\n- #7\n"}`))
+	})
+
+	edges, err := c.GetDependencies(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	want := tracker.DependencyEdge{
+		Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+		DependsOn: domain.IssueRef{Provider: "github", ID: "284"},
+		Kind:      tracker.DependencyBlocks,
+	}
+	if len(edges) != 1 || edges[0] != want {
+		t.Fatalf("edges = %+v, want [%+v]", edges, want)
+	}
+}
+
+// GetDependencies rejects freeform body text with the same fail-closed
+// grammar as the body-block parser used by GetIssue.
+func TestGetDependencies_RejectsFreeformDependencyText(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":42,"body":"## Dependencies\nsomething vague\n"}`))
+	})
+
+	if _, err := c.GetDependencies(context.Background(), "42"); err == nil {
+		t.Fatal("expected GetDependencies to reject freeform dependency text")
+	}
+}
+
+// Overrides take precedence over the body block through GetDependencies too.
+func TestGetDependencies_OverridesBeatBodyBlock(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":42,"body":"## Dependencies\n- #7\n"}`))
+	})
+	c.DependencyOverrides = map[string][]string{"42": {"99"}}
+
+	edges, err := c.GetDependencies(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	if len(edges) != 1 || edges[0].DependsOn.ID != "99" {
+		t.Fatalf("edges = %+v, want override [99]", edges)
 	}
 }

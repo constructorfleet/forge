@@ -444,7 +444,13 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 
 	// A single Issue with no Dependencies trivially has no cycle, but ticket
 	// 18 requires the check run regardless — it's the same code path
-	// multi-issue Executions (ticket 26) will rely on.
+	// multi-issue Executions (ticket 26) will rely on. This cycle-checks the
+	// Issue already in hand via BuildDAG on the domain.Issue.Dependencies
+	// GetIssue populated above, rather than re-reading through
+	// DependencyStore, so the single-Issue path issues no extra dependency
+	// fetch here. Whether a provider's GetIssue().Dependencies and a
+	// DependencyStore read would agree is a per-provider concern this does
+	// not depend on.
 	if _, err := tracker.BuildDAG([]domain.Issue{issue}); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: dependency graph for issue %s: %w", issueID, err)
 	}

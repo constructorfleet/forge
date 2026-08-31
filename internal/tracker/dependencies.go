@@ -7,10 +7,45 @@
 package tracker
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/Teagan42/forge/internal/domain"
 )
+
+// DependencyKind identifies the semantic type of a DependencyEdge. Forge
+// models only the prerequisite-of relationship for now (see CONTEXT.md
+// "Dependency"); other native provider link types (e.g. "relates to") are
+// out of scope and are not represented here.
+type DependencyKind string
+
+// DependencyBlocks is the only DependencyKind Forge models: DependsOn must
+// complete before Issue can begin.
+const DependencyBlocks DependencyKind = "BLOCKS"
+
+// DependencyEdge is Forge's neutral, provider-qualified dependency edge —
+// the DependencyStore capability's unit of exchange. Both endpoints share a
+// single provider (CONTEXT.md "Dependency Source"; ADR 0003): cross-provider
+// edges are out of scope for now.
+type DependencyEdge struct {
+	Issue     domain.IssueRef
+	DependsOn domain.IssueRef
+	Kind      DependencyKind
+}
+
+// DependencyStore is the normalized dependency-read capability, owned by
+// Tracker. A provider implements it by reading dependency edges however it
+// natively encodes them — GitHub prefers its native "blocked by" issue
+// relationships, falling back to the canonical `## Dependencies` body block
+// (ADR 0003) only when native relationships are unavailable.
+type DependencyStore interface {
+	// GetDependencies returns the DependencyEdges naming id's prerequisites:
+	// each returned edge has Issue == {provider, id} and DependsOn naming
+	// one prerequisite Issue.
+	GetDependencies(ctx context.Context, id string) ([]DependencyEdge, error)
+}
 
 // The canonical Dependency Source is a `## Dependencies` block in the issue
 // body (see CONTEXT.md "Dependency Source" and ADR 0003). Only the strict

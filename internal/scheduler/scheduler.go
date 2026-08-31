@@ -9,9 +9,10 @@
 // of work (ticket 18's PENDING -> ... -> REVIEWING/FAILED/NEEDS_INFO
 // pipeline, extended by ticket 20's Review stage) and owns only the
 // question of *when* to run it for each Issue and what base revision to
-// hand it. It depends solely on the narrow interfaces below — an
-// IssueFetcher, an Executor, a DependencyResolver, and a BaseResolver — so
-// it stays backend-agnostic and fully testable with fakes (see
+// hand it. It depends solely on the narrow interfaces below — a
+// tracker.DependencyStore, an Executor, a DependencyResolver, and a
+// BaseResolver — so it stays backend-agnostic and fully testable with fakes
+// (see
 // scheduler_test.go): no real GitHub, git, or SQLite is required to exercise
 // the scheduling and concurrency logic itself.
 //
@@ -51,11 +52,14 @@ import (
 // keep runs fast.
 const defaultPollInterval = 2 * time.Second
 
-// IssueFetcher is the subset of tracker.Tracker Scheduler needs: fetching a
-// normalized Issue (including its Dependencies) by ID. Mirrors
-// engine.IssueFetcher's shape without importing internal/engine, keeping
-// this package's core free of any engine dependency (see adapter.go for the
-// one place that bridges to *engine.Engine).
+// IssueFetcher is the subset of tracker.Tracker that fetches a normalized
+// Issue by ID. Scheduler itself builds its DAG from the DependencyStore
+// capability, not this — IssueFetcher is used outside this package by
+// cmd/forge's dependencyBaseResolver, which needs a full Issue's
+// Dependencies field (not just DependencyStore edges) to resolve a
+// dependent's base branch. Mirrors engine.IssueFetcher's shape without
+// importing internal/engine, keeping this package's core free of any
+// engine dependency.
 type IssueFetcher interface {
 	GetIssue(ctx context.Context, id string) (domain.Issue, error)
 }
@@ -160,7 +164,7 @@ type CIRepairer interface {
 // defaults to defaultPollInterval); Run trusts those fields as already
 // valid rather than re-defaulting them itself.
 type Scheduler struct {
-	Tracker  IssueFetcher
+	Tracker  tracker.DependencyStore
 	Executor Executor
 	Resolver DependencyResolver
 	Base     BaseResolver
@@ -210,7 +214,7 @@ type Scheduler struct {
 // (MaxParallel floors at 1, PollInterval defaults to defaultPollInterval).
 // Constructing a Scheduler any other way (a bare Scheduler{} literal) skips
 // these defaults and is unsupported.
-func New(trk IssueFetcher, exec Executor, resolver DependencyResolver, base BaseResolver, maxParallel int) *Scheduler {
+func New(trk tracker.DependencyStore, exec Executor, resolver DependencyResolver, base BaseResolver, maxParallel int) *Scheduler {
 	if maxParallel <= 0 {
 		maxParallel = 1
 	}
@@ -277,20 +281,16 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 		return map[string]Result{}, nil
 	}
 
-	issues := make([]domain.Issue, 0, len(issueIDs))
-	for _, id := range issueIDs {
-		issue, err := s.Tracker.GetIssue(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("scheduler: fetch issue %s: %w", id, err)
-		}
-		issues = append(issues, issue)
-	}
-
-	// tracker.BuildDAG both detects cycles (returning early, before any
-	// Issue is dispatched) and observes External Issues referenced by a
-	// Dependency but not in issueIDs (CONTEXT.md "External Issue") — those
-	// are never dispatched but their satisfaction still gates dependents.
-	dag, err := tracker.BuildDAG(issues)
+	// The DAG is built from the DependencyStore capability's read path
+	// (GetDependencies), one read per Issue ID. This both detects cycles
+	// (returning early, before any Issue is dispatched) and observes
+	// External Issues referenced by a Dependency but not in issueIDs
+	// (CONTEXT.md "External Issue") — those are never dispatched but their
+	// satisfaction still gates dependents. This is the scheduler's own
+	// dependency read; each dispatched Issue is fetched again via GetIssue
+	// inside Executor.Execute (engine.ExecuteInExecution), a separate read
+	// this does not attempt to share.
+	dag, err := tracker.BuildDAGFromStore(ctx, s.Tracker, issueIDs)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: dependency graph: %w", err)
 	}

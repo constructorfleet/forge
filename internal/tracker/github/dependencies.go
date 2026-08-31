@@ -3,8 +3,12 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // ghDependency is the subset of a GitHub issue-dependency relationship the
@@ -46,4 +50,50 @@ func (c *Client) fetchBlockedBy(ctx context.Context, number int) (ids []string, 
 		ids = append(ids, strconv.Itoa(d.Number))
 	}
 	return ids, true, nil
+}
+
+// dependencyEdges resolves gh's final prerequisite IDs — native relationships
+// when available, else the `## Dependencies` body block, with configured
+// DependencyOverrides applied last (ADR 0003) — and maps them to neutral,
+// provider-qualified DependencyEdges. This is the DependencyStore capability's
+// shared computation: both GetDependencies and GetIssue's normalization
+// resolve edges through it, so the two never drift onto separate encodings.
+func (c *Client) dependencyEdges(gh ghIssue, native []string, nativeOK bool) ([]tracker.DependencyEdge, error) {
+	base := native
+	if !nativeOK || len(native) == 0 {
+		// No native relationships to read here — fall back to the body
+		// block. Its strict syntax still fails closed on freeform text
+		// rather than guessing (see tracker.ParseDependencyBlock).
+		parsed, err := tracker.ParseDependencyBlock(gh.Body)
+		if err != nil {
+			return nil, fmt.Errorf("github: issue #%d: %w", gh.Number, err)
+		}
+		base = parsed
+	}
+
+	issueID := strconv.Itoa(gh.Number)
+	final := tracker.ApplyOverrides(issueID, base, c.DependencyOverrides)
+	provider := c.providerID()
+
+	edges := make([]tracker.DependencyEdge, len(final))
+	for i, dependsOn := range final {
+		edges[i] = tracker.DependencyEdge{
+			Issue:     domain.IssueRef{Provider: provider, ID: issueID},
+			DependsOn: domain.IssueRef{Provider: provider, ID: dependsOn},
+			Kind:      tracker.DependencyBlocks,
+		}
+	}
+	return edges, nil
+}
+
+// GetDependencies implements the DependencyStore read capability: it fetches
+// id's issue and native "blocked by" relationships, then resolves and
+// returns its prerequisite DependencyEdges (see dependencyEdges).
+func (c *Client) GetDependencies(ctx context.Context, id string) ([]tracker.DependencyEdge, error) {
+	gh, native, nativeOK, err := c.fetchIssueAndDeps(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.dependencyEdges(gh, native, nativeOK)
 }
