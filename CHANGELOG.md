@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/constructorfleet/forge/compare/forge-v0.14.2...forge-v0.15.0) (2026-08-31)
+
+
+### Features
+
+* spec review can hard-fail forge plan on reviewer non-determinism (budget exhausted with no surviving findings) ([#252](https://github.com/constructorfleet/forge/issues/252)) ([b53892e](https://github.com/constructorfleet/forge/commit/b53892e6f0682ac77ed9d551a8fb9c5624a5ede8)), closes [#249](https://github.com/constructorfleet/forge/issues/249)
+
+
+### Bug Fixes
+
+* wire all implemented agent providers ([#255](https://github.com/constructorfleet/forge/issues/255)) ([bd12107](https://github.com/constructorfleet/forge/commit/bd1210720ca17d7c04589c2d35d13b65ce7a718c))
+
 ## [0.14.2](https://github.com/constructorfleet/forge/compare/forge-v0.14.1...forge-v0.14.2) (2026-08-31)
 
 
