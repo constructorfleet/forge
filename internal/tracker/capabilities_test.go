@@ -1,0 +1,109 @@
+package tracker_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tracker"
+)
+
+var _ tracker.Tracker = (*issueOnlyTracker)(nil)
+var _ tracker.LegacyProvider = (*tracker.FakeTracker)(nil)
+var _ tracker.SCM = (*scmOnly)(nil)
+var _ tracker.CI = (*ciOnly)(nil)
+var _ tracker.ReviewGetter = (*reviewOnly)(nil)
+
+type issueOnlyTracker struct{}
+
+func (issueOnlyTracker) GetIssue(context.Context, string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+func (issueOnlyTracker) GetIssues(context.Context, []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (issueOnlyTracker) GetComments(context.Context, string) ([]tracker.Comment, error) {
+	return nil, nil
+}
+func (issueOnlyTracker) AddComment(context.Context, string, string) (tracker.Comment, error) {
+	return tracker.Comment{}, nil
+}
+func (issueOnlyTracker) AddLabel(context.Context, string, string) error { return nil }
+func (issueOnlyTracker) RemoveLabel(context.Context, string, string) error {
+	return nil
+}
+func (issueOnlyTracker) CreateIssue(context.Context, tracker.IssueRequest) (tracker.CreatedIssue, error) {
+	return tracker.CreatedIssue{}, nil
+}
+func (issueOnlyTracker) UpdateIssue(context.Context, string, tracker.UpdateIssueRequest) error {
+	return nil
+}
+func (issueOnlyTracker) Capabilities() tracker.Capabilities { return tracker.Capabilities{} }
+
+type scmOnly struct{}
+
+func (scmOnly) CreateChangeRequest(context.Context, tracker.ChangeRequestRequest) (tracker.ChangeRequest, error) {
+	return tracker.ChangeRequest{}, nil
+}
+func (scmOnly) GetChangeRequestMergeStatus(context.Context, tracker.ChangeRequestRef) (tracker.ChangeRequestMergeStatus, error) {
+	return tracker.ChangeRequestMergeStatus{}, nil
+}
+
+type ciOnly struct{}
+
+func (ciOnly) GetMergeRequirements(context.Context, string) (tracker.MergeRequirements, error) {
+	return tracker.MergeRequirements{}, nil
+}
+func (ciOnly) GetChecks(context.Context, tracker.ChangeRequestRef) ([]tracker.Check, error) {
+	return nil, nil
+}
+
+type reviewOnly struct{}
+
+func (reviewOnly) GetReviews(context.Context, tracker.ChangeRequestRef) ([]tracker.Review, error) {
+	return nil, nil
+}
+
+func TestMergeBlockerCarriesReasonSourceAndRawProviderDetail(t *testing.T) {
+	blocker := tracker.MergeBlocker{
+		Reason:    tracker.ChecksFailing,
+		Source:    tracker.CapabilityCI,
+		RawDetail: "GitHub Actions reported build failed",
+	}
+
+	if blocker.Reason != tracker.ChecksFailing {
+		t.Fatalf("Reason = %q, want %q", blocker.Reason, tracker.ChecksFailing)
+	}
+	if blocker.Source != tracker.CapabilityCI {
+		t.Fatalf("Source = %q, want %q", blocker.Source, tracker.CapabilityCI)
+	}
+	if blocker.RawDetail != "GitHub Actions reported build failed" {
+		t.Fatalf("RawDetail = %q", blocker.RawDetail)
+	}
+}
+
+func TestNeutralChangeRequestValueTypes(t *testing.T) {
+	ref := tracker.ChangeRequestRef{Provider: "github", Number: 293}
+	change := tracker.ChangeRequest{Ref: ref, URL: "https://example.invalid/pr/293"}
+	check := tracker.Check{Name: "build", State: tracker.CheckPending, Details: "queued"}
+	requirement := tracker.MergeRequirement{CheckName: "build"}
+	review := tracker.Review{Author: "alice", State: tracker.ReviewApproved, Body: "ship it"}
+	approval := tracker.Approval{Author: "alice", RawDetail: "APPROVED"}
+	eligibility := tracker.MergeEligibility{
+		Mergeable: false,
+		Blockers:  []tracker.MergeBlocker{{Reason: tracker.ChecksPending, Source: tracker.CapabilityCI}},
+	}
+
+	if change.Ref != ref {
+		t.Fatalf("ChangeRequest.Ref = %+v, want %+v", change.Ref, ref)
+	}
+	if check.Name != requirement.CheckName {
+		t.Fatalf("check/requirement mismatch: %+v %+v", check, requirement)
+	}
+	if review.Author != approval.Author {
+		t.Fatalf("review/approval author mismatch: %+v %+v", review, approval)
+	}
+	if eligibility.Mergeable || len(eligibility.Blockers) != 1 {
+		t.Fatalf("eligibility = %+v", eligibility)
+	}
+}

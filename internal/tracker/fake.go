@@ -13,11 +13,10 @@ import (
 // var declaration ensures FakeTracker satisfies Tracker at compile time.
 var _ Tracker = (*FakeTracker)(nil)
 
-// FakeTracker is an in-memory Tracker implementation for tests: it never
-// hits a real tracker API. It implements the full widened Tracker
-// interface (ticket 10), including CreateIssue, so tests exercising the
-// Phase 2 materialization path do not need an httptest-backed github.Client
-// double.
+// FakeTracker is an in-memory Tracker and LegacyProvider implementation for
+// tests: it never hits a real tracker API. It includes the old combined
+// pull-request and CI methods so existing tests do not need an httptest-backed
+// github.Client double.
 type FakeTracker struct {
 	mu sync.Mutex
 
