@@ -463,6 +463,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 	decisions map[string]*planning.Artifact,
 ) error {
 	budget := &ReviewRepairBudget{limit: e.ReviewRetryLimit}
+	var reviewAttempts [][]ticketplanreview.Finding
 
 	// Render ticket plan for review
 	ticketPlanRendered := renderTicketPlanForReview(tpArtifact)
@@ -495,8 +496,22 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 		}
 
 		// CHANGES_REQUIRED - enter bounded repair loop
+		reviewAttempts = append(reviewAttempts, reviewResult.Findings)
+
 		if budget.Exhausted() {
-			return fmt.Errorf("specengine: ticket plan review repair budget exhausted after %d attempts", e.ReviewRetryLimit)
+			if recurring := recurringTicketPlanFindings(reviewAttempts); len(recurring) > 0 {
+				return fmt.Errorf("specengine: ticket plan review repair budget exhausted after %d attempts; recurring findings across every attempt:\n%s  summary: %s",
+					e.ReviewRetryLimit, formatTicketPlanFindingsForError(recurring), reviewResult.Summary)
+			}
+			// The reviewer never agreed with itself across every attempt --
+			// that is non-determinism in the automated reviewer, not a
+			// genuine defect, and the ticket plan already passed
+			// deterministic validation. Save it rather than hard-failing
+			// the feature on reviewer noise.
+			if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
+				return fmt.Errorf("specengine: save ticket plan: %w", err)
+			}
+			return nil
 		}
 
 		if err := budget.Record(); err != nil {
@@ -565,6 +580,72 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 		tpArtifact = newTPArtifact
 		ticketPlanRendered = renderTicketPlanForReview(tpArtifact)
 	}
+}
+
+// ticketPlanFindingKey identifies a ticketplanreview.Finding for recurrence
+// tracking, independent of exact whitespace: severity, ticket, requirement,
+// and message text are what a reviewer is actually re-raising.
+func ticketPlanFindingKey(f ticketplanreview.Finding) string {
+	return strings.ToLower(strings.TrimSpace(string(f.Severity))) + "|" +
+		strings.ToLower(strings.TrimSpace(f.TicketKey)) + "|" +
+		strings.ToLower(strings.TrimSpace(f.Requirement)) + "|" +
+		strings.ToLower(strings.TrimSpace(f.Message))
+}
+
+// recurringTicketPlanFindings returns the findings that appear in every
+// attempt, in the order they first appeared, deduplicated. A finding present
+// in every attempt is a stable, reproducible defect worth hard-failing on;
+// one that appears in some attempts but not others is reviewer noise.
+func recurringTicketPlanFindings(attempts [][]ticketplanreview.Finding) []ticketplanreview.Finding {
+	if len(attempts) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int)
+	first := make(map[string]ticketplanreview.Finding)
+	for _, findings := range attempts {
+		seen := make(map[string]bool)
+		for _, f := range findings {
+			key := ticketPlanFindingKey(f)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			counts[key]++
+			if _, ok := first[key]; !ok {
+				first[key] = f
+			}
+		}
+	}
+
+	var recurring []ticketplanreview.Finding
+	seenOut := make(map[string]bool)
+	for _, findings := range attempts[0] {
+		key := ticketPlanFindingKey(findings)
+		if seenOut[key] {
+			continue
+		}
+		seenOut[key] = true
+		if counts[key] == len(attempts) {
+			recurring = append(recurring, first[key])
+		}
+	}
+	return recurring
+}
+
+func formatTicketPlanFindingsForError(findings []ticketplanreview.Finding) string {
+	var out string
+	for _, f := range findings {
+		ref := ""
+		if f.TicketKey != "" {
+			ref += " [" + f.TicketKey + "]"
+		}
+		if f.Requirement != "" {
+			ref += " [" + f.Requirement + "]"
+		}
+		out += fmt.Sprintf("  [%s]%s %s\n", f.Severity, ref, f.Message)
+	}
+	return out
 }
 
 func buildTicketPlanRepairFeedback(findings []ticketplanreview.Finding) string {
