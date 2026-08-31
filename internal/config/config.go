@@ -12,13 +12,18 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 	"gopkg.in/yaml.v3"
 )
 
-// TrackerConfig identifies the issue tracker backing an Execution.
+// TrackerConfig identifies the issue tracker backing an Execution. Type
+// selects which provider implements the Tracker capability (see Config.
+// Provider's doc comment on capability composition); Provider is the
+// unrelated sidecar tag stamped onto every fetched domain.Issue (see
+// tracker/github.Client.Provider).
 type TrackerConfig struct {
 	Type     string `yaml:"type"`
 	Provider string `yaml:"provider"`
@@ -30,6 +35,12 @@ type TrackerConfig struct {
 	// false: the preflight runs, and a missing/invalid credential aborts
 	// before any side-effecting work begins.
 	SkipAuthPreflight bool `yaml:"skip_auth_preflight"`
+}
+
+// SCMConfig identifies which provider implements the SCM (change-request)
+// capability. See Config.Provider's doc comment on capability composition.
+type SCMConfig struct {
+	Type string `yaml:"type"`
 }
 
 // GitConfig configures the base revision, branch naming, and Workspace
@@ -132,12 +143,23 @@ type MergeRequirementsConfig struct {
 	Checks []string              `yaml:"checks"`
 }
 
-// CIConfig configures CI Supervisor behavior.
+// CIConfig configures CI Supervisor behavior. Type selects which provider
+// implements the CI (merge-eligibility) capability — see Config.Provider's
+// doc comment on capability composition.
 type CIConfig struct {
+	Type              string                  `yaml:"type"`
 	MergeRequirements MergeRequirementsConfig `yaml:"required_checks"`
 	PollInterval      time.Duration           `yaml:"poll_interval"`
 	MaxOutputBytes    int                     `yaml:"max_output_bytes"`
 }
+
+// externalCIObservers names CI.Type values recognized as generic
+// external-status observers: providers that report merge-eligibility
+// checks without being the SCM host itself, exempted from the frozen
+// composition rule's "ci must match scm" requirement (see validate).
+// Empty today — no such provider exists yet; a later Provider Split ticket
+// adds one by naming its type here.
+var externalCIObservers = map[string]bool{}
 
 // BlockedConfig configures behavior when an Issue needs human input.
 type BlockedConfig struct {
@@ -365,8 +387,24 @@ type DependenciesConfig struct {
 // configured here are exactly what an Issue's RetryBudget is constructed
 // from.
 type Config struct {
-	Version          int                    `yaml:"version"`
+	Version int `yaml:"version"`
+
+	// Provider is sugar composing all three capabilities — Tracker, SCM,
+	// and CI — onto a single provider type in one field, for the common
+	// case of one host doing everything (e.g. "github"). Tracker.Type,
+	// SCM.Type, and CI.Type each independently default to Provider when
+	// left unset, and any of them set explicitly overrides Provider for
+	// that capability alone — so `provider: github` with an explicit
+	// `tracker: {type: linear}` composes tracker: linear, scm: github,
+	// ci: github. Composition is resolved once, at load time (see
+	// resolveProviders), and validated before anything is wired: ci must
+	// resolve to the same provider type as scm, or a recognized generic
+	// external-status observer (the frozen composition rule, issue #295;
+	// tracker is independent of both).
+	Provider string `yaml:"provider"`
+
 	Tracker          TrackerConfig          `yaml:"tracker"`
+	SCM              SCMConfig              `yaml:"scm"`
 	Git              GitConfig              `yaml:"git"`
 	Execution        ExecutionConfig        `yaml:"execution"`
 	Retry            domain.RetryLimits     `yaml:"retry"`
@@ -423,13 +461,28 @@ const defaultLSPMaxResults = 50
 const defaultReviewConfidenceFloor = 0.7
 
 // Default returns the fully-defaulted Config used when no .forge.yaml is
-// present — the zero-config case. It is also the single source of truth for
-// every deterministic default: Load starts from this literal and lets YAML
-// decoding overwrite only the fields the file actually sets.
+// present — the zero-config case, with capability composition already
+// resolved (Provider "github"; Tracker.Type, SCM.Type, and CI.Type all
+// "github"). It is also the single source of truth for every deterministic
+// default: Load starts from unresolvedDefault (the same literal, but with
+// Provider/Tracker.Type/SCM.Type/CI.Type left blank) and lets YAML decoding
+// overwrite only the fields the file actually sets, before resolveProviders
+// applies the same composition Default applies here.
 func Default() Config {
+	cfg := unresolvedDefault()
+	resolveProviders(&cfg)
+	return cfg
+}
+
+// unresolvedDefault is Default's underlying literal, with Provider and each
+// capability's Type left blank so Load can distinguish "left at default"
+// from "explicitly set" for the purpose of resolveProviders' composition —
+// see Config.Provider's doc comment. Every other field is defaulted exactly
+// as Default returns it.
+func unresolvedDefault() Config {
 	return Config{
 		Version: 1,
-		Tracker: TrackerConfig{Type: "github", Provider: "github"},
+		Tracker: TrackerConfig{Provider: "github"},
 		Git: GitConfig{
 			Base:           "origin/main",
 			BranchTemplate: "forge/{execution}/{issue}",
@@ -475,18 +528,46 @@ func Default() Config {
 	}
 }
 
+// resolveProviders applies the provider-composition sugar described on
+// Config.Provider: an empty Provider defaults to "github", and each of
+// Tracker.Type, SCM.Type, and CI.Type that is still empty after YAML
+// decoding is filled in from Provider. A capability whose block set Type
+// explicitly is left untouched, so "explicit per-capability blocks
+// override" holds. Called once by Default (against unresolvedDefault) and
+// once by Load (against the decoded Config), so both entry points return a
+// fully composed Config before validate ever runs.
+func resolveProviders(cfg *Config) {
+	if strings.TrimSpace(cfg.Provider) == "" {
+		cfg.Provider = "github"
+	}
+	if strings.TrimSpace(cfg.Tracker.Type) == "" {
+		cfg.Tracker.Type = cfg.Provider
+	}
+	if strings.TrimSpace(cfg.SCM.Type) == "" {
+		cfg.SCM.Type = cfg.Provider
+	}
+	if strings.TrimSpace(cfg.CI.Type) == "" {
+		cfg.CI.Type = cfg.Provider
+	}
+}
+
 // Load reads, parses, defaults, and validates the .forge.yaml file at path.
 //
-// Decoding starts from Default() and unmarshals onto it, so any field
-// absent from the file keeps its default and only fields actually present
-// are overwritten — including an explicit false or 0, which correctly
-// resets a field rather than being indistinguishable from "absent". An
-// explicit YAML null is the one exception: yaml.v3 treats it as "no value
-// supplied" and leaves the pre-populated default in place rather than
-// zeroing the field (see TestLoad_ExplicitNullLeavesDefaultInPlace).
+// Decoding starts from unresolvedDefault and unmarshals onto it, so any
+// field absent from the file keeps its default and only fields actually
+// present are overwritten — including an explicit false or 0, which
+// correctly resets a field rather than being indistinguishable from
+// "absent". An explicit YAML null is the one exception: yaml.v3 treats it
+// as "no value supplied" and leaves the pre-populated default in place
+// rather than zeroing the field (see TestLoad_ExplicitNullLeavesDefaultInPlace).
 // Unknown keys (e.g. a typo like `gats` for `gate`) are rejected rather
 // than silently ignored, since a deterministic orchestrator must not
 // tolerate an operator's misspelled config being treated as absent.
+//
+// Once decoded, resolveProviders composes Provider and each capability's
+// Type (see Config.Provider) before the frozen composition rule and every
+// other structural check run in validate — an incoherent composition is
+// rejected here, at load time, before anything is wired (issue #295).
 //
 // Malformed YAML and validation failures are both returned as errors
 // identifying the offending field where possible; see FieldError.
@@ -496,7 +577,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
-	cfg := Default()
+	cfg := unresolvedDefault()
 	if len(bytes.TrimSpace(data)) > 0 {
 		dec := yaml.NewDecoder(bytes.NewReader(data))
 		dec.KnownFields(true)
@@ -504,6 +585,7 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
 		}
 	}
+	resolveProviders(&cfg)
 
 	if err := validate(cfg); err != nil {
 		return Config{}, fmt.Errorf("config: %s: %w", path, err)

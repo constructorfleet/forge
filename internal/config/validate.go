@@ -46,6 +46,22 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))
 	}
 
+	if cfg.SCM.Type != "github" {
+		errs = append(errs, fieldErr("scm.type", cfg.SCM.Type, "unsupported scm type; supported: github"))
+	}
+
+	// Frozen composition rule: CI checks attach to the change request,
+	// which lives on the SCM host, so a CI provider must either match the
+	// configured SCM provider or be a recognized generic external-status
+	// observer (externalCIObservers — empty until a later Provider Split
+	// ticket adds one) capable of reporting on any SCM host. Tracker
+	// deliberately never enters this check: it is independent of both scm
+	// and ci (issue #295's acceptance criteria).
+	if cfg.CI.Type != cfg.SCM.Type && !externalCIObservers[cfg.CI.Type] {
+		errs = append(errs, fieldErr("ci.type", cfg.CI.Type,
+			fmt.Sprintf("must match scm.type (%q) or be a recognized external-status observer", cfg.SCM.Type)))
+	}
+
 	if strings.TrimSpace(cfg.Git.Base) == "" {
 		errs = append(errs, fieldErr("git.base", cfg.Git.Base, "must not be empty"))
 	}
