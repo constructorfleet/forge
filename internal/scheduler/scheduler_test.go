@@ -54,6 +54,23 @@ func (s *stubTracker) GetDependencies(_ context.Context, id string) ([]tracker.D
 	return edges, nil
 }
 
+// WriteDependencies is unused by these tests — the scheduler is a
+// DependencyStore reader only — but stubTracker must implement the full
+// interface to stand in for tracker.DependencyStore.
+func (s *stubTracker) WriteDependencies(_ context.Context, id string, dependsOn []string) error {
+	issue, ok := s.issues[id]
+	if !ok {
+		return errors.New("stubTracker: no issue " + id)
+	}
+	deps := make([]domain.Dependency, len(dependsOn))
+	for i, d := range dependsOn {
+		deps[i] = domain.Dependency{IssueID: id, DependsOnID: d}
+	}
+	issue.Dependencies = deps
+	s.issues[id] = issue
+	return nil
+}
+
 var _ tracker.DependencyStore = (*stubTracker)(nil)
 
 // storeBackedTracker is a stubTracker that additionally implements

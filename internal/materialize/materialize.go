@@ -342,19 +342,12 @@ func renderTicketSections(t ticketplan.Ticket) string {
 	return b.String()
 }
 
+// renderDependencies renders deps through tracker.RenderDependencyBlock —
+// the same encoding the DependencyStore write capability uses (see
+// internal/tracker/github's WriteDependencies) — so materialized bodies and
+// capability-written bodies never drift onto separate encodings.
 func renderDependencies(deps []string) string {
-	if len(deps) == 0 {
-		return "## Dependencies: None\n\n"
-	}
-	var b strings.Builder
-	b.WriteString("## Dependencies\n")
-	for _, id := range deps {
-		b.WriteString("- #")
-		b.WriteString(id)
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	return b.String()
+	return tracker.RenderDependencyBlock(deps) + "\n"
 }
 
 // validateMaterializedGraph re-fetches every materialized Issue and

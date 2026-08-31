@@ -25,6 +25,13 @@ func (f *fakeDependencyStore) GetDependencies(_ context.Context, id string) ([]t
 	return f.edges[id], nil
 }
 
+// WriteDependencies is unused by these tests — BuildDAGFromStore only reads
+// — but fakeDependencyStore must implement the full interface to stand in
+// for tracker.DependencyStore.
+func (f *fakeDependencyStore) WriteDependencies(context.Context, string, []string) error {
+	return nil
+}
+
 func blocksEdge(issueID, dependsOnID string) tracker.DependencyEdge {
 	return tracker.DependencyEdge{
 		Issue:     domain.IssueRef{Provider: "github", ID: issueID},

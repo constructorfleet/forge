@@ -86,6 +86,9 @@ type dependencyStoreOnly struct{}
 func (dependencyStoreOnly) GetDependencies(context.Context, string) ([]tracker.DependencyEdge, error) {
 	return nil, nil
 }
+func (dependencyStoreOnly) WriteDependencies(context.Context, string, []string) error {
+	return nil
+}
 
 func TestDependencyEdgeIsNeutralAndSingleProviderBlocksOnly(t *testing.T) {
 	edge := tracker.DependencyEdge{
