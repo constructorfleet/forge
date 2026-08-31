@@ -21,7 +21,7 @@ A directed relationship indicating that one Issue must complete before another c
 A synthetic branch (`forge/integration/<issue>`) built by merging several Dependencies' branches together for an Issue with more than one Dependency, so that Issue's Worker starts from a repository state containing all of them. Recomputed from scratch each time it's needed; a merge conflict between Dependencies aborts and surfaces deterministically rather than dropping one side.
 
 **Dependency Source**:
-Where a Dependency relationship originates. The canonical source is a `## Dependencies` block in the issue body; `.forge.yaml` overrides take precedence when present. The Scheduler consumes normalized Dependencies regardless of source.
+Where a Dependency relationship originates. On GitHub the canonical source is the tracker's native "blocked by" issue relationships when the host exposes them, falling back to the `## Dependencies` block in the issue body otherwise (see ADR 0003); `.forge.yaml` overrides take precedence over both when present. The Scheduler consumes normalized Dependencies regardless of source.
 
 **External Issue**:
 An Issue referenced as a Dependency but not included in the Execution set. Loaded into the DAG as an observed node — tracked for satisfaction but never executed. Forge does not automatically add External Issues to the Execution. Satisfaction is checked by verifying merged code is reachable from the applicable base.

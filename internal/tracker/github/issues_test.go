@@ -12,6 +12,10 @@ import (
 
 func TestGetIssue_NormalizesToDomainIssueWithParsedDependencies(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		if r.URL.Path != "/repos/acme/widgets/issues/42" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -45,6 +49,10 @@ func TestGetIssue_DoesNotAssignScope(t *testing.T) {
 	// scheduler/DAG owns (tickets 26/27) — not the tracker adapter. A
 	// directly-fetched Issue must not be mislabeled Managed here.
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		_, _ = w.Write([]byte(`{"number":1,"body":"## Dependencies: None"}`))
 	})
 
@@ -59,6 +67,10 @@ func TestGetIssue_DoesNotAssignScope(t *testing.T) {
 
 func TestGetIssue_AcceptsHashPrefixedID(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		if r.URL.Path != "/repos/acme/widgets/issues/7" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -79,6 +91,10 @@ func TestGetIssue_AcceptsHashPrefixedID(t *testing.T) {
 
 func TestGetIssue_RejectsFreeformDependencyText(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		_, _ = w.Write([]byte(`{"number":1,"body":"## Dependencies\nthis depends on stuff\n"}`))
 	})
 
@@ -90,6 +106,10 @@ func TestGetIssue_RejectsFreeformDependencyText(t *testing.T) {
 
 func TestGetIssue_AppliesConfiguredOverrides(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		_, _ = w.Write([]byte(`{"number":42,"body":"## Dependencies\n- #1\n"}`))
 	})
 	c.DependencyOverrides = map[string][]string{"42": {"99"}}
@@ -107,6 +127,10 @@ func TestGetIssues_FetchesMultiple(t *testing.T) {
 	seen := map[string]bool{}
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		seen[r.URL.Path] = true
+		if isBlockedByPath(r) {
+			serveNoNativeDeps(w)
+			return
+		}
 		switch r.URL.Path {
 		case "/repos/acme/widgets/issues/1":
 			_, _ = w.Write([]byte(`{"number":1,"body":""}`))
@@ -165,6 +189,8 @@ func TestCreateIssue_ThenGetIssue_FetchesTheCreatedIssue(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/issues":
 			_, _ = w.Write([]byte(`{"number":5,"title":"Created","html_url":"https://github.com/acme/widgets/issues/5"}`))
+		case isBlockedByPath(r):
+			serveNoNativeDeps(w)
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/issues/5":
 			_, _ = w.Write([]byte(`{"number":5,"title":"Created","body":"## Dependencies: None"}`))
 		default:

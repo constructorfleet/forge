@@ -23,9 +23,10 @@ type ghIssue struct {
 
 // GetIssue fetches a single Issue by ID (a GitHub issue number, with or
 // without a leading "#") and normalizes it to domain.Issue. Dependencies
-// are parsed from the canonical `## Dependencies` block in the issue body
-// and any configured DependencyOverrides are applied (config takes
-// precedence; see CONTEXT.md "Dependency Source").
+// come from GitHub's native "blocked by" issue relationships when the
+// repository exposes them, falling back to the canonical `## Dependencies`
+// block in the issue body otherwise; any configured DependencyOverrides
+// then take precedence (see CONTEXT.md "Dependency Source" and ADR 0003).
 func (c *Client) GetIssue(ctx context.Context, id string) (domain.Issue, error) {
 	number, err := parseIssueID(id)
 	if err != nil {
@@ -38,7 +39,12 @@ func (c *Client) GetIssue(ctx context.Context, id string) (domain.Issue, error) 
 		return domain.Issue{}, err
 	}
 
-	return c.normalizeIssue(gh)
+	native, nativeOK, err := c.fetchBlockedBy(ctx, number)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+
+	return c.normalizeIssue(gh, native, nativeOK)
 }
 
 // GetIssues fetches multiple Issues by ID, normalized to domain.Issue.
@@ -97,14 +103,28 @@ func (c *Client) Capabilities() tracker.Capabilities {
 	return tracker.Capabilities{PlanningMirror: false}
 }
 
-func (c *Client) normalizeIssue(gh ghIssue) (domain.Issue, error) {
+// normalizeIssue converts a fetched GitHub issue into a domain.Issue.
+// native carries the issue's native "blocked by" relationships and nativeOK
+// reports whether that source was available. Native relationships are the
+// canonical GitHub Dependency Source; the `## Dependencies` body block is
+// the fallback used when native relationships are unavailable (nativeOK
+// false) or the issue has none set (ADR 0003). Configured
+// DependencyOverrides then replace whichever base source was used.
+func (c *Client) normalizeIssue(gh ghIssue, native []string, nativeOK bool) (domain.Issue, error) {
 	issueID := strconv.Itoa(gh.Number)
 
-	parsed, err := tracker.ParseDependencyBlock(gh.Body)
-	if err != nil {
-		return domain.Issue{}, fmt.Errorf("github: issue #%d: %w", gh.Number, err)
+	base := native
+	if !nativeOK || len(native) == 0 {
+		// No native relationships to read here — fall back to the body
+		// block. Its strict syntax still fails closed on freeform text
+		// rather than guessing (see tracker.ParseDependencyBlock).
+		parsed, err := tracker.ParseDependencyBlock(gh.Body)
+		if err != nil {
+			return domain.Issue{}, fmt.Errorf("github: issue #%d: %w", gh.Number, err)
+		}
+		base = parsed
 	}
-	final := tracker.ApplyOverrides(issueID, parsed, c.DependencyOverrides)
+	final := tracker.ApplyOverrides(issueID, base, c.DependencyOverrides)
 
 	deps := make([]domain.Dependency, len(final))
 	for i, dependsOn := range final {
