@@ -7,9 +7,21 @@ import (
 )
 
 // CreateChangeRequest adapts the neutral SCM capability to GitHub's existing
-// pull-request creation behavior.
+// pull-request creation behavior. The neutral request is mapped field by
+// field rather than whole-struct converted so the neutral ChangeRequestRequest
+// and the provider-native PullRequestRequest can evolve independently.
 func (c *Client) CreateChangeRequest(ctx context.Context, req tracker.ChangeRequestRequest) (tracker.ChangeRequest, error) {
-	pr, err := c.CreatePullRequest(ctx, tracker.PullRequestRequest(req))
+	// The neutral and native structs are identical today, so staticcheck
+	// (S1016) suggests a whole-struct conversion; we deliberately map field
+	// by field instead to keep the neutral SCM vocabulary decoupled from the
+	// provider-native PR shape as either evolves.
+	//nolint:staticcheck // S1016: intentional field mapping, not a struct convert
+	pr, err := c.CreatePullRequest(ctx, tracker.PullRequestRequest{
+		Base:  req.Base,
+		Head:  req.Head,
+		Title: req.Title,
+		Body:  req.Body,
+	})
 	if err != nil {
 		return tracker.ChangeRequest{}, err
 	}

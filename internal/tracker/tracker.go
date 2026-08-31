@@ -210,6 +210,15 @@ type PullRequestRequest struct {
 // ChangeRequestRef is Forge's neutral identity for a change request. It is a
 // distinct type from issue identity so orchestration cannot accidentally pass
 // an Issue ID where an SCM-hosted Change Request is required.
+//
+// Routing invariant: the SCM/CI adapter that receives a ChangeRequestRef has
+// already been selected for its provider by the orchestrator, so an adapter
+// consumes only the provider-local coordinates (Number) and does not re-check
+// Provider. Provider is an informational tag identifying which provider minted
+// the ref — for logging, cross-provider disambiguation, and future multi-SCM
+// routing — not an argument the receiving adapter validates or dispatches on.
+// Callers must therefore hand a ref to the adapter matching its Provider; a
+// mismatched Provider is not rejected and will be silently treated as local.
 type ChangeRequestRef struct {
 	Provider string
 	Number   int
