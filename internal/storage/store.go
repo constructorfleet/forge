@@ -236,6 +236,10 @@ const (
 	// CIRunKindConflict is a detected merge conflict between the pull
 	// request's branch and its base.
 	CIRunKindConflict CIRunKind = "conflict"
+	// CIRunKindStale is a detected staleness (the pull request's branch
+	// has fallen behind its base branch) that Wait attempted to remediate
+	// with an automatic rebase (issue 233).
+	CIRunKindStale CIRunKind = "stale"
 )
 
 // CIRun is one persisted PR supervision attempt for an Issue in CI_PENDING

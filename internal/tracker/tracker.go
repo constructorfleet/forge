@@ -90,6 +90,13 @@ type PullRequestMergeStatus struct {
 	// authoritative only once the tracker has finished computing it (see
 	// the github adapter's doc comment on its mergeable_state mapping).
 	Conflicted bool
+	// Behind is true when the tracker reports the pull request's branch
+	// has fallen behind its base branch (issue 233: GitHub's
+	// mergeable_state == "behind") and would benefit from being rebased
+	// onto the base branch's current tip before its checks are trusted.
+	// False covers every other state, including "not yet computed" — same
+	// caveat as Conflicted.
+	Behind bool
 }
 
 // IssueRequest carries everything CreateIssue needs to create a new Issue

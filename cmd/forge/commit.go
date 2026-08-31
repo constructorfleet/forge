@@ -77,6 +77,26 @@ func (p gitPublisher) Push(ctx context.Context, workspacePath, branch string) er
 	return p.locks.WithLock(ctx, "branch:"+branch, push)
 }
 
+// ForcePush implements ci.BranchPusher with the real git binary, force-
+// pushing branch to the "origin" remote after internal/workspace's Rebase
+// has moved its tip non-fast-forward (issue 233: a stale pull request
+// rebased onto its target branch). --force-with-lease rather than a bare
+// --force: it aborts instead of clobbering if some other process moved the
+// remote branch since Forge last observed it, so a concurrent push to the
+// same branch is a safe failure here, not silently lost work.
+func (p gitPublisher) ForcePush(ctx context.Context, workspacePath, branch string) error {
+	push := func() error {
+		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", "--force-with-lease", "-u", "origin", branch).CombinedOutput(); err != nil {
+			return fmt.Errorf("forge: git push --force-with-lease -u origin %s in %s: %w: %s", branch, workspacePath, err, out)
+		}
+		return nil
+	}
+	if p.locks == nil {
+		return push()
+	}
+	return p.locks.WithLock(ctx, "branch:"+branch, push)
+}
+
 // baseBranchName strips a "origin/" remote prefix from a configured
 // cfg.Git.Base (e.g. "origin/main" -> "main"), since buildTracker/
 // buildEngine always resolve the tracked repository from the "origin"
