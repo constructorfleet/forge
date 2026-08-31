@@ -153,6 +153,10 @@ func (a *axisRoutingAgent) Execute(_ context.Context, req agent.AgentRequest) (a
 	defer a.mu.Unlock()
 	a.invocations = append(a.invocations, req)
 
+	if req.Transcript != nil {
+		req.Transcript.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "reviewing the diff"})
+	}
+
 	for marker, flaky := range a.flaky {
 		if strings.Contains(req.Policy.Notes, marker) {
 			flaky.calls++
@@ -735,5 +739,69 @@ func TestReview_RubricOverride_UsedWhenSet(t *testing.T) {
 	}
 	if qualityNotes == "" || !strings.Contains(qualityNotes, qualityAxisMarker) {
 		t.Errorf("quality invocation should still use its embedded rubric, got Policy.Notes = %q", qualityNotes)
+	}
+}
+
+// fakeTranscriptSink is an agent.TranscriptSink test double that records
+// every Emitted event, safe for concurrent use across the axes' goroutines.
+type fakeTranscriptSink struct {
+	mu     sync.Mutex
+	events []agent.TranscriptEvent
+}
+
+func (s *fakeTranscriptSink) Emit(event agent.TranscriptEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+}
+
+func (s *fakeTranscriptSink) Events() []agent.TranscriptEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]agent.TranscriptEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+// TestReview_WiresPerAxisTranscriptSink is issue #219's review-side check:
+// Review must call req.TranscriptSinkFor once per axis and wire the
+// returned sink into that axis's AgentRequest.Transcript, so each axis's
+// transcript is captured exactly as the implementation Agent's is.
+func TestReview_WiresPerAxisTranscriptSink(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programEnvelope(bugsAxisMarker, cleanEnvelope)
+	fake.programEnvelope(qualityAxisMarker, cleanEnvelope)
+	fake.programEnvelope(docsAxisMarker, cleanEnvelope)
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	var mu sync.Mutex
+	sinks := map[string]*fakeTranscriptSink{}
+
+	_, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "d",
+		Issue: newIssue(),
+		TranscriptSinkFor: func(subagent string) agent.TranscriptSink {
+			mu.Lock()
+			defer mu.Unlock()
+			sink := &fakeTranscriptSink{}
+			sinks[subagent] = sink
+			return sink
+		},
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, axisName := range []string{"bugs", "quality", "docs"} {
+		sink, ok := sinks[axisName]
+		if !ok {
+			t.Fatalf("TranscriptSinkFor was never called for axis %s; got sinks for %v", axisName, sinks)
+		}
+		events := sink.Events()
+		if len(events) != 1 || events[0].Text != "reviewing the diff" {
+			t.Fatalf("axis %s sink.Events() = %+v, want the agent's emitted event", axisName, events)
+		}
 	}
 }

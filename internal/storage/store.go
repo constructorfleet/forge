@@ -113,6 +113,14 @@ type TranscriptEvent struct {
 	// and its matching TOOL_RESULT (the id it references); empty otherwise.
 	ToolCallID string
 	OccurredAt time.Time
+	// Phase names the workflow phase this event was captured during (e.g.
+	// "IMPLEMENTING", "REVIEWING"), and Subagent names which subagent
+	// produced it within that phase (a review axis such as "bugs",
+	// "quality", "docs"; empty for the single implementation agent) — issue
+	// #219, so a row is self-describing once both the execution agent and
+	// the review agent's axes share this table.
+	Phase    string
+	Subagent string
 }
 
 // ReviewFinding is one structured Finding raised during a ReviewRun,

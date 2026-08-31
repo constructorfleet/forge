@@ -54,6 +54,17 @@ type Request struct {
 	// filesystem access alongside Diff, not a resumption of the
 	// implementation Agent's prior invocation.
 	WorkspacePath string
+
+	// TranscriptSinkFor, if non-nil, returns the agent.TranscriptSink an
+	// axis-fanning Reviewer (e.g. internal/review/agentreviewer) should wire
+	// into that axis's agent.AgentRequest.Transcript, keyed by axis name
+	// ("bugs", "quality", "docs") — issue #219, so a review agent's
+	// transcript is persisted as it streams, exactly like the
+	// implementation Agent's. Optional: nil means no capture, matching
+	// every Reviewer's behavior before this field existed. A Reviewer with
+	// no per-axis concept of "subagent" may call it once with an empty
+	// string.
+	TranscriptSinkFor func(subagent string) agent.TranscriptSink
 }
 
 // Verdict is a Reviewer's outcome for one Review.

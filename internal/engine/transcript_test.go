@@ -10,6 +10,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -85,6 +86,14 @@ func TestExecute_PersistsAgentTranscriptEvents(t *testing.T) {
 	}
 	if transcript[1].ToolCallID != "tool-1" || transcript[2].ToolCallID != "tool-1" {
 		t.Fatalf("transcript[1].ToolCallID = %q, transcript[2].ToolCallID = %q, want both tool-1 (call/result pairing survives persistence)", transcript[1].ToolCallID, transcript[2].ToolCallID)
+	}
+	for i, event := range transcript {
+		if event.Phase != "IMPLEMENTING" {
+			t.Fatalf("transcript[%d].Phase = %q, want IMPLEMENTING", i, event.Phase)
+		}
+		if event.Subagent != "" {
+			t.Fatalf("transcript[%d].Subagent = %q, want empty (single implementation agent)", i, event.Subagent)
+		}
 	}
 }
 
@@ -198,5 +207,77 @@ func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing
 	}
 	if len(final) != 2 {
 		t.Fatalf("got %d transcript events after cancellation, want 2 — the last recorded event must be the one immediately before the wedge, not lost", len(final))
+	}
+}
+
+// transcriptEmittingReviewer is an engine.Engine.Reviewer double that emits
+// one scripted TranscriptEvent per subagent via req.TranscriptSinkFor (when
+// set) before returning a programmed review.Result — standing in for
+// internal/review/agentreviewer's per-axis fan-out, without depending on
+// that package from the engine's tests.
+type transcriptEmittingReviewer struct {
+	subagents []string
+	result    review.Result
+}
+
+func (r *transcriptEmittingReviewer) Review(_ context.Context, req review.Request) (review.Result, error) {
+	if req.TranscriptSinkFor != nil {
+		for _, subagent := range r.subagents {
+			sink := req.TranscriptSinkFor(subagent)
+			sink.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "reviewing " + subagent})
+		}
+	}
+	return r.result, nil
+}
+
+var _ review.Reviewer = (*transcriptEmittingReviewer)(nil)
+
+// TestExecute_PersistsReviewAgentTranscriptEvents is issue #219's check:
+// the review agent's transcripts must be persisted to transcript_events as
+// they occur, exactly as the execution agent's are, with each subagent's
+// (review axis's) events tagged with the REVIEWING phase and its own
+// subagent name so the two never collide in one table.
+func TestExecute_PersistsReviewAgentTranscriptEvents(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{"42": {ID: "42"}})
+	te.fake.ProgramResult("42", agent.AgentResult{Status: agent.StatusImplemented, Summary: "did the thing"})
+
+	reviewer := &transcriptEmittingReviewer{
+		subagents: []string{"bugs", "quality", "docs"},
+		result:    review.Result{Verdict: review.VerdictApproved, Summary: "looks good"},
+	}
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff --git a/foo b/foo"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "42", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
+	}
+
+	transcript, err := engine.LoadTranscript(ctx, te.store, result.ExecutionID, "42")
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+
+	bySubagent := map[string]string{}
+	for _, event := range transcript {
+		if event.Phase == "REVIEWING" {
+			bySubagent[event.Subagent] = event.Text
+		}
+	}
+	for _, subagent := range reviewer.subagents {
+		text, ok := bySubagent[subagent]
+		if !ok {
+			t.Fatalf("no REVIEWING transcript event for subagent %q; got %+v", subagent, transcript)
+		}
+		if text != "reviewing "+subagent {
+			t.Fatalf("subagent %q event text = %q, want %q", subagent, text, "reviewing "+subagent)
+		}
+	}
+	if len(bySubagent) != len(reviewer.subagents) {
+		t.Fatalf("got %d distinct REVIEWING subagents, want %d: %+v", len(bySubagent), len(reviewer.subagents), transcript)
 	}
 }

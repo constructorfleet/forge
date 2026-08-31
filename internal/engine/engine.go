@@ -872,7 +872,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 	if startErr != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
 	}
-	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, e.Now)
+	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now)
 
 	result, err := e.Agent.Execute(ctx, req)
 	finished := e.Now()
@@ -934,7 +934,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 // persisted shape), the same translation convention GateRun/ReviewRun
 // document: storage has no dependency on internal/agent, so the engine
 // converts between the two.
-func toStorageTranscriptEvents(events []agent.TranscriptEvent) []storage.TranscriptEvent {
+func toStorageTranscriptEvents(events []agent.TranscriptEvent, phase, subagent string) []storage.TranscriptEvent {
 	out := make([]storage.TranscriptEvent, len(events))
 	for i, event := range events {
 		out[i] = storage.TranscriptEvent{
@@ -947,6 +947,8 @@ func toStorageTranscriptEvents(events []agent.TranscriptEvent) []storage.Transcr
 			ToolOutput: event.ToolOutput,
 			ToolCallID: event.ToolCallID,
 			OccurredAt: event.Timestamp,
+			Phase:      phase,
+			Subagent:   subagent,
 		}
 	}
 	return out
@@ -980,16 +982,24 @@ type persistingTranscriptSink struct {
 	store                transcriptStore
 	executionID, issueID string
 	agentRunID           int64
-	recorder             *agent.TranscriptRecorder
+	// phase and subagent are stamped onto every event this sink persists
+	// (issue #219): phase names the workflow phase in progress
+	// ("IMPLEMENTING", "REVIEWING", ...), subagent names which subagent
+	// within that phase produced the event (a review axis such as
+	// "quality"; empty for the single implementation agent).
+	phase, subagent string
+	recorder        *agent.TranscriptRecorder
 }
 
-func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, now func() time.Time) *persistingTranscriptSink {
+func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, phase, subagent string, now func() time.Time) *persistingTranscriptSink {
 	return &persistingTranscriptSink{
 		ctx:         ctx,
 		store:       store,
 		executionID: executionID,
 		issueID:     issueID,
 		agentRunID:  agentRunID,
+		phase:       phase,
+		subagent:    subagent,
 		recorder:    agent.NewBoundedTranscriptRecorder(maxTranscriptEvents, now),
 	}
 }
@@ -1000,10 +1010,123 @@ func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, exe
 // invocation in progress.
 func (s *persistingTranscriptSink) Emit(event agent.TranscriptEvent) {
 	s.recorder.Emit(event)
-	_ = s.store.ReplaceTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(s.recorder.Events()))
+	_ = s.store.ReplaceTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(s.recorder.Events(), s.phase, s.subagent))
 }
 
 var _ agent.TranscriptSink = (*persistingTranscriptSink)(nil)
+
+// reviewAgentRunStore is the subset of storage.Store a
+// reviewTranscriptCoordinator needs to start/finalize a per-axis agent_runs
+// row and flush its transcript, narrowed for testability like
+// transcriptStore.
+type reviewAgentRunStore interface {
+	transcriptStore
+	StartAgentRun(ctx context.Context, run storage.AgentRun) (int64, error)
+	FinalizeAgentRun(ctx context.Context, agentRunID int64, run storage.AgentRun) error
+}
+
+// noopTranscriptSink discards every event; reviewTranscriptCoordinator
+// returns one when StartAgentRun fails, matching the rest of this file's
+// best-effort transcript-persistence contract (a storage hiccup must never
+// fail the Issue's Review) instead of leaving req.Transcript nil, which
+// would panic in a caller that assumes a sink is always usable.
+type noopTranscriptSink struct{}
+
+func (noopTranscriptSink) Emit(agent.TranscriptEvent) {}
+
+var _ agent.TranscriptSink = noopTranscriptSink{}
+
+// reviewTranscriptCoordinator gives each review axis (issue #219's
+// "subagent") its own agent_runs row and persistingTranscriptSink, mirroring
+// executeAgent's single-agent wiring but fanned out per axis since
+// review.Reviewer implementations (agentreviewer) run several concurrent
+// Agent invocations per Review call. sinkFor is handed to
+// review.Request.TranscriptSinkFor; finalize closes out every axis this
+// coordinator started once Review returns, tagging each with whether its
+// axis ran per the returned Coverage.
+type reviewTranscriptCoordinator struct {
+	ctx                  context.Context
+	store                reviewAgentRunStore
+	executionID, issueID string
+	backend              string
+	now                  func() time.Time
+
+	mu   sync.Mutex
+	runs []struct {
+		subagent string
+		runID    int64
+	}
+}
+
+func newReviewTranscriptCoordinator(ctx context.Context, store reviewAgentRunStore, executionID, issueID, backend string, now func() time.Time) *reviewTranscriptCoordinator {
+	return &reviewTranscriptCoordinator{
+		ctx:         ctx,
+		store:       store,
+		executionID: executionID,
+		issueID:     issueID,
+		backend:     backend,
+		now:         now,
+	}
+}
+
+// sinkFor implements the review.Request.TranscriptSinkFor contract: it
+// starts a fresh agent_runs row for subagent and returns a
+// persistingTranscriptSink wired to it, tagged with the REVIEWING phase.
+// StartAgentRun failing is best-effort here (mirroring persistingTranscriptSink.Emit
+// elsewhere in this file): Review must not fail just because its
+// transcript couldn't be captured, so this returns a noopTranscriptSink
+// instead of propagating the error.
+func (c *reviewTranscriptCoordinator) sinkFor(subagent string) agent.TranscriptSink {
+	started := c.now()
+	runID, err := c.store.StartAgentRun(c.ctx, storage.AgentRun{
+		ExecutionID: c.executionID,
+		IssueID:     c.issueID,
+		Backend:     c.backend,
+		StartedAt:   started,
+	})
+	if err != nil {
+		return noopTranscriptSink{}
+	}
+	c.mu.Lock()
+	c.runs = append(c.runs, struct {
+		subagent string
+		runID    int64
+	}{subagent, runID})
+	c.mu.Unlock()
+	return newPersistingTranscriptSink(c.ctx, c.store, c.executionID, c.issueID, runID, string(domain.StateReviewing), subagent, c.now)
+}
+
+// finalize closes out every agent_runs row sinkFor started, tagging each
+// with "REVIEWED" or "UNRECOVERABLE: <reason>" per coverage — best-effort,
+// like sinkFor: a FinalizeAgentRun failure never fails the Review.
+func (c *reviewTranscriptCoordinator) finalize(coverage []review.AxisCoverage) {
+	reasonBySubagent := map[string]string{}
+	for _, cov := range coverage {
+		if !cov.Ran {
+			reasonBySubagent[cov.Axis] = cov.Reason
+		}
+	}
+	finished := c.now()
+	c.mu.Lock()
+	runs := append([]struct {
+		subagent string
+		runID    int64
+	}{}, c.runs...)
+	c.mu.Unlock()
+	for _, run := range runs {
+		result := "REVIEWED"
+		if reason, unrecoverable := reasonBySubagent[run.subagent]; unrecoverable {
+			result = "UNRECOVERABLE: " + reason
+		}
+		_ = c.store.FinalizeAgentRun(c.ctx, run.runID, storage.AgentRun{
+			ExecutionID: c.executionID,
+			IssueID:     c.issueID,
+			Backend:     c.backend,
+			FinishedAt:  finished,
+			Result:      result,
+		})
+	}
+}
 
 // runQualityGates runs the Issue's configured Quality Gates (ticket 19,
 // internal/gate) for an Issue already in VALIDATING, persisting each
@@ -1119,16 +1242,23 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 	}
 
 	started := e.Now()
+	// transcriptCoord gives each review axis its own agent_runs row and
+	// incrementally-persisted transcript (issue #219), exactly as
+	// executeAgent does for the implementation Agent — see
+	// reviewTranscriptCoordinator's doc comment.
+	transcriptCoord := newReviewTranscriptCoordinator(ctx, e.Store, executionID, issueID, e.Config.Agent.Provider, e.Now)
 	result, err := e.Reviewer.Review(ctx, review.Request{
-		Diff:          diff,
-		Issue:         issue,
-		Repository:    repoCtx,
-		GateResults:   gateResults,
-		WorkspacePath: workspacePath,
+		Diff:              diff,
+		Issue:             issue,
+		Repository:        repoCtx,
+		GateResults:       gateResults,
+		WorkspacePath:     workspacePath,
+		TranscriptSinkFor: transcriptCoord.sinkFor,
 	})
 	if err != nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer execute issue %s: %w", issueID, err)
 	}
+	transcriptCoord.finalize(result.Coverage)
 	finished := e.Now()
 
 	findings := make([]storage.ReviewFinding, len(result.Findings))
