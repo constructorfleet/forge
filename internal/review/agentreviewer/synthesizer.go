@@ -248,7 +248,8 @@ func mergeCluster(cluster []candidate) review.Finding {
 // synthesizeFindings implements issue #160's deterministic synthesis:
 // dedup matched candidates into merged findings (mergeCluster), surface
 // remedy conflicts within a matched cluster as tensions instead of
-// force-merging them, and rank the result. It returns the final ranked
+// force-merging them, rank the result, and (issue #176) detect
+// assurance-vs-finding tensions across axes. It returns the final ranked
 // findings alongside any tension descriptions for the caller to fold into
 // Result.Summary.
 //
@@ -257,11 +258,13 @@ func mergeCluster(cluster []candidate) review.Finding {
 // "canonical" remedy and silently discarding the other axis's contrary
 // advice, every candidate in that cluster is kept as its own, unmerged
 // Finding (AgreedBy=1, its own confidence), and one tension description
-// naming both remedies is recorded. The prior-art algorithm also calls for
-// a tension when "one axis lists something as an assurance while another
-// flags it"; the current envelope (envelope.go) carries only Findings, no
-// per-axis assurance/clean list, so that half is not implemented here —
-// only the remedy-conflict half, which the current data model supports.
+// naming both remedies is recorded.
+//
+// Issue #176 adds the other tension half the prior-art algorithm called
+// for: one axis lists something as an assurance while a DIFFERENT axis
+// flags it as a finding (see assuranceFindingTensions). Assurances never
+// produce or merge into a Finding of their own and never affect the
+// verdict — they only ever contribute tension text.
 func synthesizeFindings(outcomes []axisOutcome, confidenceFloor float64) ([]review.Finding, []string) {
 	candidates := buildCandidates(outcomes, confidenceFloor)
 	clusters := clusterCandidates(candidates)
@@ -286,7 +289,65 @@ func synthesizeFindings(outcomes []axisOutcome, confidenceFloor float64) ([]revi
 	}
 
 	rankFindings(findings)
+	tensions = append(tensions, assuranceFindingTensions(outcomes, candidates)...)
 	return findings, tensions
+}
+
+// assuranceCandidate is one axis's assurance string paired with the axis
+// that produced it, for assurance-vs-finding tension detection (issue
+// #176).
+type assuranceCandidate struct {
+	axis string
+	text string
+}
+
+// buildAssuranceCandidates maps every axisOutcome's assurances onto
+// assuranceCandidates, in fixed axis order (bugs, quality, docs),
+// preserving each axis's own assurance order — the same determinism
+// rationale as buildCandidates.
+func buildAssuranceCandidates(outcomes []axisOutcome) []assuranceCandidate {
+	var out []assuranceCandidate
+	for _, o := range outcomes {
+		for _, a := range o.env.Assurances {
+			out = append(out, assuranceCandidate{axis: o.axis, text: a})
+		}
+	}
+	return out
+}
+
+// assuranceFindingTensions implements issue #176's assurance-vs-finding
+// tension detection: one axis's assurance (something it explicitly checked
+// and found clean) whose text is title-similar (>= titleSimilarityThreshold,
+// via titleSimilarity — the same token-set Jaccard helper synthesizeFindings
+// uses for cross-axis finding dedup) to a DIFFERENT axis's finding
+// candidate.title contradicts that finding: it is recorded as a tension,
+// and both signals are retained (the finding stays in Findings unchanged;
+// the assurance never produces a Finding of its own). A same-axis match —
+// an axis flagging something it also assures itself — is not a tension and
+// is skipped; that is one axis's own internal note, not a cross-axis
+// contradiction.
+//
+// Iteration is over buildAssuranceCandidates (fixed axis order) crossed
+// with candidates (fixed axis order, the same slice synthesizeFindings
+// clusters), so the result is deterministic and stable across runs for the
+// same inputs. Assurances never affect the verdict; this only ever
+// produces advisory tension text for Result.Summary.
+func assuranceFindingTensions(outcomes []axisOutcome, candidates []candidate) []string {
+	var tensions []string
+	for _, a := range buildAssuranceCandidates(outcomes) {
+		for _, c := range candidates {
+			if c.axis == a.axis {
+				continue
+			}
+			if titleSimilarity(a.text, c.title) >= titleSimilarityThreshold {
+				tensions = append(tensions, fmt.Sprintf(
+					"assurance vs finding: %s axis assures %q but %s axis found %q",
+					a.axis, a.text, c.axis, c.title,
+				))
+			}
+		}
+	}
+	return tensions
 }
 
 // rankFindings sorts findings in place per issue #160's ranking rule:

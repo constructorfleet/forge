@@ -25,6 +25,12 @@ func outcome(axis string, findings ...axisFinding) axisOutcome {
 	return axisOutcome{axis: axis, env: envelope{Axis: axis, Findings: findings}}
 }
 
+// outcomeWithAssurances builds one axisOutcome fixture for axis with the
+// given findings and assurances.
+func outcomeWithAssurances(axis string, assurances []string, findings ...axisFinding) axisOutcome {
+	return axisOutcome{axis: axis, env: envelope{Axis: axis, Findings: findings, Assurances: assurances}}
+}
+
 func TestCombine_IdenticalFindingTwoAxes_DedupsAgreedByAndFoldsConfidence(t *testing.T) {
 	outcomes := []axisOutcome{
 		outcome("bugs", finding("HIGH", 0.6, "a.go", 10, "nil pointer dereference in Foo", "", "check err before use")),
@@ -154,6 +160,57 @@ func TestCombine_ConflictingRemedies_TensionRecordedBothRetained(t *testing.T) {
 	}
 	if !strings.Contains(result.Summary, "add a nil check") || !strings.Contains(result.Summary, "return an error instead") {
 		t.Errorf("Summary = %q, want both conflicting remedies named", result.Summary)
+	}
+}
+
+func TestCombine_AssuranceContradictsOtherAxisFinding_TensionRecordedBothRetained(t *testing.T) {
+	outcomes := []axisOutcome{
+		outcomeWithAssurances("quality", []string{"error handling in Save is correct and complete"}),
+		outcome("bugs", finding("HIGH", 0.6, "a.go", 10, "error handling in Save is correct and complete", "", "add a nil check")),
+	}
+	result := combine(outcomes, 0.7)
+
+	// The finding is retained unmerged (assurances never produce or merge
+	// into a Finding of their own).
+	if len(result.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want the bugs finding retained", result.Findings)
+	}
+	if result.Findings[0].Axis != "bugs" {
+		t.Errorf("Findings[0].Axis = %q, want %q (assurance must not merge into the finding)", result.Findings[0].Axis, "bugs")
+	}
+	if !strings.Contains(result.Summary, "tension") {
+		t.Errorf("Summary = %q, want it to mention the tension", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "quality") || !strings.Contains(result.Summary, "bugs") {
+		t.Errorf("Summary = %q, want both axes named in the tension", result.Summary)
+	}
+	if !strings.Contains(result.Summary, "error handling in Save is correct and complete") {
+		t.Errorf("Summary = %q, want the contradicting text named", result.Summary)
+	}
+}
+
+func TestCombine_AssuranceNoMatchingFinding_NoTension(t *testing.T) {
+	outcomes := []axisOutcome{
+		outcomeWithAssurances("quality", []string{"the new package boundary does not leak internal types"}),
+		outcome("bugs", finding("HIGH", 0.6, "a.go", 10, "nil pointer dereference in Foo", "", "add a nil check")),
+	}
+	result := combine(outcomes, 0.7)
+
+	if strings.Contains(result.Summary, "tension") {
+		t.Errorf("Summary = %q, want no tension (assurance does not match any finding)", result.Summary)
+	}
+}
+
+func TestCombine_AssuranceMatchesSameAxisOwnFinding_NoTension(t *testing.T) {
+	outcomes := []axisOutcome{
+		outcomeWithAssurances("bugs", []string{"error handling in Save is correct and complete"},
+			finding("HIGH", 0.6, "a.go", 10, "error handling in Save is correct and complete", "", "add a nil check")),
+		outcome("quality", finding("HIGH", 0.6, "b.go", 99, "unrelated docs typo in README", "", "fix the typo")),
+	}
+	result := combine(outcomes, 0.7)
+
+	if strings.Contains(result.Summary, "tension") {
+		t.Errorf("Summary = %q, want no tension (assurance matches only its own axis's finding, not a cross-axis one)", result.Summary)
 	}
 }
 

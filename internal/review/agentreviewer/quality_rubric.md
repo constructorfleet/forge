@@ -80,6 +80,9 @@ exactly this shape:
       "evidence": "The concrete evidence: what the code does, why it is a maintainability problem, what it affects.",
       "remedy": "The smallest correct change that would resolve this finding."
     }
+  ],
+  "assurances": [
+    "One-sentence description of something you explicitly checked and found clean/correct."
   ]
 }
 ```
@@ -93,6 +96,12 @@ exactly this shape:
 - `findings` is `[]` (an empty array) when the diff has no issues worth
   reporting — emit the empty array rather than inventing something to
   report.
+- `assurances` is a list of one-sentence statements naming things you
+  specifically checked in this diff and found structurally sound (e.g.
+  "the new package boundary does not leak internal types") — not a
+  restatement of the diff, and not a substitute for a finding. Emit `[]`
+  when you have no specific assurance worth recording; do not pad this
+  list to seem thorough.
 
 Emit ONLY this JSON object. No prose before or after it, no markdown code
 fence around it in your actual final message, no additional commentary.
