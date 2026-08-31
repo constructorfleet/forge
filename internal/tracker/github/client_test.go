@@ -5,11 +5,23 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
 )
+
+// dependsOnIDs extracts the prerequisite Issue IDs from a normalized Issue's
+// dependency edges, in order, for concise assertions.
+func dependsOnIDs(deps []domain.Dependency) []string {
+	ids := make([]string, len(deps))
+	for i, d := range deps {
+		ids[i] = d.DependsOnID
+	}
+	return ids
+}
 
 func newTestClient(t *testing.T, handler http.HandlerFunc) (*github.Client, *httptest.Server) {
 	t.Helper()
@@ -18,6 +30,17 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*github.Client, *htt
 	c := github.NewClient(srv.Client(), srv.URL, "acme", "widgets")
 	return c, srv
 }
+
+// isBlockedByPath reports whether r targets an issue's native "blocked by"
+// dependency subresource (…/issues/N/dependencies/blocked_by). GetIssue
+// probes it before consulting the body block.
+func isBlockedByPath(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, "/dependencies/blocked_by")
+}
+
+// serveNoNativeDeps answers the native blocked_by probe with an empty list,
+// so a test exercising body-block parsing gets the body-block fallback.
+func serveNoNativeDeps(w http.ResponseWriter) { _, _ = w.Write([]byte("[]")) }
 
 func TestClient_RateLimit_403ZeroRemaining(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
