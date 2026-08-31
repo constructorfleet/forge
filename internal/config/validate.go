@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -82,6 +83,21 @@ func validate(cfg Config) error {
 
 	if cfg.Workflow.ReviewConfidenceFloor < 0 || cfg.Workflow.ReviewConfidenceFloor > 1 {
 		errs = append(errs, fieldErr("workflow.review_confidence_floor", fmt.Sprint(cfg.Workflow.ReviewConfidenceFloor), "must be between 0.0 and 1.0"))
+	}
+	for _, rubric := range []struct {
+		field string
+		path  string
+	}{
+		{"workflow.review_rubrics.bugs", cfg.Workflow.ReviewRubrics.Bugs},
+		{"workflow.review_rubrics.quality", cfg.Workflow.ReviewRubrics.Quality},
+		{"workflow.review_rubrics.docs", cfg.Workflow.ReviewRubrics.Docs},
+	} {
+		if rubric.path == "" {
+			continue
+		}
+		if _, err := os.ReadFile(rubric.path); err != nil {
+			errs = append(errs, fieldErr(rubric.field, rubric.path, "must be a readable file"))
+		}
 	}
 
 	for i, g := range cfg.Quality.Gates {

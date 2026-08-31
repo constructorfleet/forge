@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -839,4 +840,52 @@ tracker:
 	// sub-structs; this test exists to make that guarantee discoverable
 	// and to fail loudly (compile error) if such a field is ever added
 	// without updating this comment.
+}
+
+func TestDefault_ReviewRubricsEmpty(t *testing.T) {
+	cfg := Default()
+	if cfg.Workflow.ReviewRubrics != (ReviewRubricsConfig{}) {
+		t.Errorf("Workflow.ReviewRubrics = %+v, want zero value (embedded rubrics used by default)", cfg.Workflow.ReviewRubrics)
+	}
+}
+
+func TestLoad_ReviewRubricsOverridePath_LoadedWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	bugsRubric := filepath.Join(dir, "bugs.md")
+	if err := os.WriteFile(bugsRubric, []byte("custom bugs rubric"), 0o644); err != nil {
+		t.Fatalf("write rubric file: %v", err)
+	}
+
+	path := writeTemp(t, fmt.Sprintf(`
+workflow:
+  review_rubrics:
+    bugs: %q
+`, bugsRubric))
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Workflow.ReviewRubrics.Bugs != bugsRubric {
+		t.Errorf("Workflow.ReviewRubrics.Bugs = %q, want %q", cfg.Workflow.ReviewRubrics.Bugs, bugsRubric)
+	}
+	if cfg.Workflow.ReviewRubrics.Quality != "" || cfg.Workflow.ReviewRubrics.Docs != "" {
+		t.Errorf("Workflow.ReviewRubrics = %+v, want quality/docs left at embedded default (empty)", cfg.Workflow.ReviewRubrics)
+	}
+}
+
+func TestLoad_ReviewRubricsOverridePath_UnreadableRejected(t *testing.T) {
+	path := writeTemp(t, fmt.Sprintf(`
+workflow:
+  review_rubrics:
+    quality: %q
+`, filepath.Join(t.TempDir(), "does-not-exist.md")))
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "workflow.review_rubrics.quality") {
+		t.Errorf("Load() error = %v, want it to identify workflow.review_rubrics.quality", err)
+	}
 }

@@ -176,6 +176,45 @@ type Result struct {
 	// deliberately just enough structure for one Result's caller (runReview,
 	// tests) to see the coverage picture without parsing Summary text.
 	Coverage []AxisCoverage
+
+	// Envelopes carries each axis that ran to completion's raw findings
+	// envelope, exactly as that axis's agent emitted it, plus its token
+	// usage when the backend exposed one — captured before synthesis
+	// deduped/folded them into Findings (issue #162's full per-axis audit
+	// trail). Only axes with a corresponding AxisCoverage.Ran == true entry
+	// appear here; a Reviewer that does not track raw envelopes (e.g.
+	// FakeReviewer) leaves this nil, same as Coverage.
+	Envelopes []AxisEnvelope
+}
+
+// AxisRawFinding is one Finding exactly as a review axis's agent emitted it
+// in its JSON findings envelope, before MapAxisSeverity or synthesis fold
+// multiple axes' findings together. Persisted verbatim (issue #162) so a
+// past Review's per-axis detail — including a Finding synthesis later
+// dropped or merged away — can be reconstructed.
+type AxisRawFinding struct {
+	Severity   string
+	Confidence float64
+	File       string
+	Line       int
+	Message    string
+	Evidence   string
+	Remedy     string
+}
+
+// AxisEnvelope is one review axis's raw parsed findings envelope plus its
+// token usage, captured before synthesis (issue #162).
+type AxisEnvelope struct {
+	// Axis is the axis name ("bugs", "quality", "docs").
+	Axis string
+
+	// Findings is this axis's raw findings, exactly as its agent emitted
+	// them.
+	Findings []AxisRawFinding
+
+	// Usage is the axis agent invocation's token accounting, when its
+	// backend exposed one (mirrors agent.AgentResult.Usage).
+	Usage *agent.TokenUsage
 }
 
 // AxisCoverage is one review axis's outcome within a single Review call:

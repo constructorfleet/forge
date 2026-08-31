@@ -56,6 +56,22 @@ type WorkflowConfig struct {
 	// this floor is advisory only: it is still surfaced in
 	// review.Result.Findings, but does not by itself block APPROVED.
 	ReviewConfidenceFloor float64 `yaml:"review_confidence_floor"`
+
+	// ReviewRubrics optionally overrides one or more review axes' embedded
+	// default rubric with a team's own rubric file (issue #162). A blank
+	// path for an axis (the zero value) keeps that axis's embedded rubric
+	// unchanged.
+	ReviewRubrics ReviewRubricsConfig `yaml:"review_rubrics"`
+}
+
+// ReviewRubricsConfig names, per review axis, an optional file whose
+// contents replace that axis's embedded default rubric text (issue #162:
+// rubric.md, quality_rubric.md, docs_rubric.md in
+// internal/review/agentreviewer). A blank field uses the embedded default.
+type ReviewRubricsConfig struct {
+	Bugs    string `yaml:"bugs"`
+	Quality string `yaml:"quality"`
+	Docs    string `yaml:"docs"`
 }
 
 // QualityGate is one deterministic command required to pass before

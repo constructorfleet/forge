@@ -122,7 +122,23 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// stays the ticket-20 auto-approve resting state exactly as before this
 	// ticket.
 	if cfg.Workflow.Review {
-		eng.Reviewer = agentreviewer.New(ag, cfg.Workflow.ReviewConfidenceFloor)
+		reviewer := agentreviewer.New(ag, cfg.Workflow.ReviewConfidenceFloor)
+		// Rubrics (issue #162): cfg.Workflow.ReviewRubrics names, per axis,
+		// an optional file already validated readable by config.Load;
+		// LoadRubricOverrides reads it into Reviewer.Rubrics so that axis's
+		// embedded rubric.md/quality_rubric.md/docs_rubric.md is replaced
+		// with the team's own text. A blank path (the default) leaves that
+		// axis's embedded rubric untouched.
+		rubrics, err := agentreviewer.LoadRubricOverrides(agentreviewer.RubricOverridePaths{
+			Bugs:    cfg.Workflow.ReviewRubrics.Bugs,
+			Quality: cfg.Workflow.ReviewRubrics.Quality,
+			Docs:    cfg.Workflow.ReviewRubrics.Docs,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("forge: %w", err)
+		}
+		reviewer.Rubrics = rubrics
+		eng.Reviewer = reviewer
 	}
 	// eng.Publisher/eng.PRTracker (ticket 22) are Engine's single
 	// all-or-nothing commit/PR seam (see runCommitAndPR): with both wired,

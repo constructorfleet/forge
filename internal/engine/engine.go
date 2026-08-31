@@ -1117,6 +1117,10 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 			Message:  f.Message,
 		}
 	}
+	envelopes, err := reviewAxisEnvelopesForStorage(issueID, result)
+	if err != nil {
+		return domain.Issue{}, "", nil, err
+	}
 	if err := e.Store.RecordReviewRun(ctx, storage.ReviewRun{
 		ExecutionID: executionID,
 		IssueID:     issueID,
@@ -1126,6 +1130,7 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 		StartedAt:   started,
 		FinishedAt:  finished,
 		Findings:    findings,
+		Envelopes:   envelopes,
 	}); err != nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: record review run for issue %s: %w", issueID, err)
 	}
@@ -1151,6 +1156,45 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 	default:
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer returned unknown verdict %q for issue %s", result.Verdict, issueID)
 	}
+}
+
+// reviewAxisEnvelopesForStorage translates result's per-axis Coverage and
+// raw Envelopes into storage.ReviewAxisEnvelope for RecordReviewRun (issue
+// #162's full per-axis audit trail): Coverage supplies every axis Review
+// attempted (whether it ran, and why not when it didn't) while Envelopes
+// supplies the raw findings/token usage only for axes that ran, matched by
+// axis name. A Reviewer that populates Coverage but not Envelopes (or
+// neither, e.g. FakeReviewer) yields envelope rows with Ran/Reason only, no
+// raw findings/usage — never an error.
+func reviewAxisEnvelopesForStorage(issueID string, result review.Result) ([]storage.ReviewAxisEnvelope, error) {
+	if len(result.Coverage) == 0 {
+		return nil, nil
+	}
+
+	byAxis := make(map[string]review.AxisEnvelope, len(result.Envelopes))
+	for _, e := range result.Envelopes {
+		byAxis[e.Axis] = e
+	}
+
+	out := make([]storage.ReviewAxisEnvelope, 0, len(result.Coverage))
+	for _, c := range result.Coverage {
+		se := storage.ReviewAxisEnvelope{Axis: c.Axis, Ran: c.Ran, Reason: c.Reason}
+		if e, ok := byAxis[c.Axis]; ok {
+			raw, err := json.Marshal(e.Findings)
+			if err != nil {
+				return nil, fmt.Errorf("engine: marshal axis %s raw findings for issue %s: %w", c.Axis, issueID, err)
+			}
+			se.RawFindings = string(raw)
+			if e.Usage != nil {
+				inTokens := e.Usage.InputTokens
+				outTokens := e.Usage.OutputTokens
+				se.InputTokens = &inTokens
+				se.OutputTokens = &outTokens
+			}
+		}
+		out = append(out, se)
+	}
+	return out, nil
 }
 
 // transition moves issueID to state `to` via Store.TransitionIssue, wrapping

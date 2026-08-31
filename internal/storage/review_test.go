@@ -151,6 +151,92 @@ func TestRecordReviewRun_AppendsReviewRunEvent(t *testing.T) {
 	}
 }
 
+// TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip is issue #162's core
+// storage acceptance criterion: a ReviewRun's per-axis raw envelopes
+// (coverage, token usage, raw findings JSON) round-trip through
+// RecordReviewRun/ReviewRunsByIssue exactly as given, so a past Review is
+// fully reconstructable.
+func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForReviewRun(t, store, "exec-review-5", "issue-review-5")
+
+	inTokens, outTokens := 120, 340
+	run := storage.ReviewRun{
+		ExecutionID: "exec-review-5",
+		IssueID:     "issue-review-5",
+		Verdict:     "CHANGES_REQUIRED",
+		Summary:     "axes bugs+quality+docs: 1 finding(s), verdict CHANGES_REQUIRED",
+		Diff:        "diff --git a b",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Findings: []storage.ReviewFinding{
+			{Severity: "ERROR", File: "main.go", Line: 42, Message: "unhandled error"},
+		},
+		Envelopes: []storage.ReviewAxisEnvelope{
+			{
+				Axis:         "bugs",
+				Ran:          true,
+				InputTokens:  &inTokens,
+				OutputTokens: &outTokens,
+				RawFindings:  `[{"Severity":"HIGH","Confidence":0.9,"File":"main.go","Line":42,"Message":"unhandled error","Evidence":"err ignored","Remedy":"check err"}]`,
+			},
+			{
+				Axis:        "quality",
+				Ran:         true,
+				RawFindings: `[]`,
+			},
+			{
+				Axis:   "docs",
+				Ran:    false,
+				Reason: "agentreviewer: axis docs: unrecoverable after 2 attempt(s): boom",
+			},
+		},
+	}
+	if err := store.RecordReviewRun(ctx, run); err != nil {
+		t.Fatalf("RecordReviewRun: %v", err)
+	}
+
+	runs, err := store.ReviewRunsByIssue(ctx, "exec-review-5", "issue-review-5")
+	if err != nil {
+		t.Fatalf("ReviewRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d review runs, want 1", len(runs))
+	}
+	got := runs[0].Envelopes
+	if len(got) != 3 {
+		t.Fatalf("got %d axis envelopes, want 3: %+v", len(got), got)
+	}
+
+	bugs := got[0]
+	if bugs.Axis != "bugs" || !bugs.Ran || bugs.Reason != "" {
+		t.Errorf("bugs envelope = %+v, want Axis bugs, Ran true, Reason empty", bugs)
+	}
+	if bugs.InputTokens == nil || *bugs.InputTokens != inTokens {
+		t.Errorf("bugs.InputTokens = %v, want %d", bugs.InputTokens, inTokens)
+	}
+	if bugs.OutputTokens == nil || *bugs.OutputTokens != outTokens {
+		t.Errorf("bugs.OutputTokens = %v, want %d", bugs.OutputTokens, outTokens)
+	}
+	if bugs.RawFindings != run.Envelopes[0].RawFindings {
+		t.Errorf("bugs.RawFindings = %q, want %q", bugs.RawFindings, run.Envelopes[0].RawFindings)
+	}
+
+	quality := got[1]
+	if quality.Axis != "quality" || !quality.Ran || quality.RawFindings != "[]" {
+		t.Errorf("quality envelope = %+v, want Axis quality, Ran true, RawFindings []", quality)
+	}
+	if quality.InputTokens != nil || quality.OutputTokens != nil {
+		t.Errorf("quality envelope tokens = %v/%v, want nil/nil", quality.InputTokens, quality.OutputTokens)
+	}
+
+	docs := got[2]
+	if docs.Axis != "docs" || docs.Ran || docs.Reason != run.Envelopes[2].Reason {
+		t.Errorf("docs envelope = %+v, want Axis docs, Ran false, Reason %q", docs, run.Envelopes[2].Reason)
+	}
+}
+
 func TestReviewRunsByIssue_ReturnsEmptyForIssueWithNoReviewRuns(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

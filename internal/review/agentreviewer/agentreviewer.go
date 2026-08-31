@@ -42,6 +42,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -80,6 +81,18 @@ const axisMaxAttempts = 2
 // time.
 var _ review.Reviewer = (*Reviewer)(nil)
 
+// RubricOverrides optionally substitutes a team's own rubric text for one
+// or more axes (issue #162, config field
+// workflow.review_rubrics.{bugs,quality,docs}), read from the paths that
+// field names. A blank field leaves that axis's embedded default rubric
+// (rubric.md/quality_rubric.md/docs_rubric.md) in place — this is a
+// per-field override, not an all-or-nothing switch.
+type RubricOverrides struct {
+	Bugs    string
+	Quality string
+	Docs    string
+}
+
 // Reviewer is the production three-axis (bugs/breaking/security,
 // code-quality, documentation) review.Reviewer. It holds the agent.Agent
 // used to run each axis and the confidence floor gating the combined
@@ -93,15 +106,63 @@ type Reviewer struct {
 	// Finding must carry to force VerdictChangesRequired (config field
 	// workflow.review_confidence_floor). <= 0 uses defaultConfidenceFloor.
 	ConfidenceFloor float64
+
+	// Rubrics optionally overrides one or more axes' embedded rubric text
+	// (issue #162). Zero value (RubricOverrides{}) uses every axis's
+	// embedded default, unchanged from pre-#162 behavior.
+	Rubrics RubricOverrides
 }
 
 // New returns a Reviewer running axis reviews via a, gating verdicts at
-// confidenceFloor. confidenceFloor <= 0 uses defaultConfidenceFloor.
+// confidenceFloor. confidenceFloor <= 0 uses defaultConfidenceFloor. Every
+// axis uses its embedded default rubric; set the returned Reviewer's
+// Rubrics field (or use LoadRubricOverrides) to override one or more axes.
 func New(a agent.Agent, confidenceFloor float64) *Reviewer {
 	if confidenceFloor <= 0 {
 		confidenceFloor = defaultConfidenceFloor
 	}
 	return &Reviewer{Agent: a, ConfidenceFloor: confidenceFloor}
+}
+
+// RubricOverridePaths names, per axis, an optional file path whose contents
+// should replace that axis's embedded default rubric (issue #162) — the
+// same shape as config.WorkflowConfig.ReviewRubrics, without this package
+// depending on internal/config (the caller, cmd/forge's wiring, translates
+// between the two).
+type RubricOverridePaths struct {
+	Bugs    string
+	Quality string
+	Docs    string
+}
+
+// LoadRubricOverrides reads every non-blank path in paths and returns the
+// resulting RubricOverrides with each axis's file contents in place of its
+// path. A blank path is left blank (that axis keeps its embedded default).
+// Returns an error naming the offending axis if a non-blank path can't be
+// read — callers (cmd/forge's wiring) are expected to validate readability
+// upfront via config.Load, so a failure here indicates the file changed or
+// vanished between validation and startup.
+func LoadRubricOverrides(paths RubricOverridePaths) (RubricOverrides, error) {
+	var out RubricOverrides
+	for _, f := range []struct {
+		axis string
+		path string
+		dst  *string
+	}{
+		{"bugs", paths.Bugs, &out.Bugs},
+		{"quality", paths.Quality, &out.Quality},
+		{"docs", paths.Docs, &out.Docs},
+	} {
+		if f.path == "" {
+			continue
+		}
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			return RubricOverrides{}, fmt.Errorf("agentreviewer: load %s rubric override %s: %w", f.axis, f.path, err)
+		}
+		*f.dst = string(data)
+	}
+	return out, nil
 }
 
 // axis is one review axis this Reviewer runs: a name (as stamped onto every
@@ -121,6 +182,26 @@ var axes = []axis{
 	{name: "bugs", rubric: bugsRubric},
 	{name: "quality", rubric: qualityRubric},
 	{name: "docs", rubric: docsRubric},
+}
+
+// effectiveAxes returns axes with any of r.Rubrics' non-blank per-axis
+// overrides substituted in place of that axis's embedded default rubric
+// (issue #162). Order and names are unchanged from axes; only rubric text
+// may differ.
+func (r *Reviewer) effectiveAxes() []axis {
+	overrides := map[string]string{
+		"bugs":    r.Rubrics.Bugs,
+		"quality": r.Rubrics.Quality,
+		"docs":    r.Rubrics.Docs,
+	}
+	eff := make([]axis, len(axes))
+	for i, ax := range axes {
+		eff[i] = ax
+		if o := overrides[ax.name]; o != "" {
+			eff[i].rubric = o
+		}
+	}
+	return eff
 }
 
 // Review runs all three axes concurrently, each as one fresh Agent.Execute
@@ -145,30 +226,35 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 		floor = defaultConfidenceFloor
 	}
 
-	outcomes := make([]axisOutcome, len(axes))
-	axisErrs := make([]error, len(axes))
-	unrecoverable := make([]bool, len(axes))
+	axesList := r.effectiveAxes()
+
+	outcomes := make([]axisOutcome, len(axesList))
+	usages := make([]*agent.TokenUsage, len(axesList))
+	axisErrs := make([]error, len(axesList))
+	unrecoverable := make([]bool, len(axesList))
 
 	var wg sync.WaitGroup
-	wg.Add(len(axes))
-	for i, ax := range axes {
+	wg.Add(len(axesList))
+	for i, ax := range axesList {
 		go func(i int, ax axis) {
 			defer wg.Done()
-			env, err := r.runAxisWithRetry(ctx, req, ax)
+			env, usage, err := r.runAxisWithRetry(ctx, req, ax)
 			if err != nil {
 				unrecoverable[i] = true
 				axisErrs[i] = err
 				return
 			}
 			outcomes[i] = axisOutcome{axis: ax.name, env: env}
+			usages[i] = usage
 		}(i, ax)
 	}
 	wg.Wait()
 
-	coverage := make([]review.AxisCoverage, len(axes))
-	survivors := make([]axisOutcome, 0, len(axes))
+	coverage := make([]review.AxisCoverage, len(axesList))
+	survivors := make([]axisOutcome, 0, len(axesList))
+	envelopes := make([]review.AxisEnvelope, 0, len(axesList))
 	var failedAxes []string
-	for i, ax := range axes {
+	for i, ax := range axesList {
 		if unrecoverable[i] {
 			coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: false, Reason: axisErrs[i].Error()}
 			failedAxes = append(failedAxes, ax.name)
@@ -176,6 +262,11 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 		}
 		coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: true}
 		survivors = append(survivors, outcomes[i])
+		envelopes = append(envelopes, review.AxisEnvelope{
+			Axis:     ax.name,
+			Findings: toRawFindings(outcomes[i].env),
+			Usage:    usages[i],
+		})
 	}
 
 	var result review.Result
@@ -185,32 +276,56 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 		result = combineDegraded(survivors, failedAxes, floor)
 	}
 	result.Coverage = coverage
+	result.Envelopes = envelopes
 
 	return result, nil
 }
 
+// toRawFindings maps one axis's parsed envelope onto
+// []review.AxisRawFinding, exactly as that axis's agent emitted it — issue
+// #162's raw, pre-synthesis audit record, as distinct from
+// findingsForAxis's review.Finding mapping (which applies MapAxisSeverity
+// and the verdict-blocking rule).
+func toRawFindings(env envelope) []review.AxisRawFinding {
+	out := make([]review.AxisRawFinding, len(env.Findings))
+	for i, f := range env.Findings {
+		out[i] = review.AxisRawFinding{
+			Severity:   f.Severity,
+			Confidence: f.Confidence,
+			File:       f.File,
+			Line:       f.Line,
+			Message:    f.Message,
+			Evidence:   f.Evidence,
+			Remedy:     f.Remedy,
+		}
+	}
+	return out
+}
+
 // runAxisWithRetry runs one axis via runAxis, retrying in place up to
 // axisMaxAttempts times (issue #161) when Execute errors or the envelope
-// fails to parse. It returns the first successful envelope, or the last
-// attempt's error once axisMaxAttempts is exhausted. Each goroutine Review
-// launches calls this with its own axis and writes only to its own index of
-// the caller's slices, so no additional synchronization is needed beyond
-// the sync.WaitGroup Review already waits on.
-func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax axis) (envelope, error) {
+// fails to parse. It returns the first successful envelope and its token
+// usage, or the last attempt's error once axisMaxAttempts is exhausted.
+// Each goroutine Review launches calls this with its own axis and writes
+// only to its own index of the caller's slices, so no additional
+// synchronization is needed beyond the sync.WaitGroup Review already waits
+// on.
+func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
 	var lastErr error
 	for attempt := 1; attempt <= axisMaxAttempts; attempt++ {
-		env, err := r.runAxis(ctx, req, ax)
+		env, usage, err := r.runAxis(ctx, req, ax)
 		if err == nil {
-			return env, nil
+			return env, usage, nil
 		}
 		lastErr = err
 	}
-	return envelope{}, fmt.Errorf("agentreviewer: axis %s: unrecoverable after %d attempt(s): %w", ax.name, axisMaxAttempts, lastErr)
+	return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: unrecoverable after %d attempt(s): %w", ax.name, axisMaxAttempts, lastErr)
 }
 
 // runAxis runs one axis as a single fresh Agent.Execute call and parses its
-// JSON findings envelope.
-func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, error) {
+// JSON findings envelope, returning the AgentResult's token usage alongside
+// it (issue #162) for Result.Envelopes.
+func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
 	result, err := r.Agent.Execute(ctx, agent.AgentRequest{
 		Issue:         req.Issue,
 		Repository:    req.Repository,
@@ -218,13 +333,13 @@ func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (en
 		WorkspacePath: req.WorkspacePath,
 	})
 	if err != nil {
-		return envelope{}, fmt.Errorf("agentreviewer: axis %s: execute: %w", ax.name, err)
+		return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: execute: %w", ax.name, err)
 	}
 
 	env, err := parseEnvelope(result.Summary)
 	if err != nil {
-		return envelope{}, fmt.Errorf("agentreviewer: axis %s: %w", ax.name, err)
+		return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: %w", ax.name, err)
 	}
 
-	return env, nil
+	return env, result.Usage, nil
 }

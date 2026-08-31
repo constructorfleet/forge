@@ -51,7 +51,7 @@ func TestMigrateCreatesAllTables(t *testing.T) {
 	tables := []string{
 		"executions", "execution_issues", "dependencies", "workers",
 		"workspaces", "agent_runs", "gate_runs", "review_runs",
-		"review_findings", "pull_requests", "ci_runs", "events",
+		"review_findings", "review_axis_envelopes", "pull_requests", "ci_runs", "events",
 		"schema_migrations",
 	}
 	for _, table := range tables {
