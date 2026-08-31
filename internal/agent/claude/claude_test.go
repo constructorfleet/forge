@@ -175,6 +175,23 @@ func TestExecute_SchemaConformingResultDecodesDirectly(t *testing.T) {
 	}
 }
 
+func TestExecute_SchemaConformingResultCarriesFollowUps(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"status":"IMPLEMENTED","summary":"Added the feature.","follow_ups":[{"title":"Flaky test","body":"TestFoo occasionally times out under load."}]}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(result.FollowUps) != 1 {
+		t.Fatalf("FollowUps = %+v, want 1 entry", result.FollowUps)
+	}
+	if result.FollowUps[0].Title != "Flaky test" || result.FollowUps[0].Body != "TestFoo occasionally times out under load." {
+		t.Fatalf("FollowUps[0] = %+v, want title/body preserved", result.FollowUps[0])
+	}
+}
+
 // TestExecute_SchemaConformingResultViaStreamJSON covers the composed path
 // (streamingArgs + jsonSchemaArgs): the terminal stream-json "result" line
 // carries the schema-conforming JSON directly in its "result" field, with

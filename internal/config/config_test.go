@@ -62,6 +62,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Blocked.Label != "needs-info" || !cfg.Blocked.Comment {
 		t.Errorf("Blocked = %+v, want {needs-info true}", cfg.Blocked)
 	}
+	if cfg.FollowUp.Label != "needs-triage" {
+		t.Errorf("FollowUp.Label = %q, want needs-triage", cfg.FollowUp.Label)
+	}
 	if cfg.Agent.Provider != "claude-code" {
 		t.Errorf("Agent.Provider = %q, want claude-code", cfg.Agent.Provider)
 	}
@@ -494,6 +497,18 @@ func TestLoad_MultipleErrorsAllReported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "blocked.label") {
 		t.Errorf("Load() error = %v, want blocked.label", err)
+	}
+}
+
+func TestLoad_FollowUpLabelMustNotBeEmpty(t *testing.T) {
+	path := writeTemp(t, "follow_up:\n  label: \"\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "follow_up.label") {
+		t.Errorf("Load() error = %v, want follow_up.label", err)
 	}
 }
 

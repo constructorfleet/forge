@@ -234,6 +234,24 @@ type TokenUsage struct {
 	OutputTokens int
 }
 
+// FollowUpReport is one out-of-scope inefficiency or edge case the Agent
+// noticed while working an Issue but did not address, because doing so
+// would have gone beyond that Issue's requirements. It is orthogonal to
+// Status — an Agent may report FollowUps alongside any outcome (most
+// commonly StatusImplemented) — and is Forge's mechanism for automatic
+// self reporting: the engine files each one as a new tracker Issue rather
+// than the Agent silently dropping the observation or scope-creeping the
+// current Issue to address it.
+type FollowUpReport struct {
+	// Title is a one-line summary suitable as a new Issue's title.
+	Title string
+
+	// Body describes what was noticed, why it is out of scope for the
+	// current Issue, and any supporting detail (file paths, reproduction
+	// steps) a future reader needs to act on it.
+	Body string
+}
+
 // AgentResult is the structured outcome of one Agent.Execute call.
 type AgentResult struct {
 	// Status is one of StatusImplemented, StatusNeedsInfo, StatusFailed, or
@@ -249,6 +267,12 @@ type AgentResult struct {
 
 	// Replan is populated only when Status is StatusReplanRequired.
 	Replan *ReplanDetail
+
+	// FollowUps lists out-of-scope observations the Agent wants filed as
+	// new tracker Issues (see FollowUpReport). May be non-empty regardless
+	// of Status; empty (the zero value) means the Agent reported nothing,
+	// matching every AgentResult built before this field existed.
+	FollowUps []FollowUpReport
 
 	// Usage is populated only when the backend exposes token accounting for
 	// this invocation.

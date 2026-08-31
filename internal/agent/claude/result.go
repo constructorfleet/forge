@@ -89,12 +89,21 @@ type structuredResult struct {
 	Status    string           `json:"status"`
 	Summary   string           `json:"summary"`
 	NeedsInfo *needsInfoFields `json:"needs_info,omitempty"`
+	FollowUps []followUpFields `json:"follow_ups,omitempty"`
 	Usage     *usageFields     `json:"usage,omitempty"`
 }
 
 type needsInfoFields struct {
 	Question string `json:"question"`
 	Context  string `json:"context,omitempty"`
+}
+
+// followUpFields carries one out-of-scope observation Claude Code wants
+// filed as a new tracker Issue (see agent.FollowUpReport / automatic self
+// reporting).
+type followUpFields struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
 }
 
 type usageFields struct {

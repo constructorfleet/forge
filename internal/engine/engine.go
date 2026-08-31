@@ -132,6 +132,12 @@ type Engine struct {
 	// instance as Tracker.
 	NeedsInfoTracker NeedsInfoTracker
 
+	// FollowUpTracker is the subset of tracker.Tracker automatic self
+	// reporting needs (create issue, add label) — see followups.go. Optional
+	// like NeedsInfoTracker: nil disables filing follow-up Issues entirely.
+	// cmd/forge wires it to the same tracker instance as Tracker.
+	FollowUpTracker FollowUpTracker
+
 	// PlanningLease starts the Planning Execution that takes the Feature
 	// planning lease when a Worker escalates REPLAN_REQUIRED (ticket 22).
 	// Optional like NeedsInfoTracker: nil still freezes the Feature — see
@@ -909,6 +915,13 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 		"status":  string(result.Status),
 		"summary": result.Summary,
 	}); err != nil {
+		return domain.Issue{}, false, err
+	}
+
+	// Automatic self reporting (issue 141) runs regardless of Status: an
+	// Agent may surface out-of-scope observations alongside any outcome,
+	// and filing them is orthogonal to how this Issue itself resolves.
+	if err := e.reportFollowUps(ctx, executionID, issueID, result.FollowUps); err != nil {
 		return domain.Issue{}, false, err
 	}
 

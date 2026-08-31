@@ -180,7 +180,7 @@ func TestFakeAgent_ProgramErrorReturnsExactErrorWithoutFallingThroughToDefault(t
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Execute() error = %v, want %v", err, sentinel)
 	}
-	if result != (agent.AgentResult{}) {
+	if result.Status != "" || result.Summary != "" {
 		t.Errorf("Execute() result = %+v, want zero value alongside a programmed error", result)
 	}
 }

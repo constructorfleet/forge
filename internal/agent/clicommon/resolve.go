@@ -27,9 +27,9 @@ func Resolve(backendName string, structured StructuredResult, ok bool, exitCode 
 
 	switch agent.AgentStatus(structured.Status) {
 	case agent.StatusImplemented:
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: structured.Summary, Usage: ToTokenUsage(structured.Usage)}
+		return agent.AgentResult{Status: agent.StatusImplemented, Summary: structured.Summary, FollowUps: ToFollowUps(structured.FollowUps), Usage: ToTokenUsage(structured.Usage)}
 	case agent.StatusFailed:
-		return agent.AgentResult{Status: agent.StatusFailed, Summary: structured.Summary, Usage: ToTokenUsage(structured.Usage)}
+		return agent.AgentResult{Status: agent.StatusFailed, Summary: structured.Summary, FollowUps: ToFollowUps(structured.FollowUps), Usage: ToTokenUsage(structured.Usage)}
 	case agent.StatusNeedsInfo:
 		if structured.NeedsInfo == nil || strings.TrimSpace(structured.NeedsInfo.Question) == "" {
 			return agent.AgentResult{
@@ -47,7 +47,8 @@ func Resolve(backendName string, structured StructuredResult, ok bool, exitCode 
 				Question: structured.NeedsInfo.Question,
 				Context:  structured.NeedsInfo.Context,
 			},
-			Usage: ToTokenUsage(structured.Usage),
+			FollowUps: ToFollowUps(structured.FollowUps),
+			Usage:     ToTokenUsage(structured.Usage),
 		}
 	default:
 		// ParseStructuredResult only returns ok=true for recognized

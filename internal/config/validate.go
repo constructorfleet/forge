@@ -134,6 +134,10 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("blocked.label", cfg.Blocked.Label, "must not be empty"))
 	}
 
+	if strings.TrimSpace(cfg.FollowUp.Label) == "" {
+		errs = append(errs, fieldErr("follow_up.label", cfg.FollowUp.Label, "must not be empty"))
+	}
+
 	if strings.TrimSpace(cfg.Agent.Provider) == "" {
 		errs = append(errs, fieldErr("agent.provider", cfg.Agent.Provider, "must not be empty"))
 	}
