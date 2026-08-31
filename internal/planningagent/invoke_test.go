@@ -122,6 +122,37 @@ func TestInvokeStructured_NilBuild_FailsPredictably(t *testing.T) {
 	}
 }
 
+func TestFakeBackend_Invoke_RecordsInvokeRequestFields(t *testing.T) {
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("draft-7", "```json\n{\"title\":\"t\",\"body\":\"b\"}\n```\n")
+
+	raw, err := backend.Invoke(context.Background(), planningagent.InvokeRequest{
+		Key:    "draft-7",
+		Prompt: "draft something",
+		Schema: []byte(`{"type":"object"}`),
+	})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if raw != "```json\n{\"title\":\"t\",\"body\":\"b\"}\n```\n" {
+		t.Errorf("Invoke raw = %q, want programmed result", raw)
+	}
+
+	invocations := backend.Invocations()
+	if len(invocations) != 1 {
+		t.Fatalf("Invocations() len = %d, want 1", len(invocations))
+	}
+	if invocations[0].Key != "draft-7" {
+		t.Errorf("invocation Key = %q, want draft-7", invocations[0].Key)
+	}
+	if invocations[0].Prompt != "draft something" {
+		t.Errorf("invocation Prompt = %q, want draft something", invocations[0].Prompt)
+	}
+	if string(invocations[0].Schema) != `{"type":"object"}` {
+		t.Errorf("invocation Schema = %q, want the schema passed in", invocations[0].Schema)
+	}
+}
+
 func TestFakeBackend_DefaultAndRepeatLast(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramDefault("```json\n{\"title\":\"default\",\"body\":\"d\"}\n```\n")
