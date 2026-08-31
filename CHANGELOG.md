@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/constructorfleet/forge/compare/forge-v0.12.0...forge-v0.13.0) (2026-08-31)
+
+
+### Features
+
+* forge execute subcommand is not actually waiting for CI_PENDING ([#226](https://github.com/constructorfleet/forge/issues/226)) ([997f4ec](https://github.com/constructorfleet/forge/commit/997f4ec7540473d2bd81df7ed618bce03d96f3fd)), closes [#215](https://github.com/constructorfleet/forge/issues/215)
+
 ## [0.12.0](https://github.com/constructorfleet/forge/compare/forge-v0.11.3...forge-v0.12.0) (2026-08-31)
 
 
