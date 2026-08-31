@@ -45,6 +45,15 @@ type DependencyStore interface {
 	// each returned edge has Issue == {provider, id} and DependsOn naming
 	// one prerequisite Issue.
 	GetDependencies(ctx context.Context, id string) ([]DependencyEdge, error)
+
+	// WriteDependencies persists dependsOn (prerequisite Issue IDs) as id's
+	// complete set of prerequisites, replacing whatever was there before. A
+	// provider implements it by writing dependency edges however it
+	// natively encodes them for write — GitHub writes the canonical `##
+	// Dependencies` body block (ADR 0003), the same encoding
+	// GetDependencies falls back to reading, so the two never drift onto
+	// separate encodings within one adapter.
+	WriteDependencies(ctx context.Context, id string, dependsOn []string) error
 }
 
 // The canonical Dependency Source is a `## Dependencies` block in the issue
@@ -165,4 +174,81 @@ func ParseDependencyBlock(body string) ([]string, error) {
 	}
 
 	return []string{}, nil
+}
+
+// RenderDependencyBlock renders dependsOn (prerequisite Issue IDs) as the
+// canonical `## Dependencies` body block (CONTEXT.md "Dependency Source";
+// ADR 0003) — the exact syntax ParseDependencyBlock reads, so a write
+// followed by a read round-trips to the same IDs rather than drifting onto a
+// separate encoding.
+func RenderDependencyBlock(dependsOn []string) string {
+	if len(dependsOn) == 0 {
+		return "## Dependencies: None\n"
+	}
+	var b strings.Builder
+	b.WriteString("## Dependencies\n")
+	for _, id := range dependsOn {
+		b.WriteString("- #")
+		b.WriteString(id)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// ReplaceDependencyBlock returns body with its canonical `## Dependencies`
+// block (see RenderDependencyBlock) replaced by the block rendering
+// dependsOn, preserving every other section. If body has no `##
+// Dependencies` block, the rendered block is appended. It locates the
+// existing block with the same header/section recognition
+// ParseDependencyBlock uses, so the DependencyStore write capability never
+// drifts onto a different encoding than the read capability.
+func ReplaceDependencyBlock(body string, dependsOn []string) string {
+	lines := strings.Split(body, "\n")
+	rendered := RenderDependencyBlock(dependsOn)
+
+	for i, line := range lines {
+		normalized := strings.TrimSpace(strings.TrimRight(line, "\r"))
+		isNoneHeader := reHeaderNone.MatchString(normalized)
+		if !isNoneHeader && !reHeader.MatchString(normalized) {
+			continue
+		}
+
+		end := i + 1
+		if !isNoneHeader {
+			end = len(lines)
+			for j := i + 1; j < len(lines); j++ {
+				t := strings.TrimSpace(strings.TrimRight(lines[j], "\r"))
+				if reAnyHeading.MatchString(t) || reThematicBreak.MatchString(t) {
+					end = j
+					break
+				}
+			}
+		}
+
+		before := strings.Join(lines[:i], "\n")
+		after := strings.Join(lines[end:], "\n")
+		return joinAroundBlock(before, rendered, after)
+	}
+
+	return joinAroundBlock(body, rendered, "")
+}
+
+// joinAroundBlock composes before, block, and after into one body, adding a
+// blank-line separator on either side of block when the neighboring section
+// is non-empty, and dropping any extra blank lines the previous block's
+// removal or insertion would otherwise leave behind.
+func joinAroundBlock(before, block, after string) string {
+	var b strings.Builder
+	before = strings.TrimRight(before, "\n")
+	if before != "" {
+		b.WriteString(before)
+		b.WriteString("\n\n")
+	}
+	b.WriteString(block)
+	after = strings.TrimLeft(after, "\n")
+	if after != "" {
+		b.WriteString("\n")
+		b.WriteString(after)
+	}
+	return b.String()
 }

@@ -226,6 +226,96 @@ func TestParseDependencyBlock_RejectsNearMissHeader_TrailingDash(t *testing.T) {
 	}
 }
 
+func TestRenderDependencyBlock_BulletList(t *testing.T) {
+	got := tracker.RenderDependencyBlock([]string{"123", "456"})
+	want := "## Dependencies\n- #123\n- #456\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestRenderDependencyBlock_Empty(t *testing.T) {
+	got := tracker.RenderDependencyBlock(nil)
+	want := "## Dependencies: None\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// RenderDependencyBlock and ParseDependencyBlock are inverse — write then
+// read round-trips to the same IDs, since they share one encoding rather
+// than drifting onto separate ones.
+func TestRenderDependencyBlock_RoundTripsThroughParse(t *testing.T) {
+	for _, ids := range [][]string{
+		{"7"},
+		{"1", "2", "3"},
+		nil,
+	} {
+		rendered := tracker.RenderDependencyBlock(ids)
+		got, err := tracker.ParseDependencyBlock(rendered)
+		if err != nil {
+			t.Fatalf("ids %v: unexpected error: %v", ids, err)
+		}
+		if !equalSlices(got, ids) {
+			t.Fatalf("ids %v: round trip got %v", ids, got)
+		}
+	}
+}
+
+func TestReplaceDependencyBlock_ReplacesExistingBlockPreservingRest(t *testing.T) {
+	body := "### Objective\nDo the thing.\n\n## Dependencies\n- #1\n\n## Forge Provenance\nstatus: ready\n"
+
+	got := tracker.ReplaceDependencyBlock(body, []string{"2", "3"})
+
+	gotDeps, err := tracker.ParseDependencyBlock(got)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !equalSlices(gotDeps, []string{"2", "3"}) {
+		t.Fatalf("deps = %v, want [2 3]", gotDeps)
+	}
+	if !strings.Contains(got, "### Objective\nDo the thing.") {
+		t.Fatalf("expected sections before the block preserved, got %q", got)
+	}
+	if !strings.Contains(got, "## Forge Provenance\nstatus: ready") {
+		t.Fatalf("expected sections after the block preserved, got %q", got)
+	}
+	if strings.Contains(got, "- #1\n") {
+		t.Fatalf("expected old dependency removed, got %q", got)
+	}
+}
+
+func TestReplaceDependencyBlock_ReplacesNoneBlock(t *testing.T) {
+	body := "### Objective\nDo the thing.\n\n## Dependencies: None\n\n## Forge Provenance\nstatus: ready\n"
+
+	got := tracker.ReplaceDependencyBlock(body, []string{"9"})
+
+	gotDeps, err := tracker.ParseDependencyBlock(got)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !equalSlices(gotDeps, []string{"9"}) {
+		t.Fatalf("deps = %v, want [9]", gotDeps)
+	}
+}
+
+func TestReplaceDependencyBlock_AppendsWhenNoExistingBlock(t *testing.T) {
+	body := "### Objective\nDo the thing.\n"
+
+	got := tracker.ReplaceDependencyBlock(body, []string{"5"})
+
+	gotDeps, err := tracker.ParseDependencyBlock(got)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !equalSlices(gotDeps, []string{"5"}) {
+		t.Fatalf("deps = %v, want [5]", gotDeps)
+	}
+	if !strings.Contains(got, "### Objective\nDo the thing.") {
+		t.Fatalf("expected original body preserved, got %q", got)
+	}
+}
+
 func equalSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

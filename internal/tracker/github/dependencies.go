@@ -97,3 +97,27 @@ func (c *Client) GetDependencies(ctx context.Context, id string) ([]tracker.Depe
 
 	return c.dependencyEdges(gh, native, nativeOK)
 }
+
+// WriteDependencies implements the DependencyStore write capability: it
+// fetches id's current issue body, replaces its canonical `## Dependencies`
+// block (ADR 0003) with dependsOn via tracker.ReplaceDependencyBlock — the
+// same encoding dependencyEdges falls back to reading — and PATCHes the
+// rewritten body back. Every other section of the body is preserved.
+func (c *Client) WriteDependencies(ctx context.Context, id string, dependsOn []string) error {
+	number, err := parseIssueID(id)
+	if err != nil {
+		return err
+	}
+
+	var gh ghIssue
+	path := c.issuePath(number, "")
+	if err := c.do(ctx, http.MethodGet, path, nil, &gh); err != nil {
+		return fmt.Errorf("github: fetch issue %s: %w", id, err)
+	}
+
+	newBody := tracker.ReplaceDependencyBlock(gh.Body, dependsOn)
+	if err := c.UpdateIssue(ctx, id, tracker.UpdateIssueRequest{Body: newBody}); err != nil {
+		return fmt.Errorf("github: write dependencies for issue %s: %w", id, err)
+	}
+	return nil
+}

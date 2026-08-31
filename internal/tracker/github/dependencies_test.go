@@ -2,7 +2,9 @@ package github_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -170,6 +172,96 @@ func TestGetDependencies_RejectsFreeformDependencyText(t *testing.T) {
 
 	if _, err := c.GetDependencies(context.Background(), "42"); err == nil {
 		t.Fatal("expected GetDependencies to reject freeform dependency text")
+	}
+}
+
+// WriteDependencies writes the `## Dependencies` body block through a PATCH,
+// preserving the rest of the issue body.
+func TestWriteDependencies_PatchesDependenciesBlockPreservingRestOfBody(t *testing.T) {
+	var patchedBody string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case isBlockedByPath(r):
+			serveNoNativeDeps(w)
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"number":42,"body":"### Objective\nDo the thing.\n\n## Dependencies\n- #1\n"}`))
+		case r.Method == http.MethodPatch:
+			var req struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode PATCH body: %v", err)
+			}
+			patchedBody = req.Body
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+	})
+
+	if err := c.WriteDependencies(context.Background(), "42", []string{"7", "8"}); err != nil {
+		t.Fatalf("WriteDependencies: %v", err)
+	}
+	if !strings.Contains(patchedBody, "### Objective\nDo the thing.") {
+		t.Fatalf("expected the rest of the body preserved, got %q", patchedBody)
+	}
+	deps, err := tracker.ParseDependencyBlock(patchedBody)
+	if err != nil {
+		t.Fatalf("parse patched body: %v", err)
+	}
+	if len(deps) != 2 || deps[0] != "7" || deps[1] != "8" {
+		t.Fatalf("deps = %v, want [7 8]", deps)
+	}
+}
+
+// GetDependencies falls back to the body block, so a full round trip
+// (edges -> write -> read -> edges) proves write and read share one
+// encoding within the adapter, with no split-brain.
+func TestDependencyEdges_RoundTripThroughWriteThenRead(t *testing.T) {
+	var storedBody string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case isBlockedByPath(r):
+			serveNoNativeDeps(w)
+		case r.Method == http.MethodGet:
+			body, _ := json.Marshal(storedBody)
+			_, _ = w.Write([]byte(`{"number":42,"body":` + string(body) + `}`))
+		case r.Method == http.MethodPatch:
+			var req struct {
+				Body string `json:"body"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode PATCH body: %v", err)
+			}
+			storedBody = req.Body
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+	})
+
+	want := []tracker.DependencyEdge{
+		{
+			Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+			DependsOn: domain.IssueRef{Provider: "github", ID: "3"},
+			Kind:      tracker.DependencyBlocks,
+		},
+		{
+			Issue:     domain.IssueRef{Provider: "github", ID: "42"},
+			DependsOn: domain.IssueRef{Provider: "github", ID: "4"},
+			Kind:      tracker.DependencyBlocks,
+		},
+	}
+
+	if err := c.WriteDependencies(context.Background(), "42", []string{"3", "4"}); err != nil {
+		t.Fatalf("WriteDependencies: %v", err)
+	}
+	got, err := c.GetDependencies(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("edges = %+v, want %+v", got, want)
 	}
 }
 
