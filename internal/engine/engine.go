@@ -27,12 +27,14 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	execbackend "github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/statusreflect"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/textcap"
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
@@ -503,15 +505,23 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		return ExecuteResult{}, err
 	}
 
-	// The Workspace is created before the Agent is invoked, while still in
-	// PREPARING. From here on, any error path must clean the Workspace up
-	// and drive the Issue to a terminal state via failOut.
-	ws, err := e.Workspaces.Create(ctx, execution.ID, issueID, workerBase)
+	// The environment is prepared before the Agent is invoked, while still
+	// in PREPARING (ticket 301, constructorfleet/forge#285: the Engine
+	// obtains its Workspace from the configured backend via Prepare rather
+	// than calling WorkspaceCreator.Create directly). From here on, any
+	// error path must clean the environment up and drive the Issue to a
+	// terminal state via failOut.
+	env, err := e.backend().Prepare(ctx, execbackend.WorkspaceRequest{
+		ExecutionID: execution.ID,
+		IssueID:     issueID,
+		Base:        workerBase,
+	})
 	if err != nil {
-		return ExecuteResult{}, fmt.Errorf("engine: create workspace for issue %s: %w", issueID, err)
+		return ExecuteResult{}, fmt.Errorf("engine: prepare environment for issue %s: %w", issueID, err)
 	}
-	// Prepare is called immediately after Workspaces.Create, once per
-	// Issue: the resulting Session is reused across every Agent call in
+	ws := env.Workspace()
+	// Prepare is called immediately after the environment is obtained, once
+	// per Issue: the resulting Session is reused across every Agent call in
 	// this Issue's repair loop (see executeAgent's augmentSemantic call).
 	// The success path has no symmetric cleanup, so defer is mandatory
 	// here rather than at whatever point the Issue eventually rests.
@@ -524,7 +534,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		"path":   ws.Path,
 		"branch": ws.Branch,
 	}); err != nil {
-		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 	}
 
 	// Execution Context (CONTEXT.md "Execution Context") is assembled inside
@@ -537,18 +547,18 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	var implemented bool
 	issue, implemented, err = e.invokeAgent(ctx, execution.ID, issueID, ws.Path, repoCtx, issue, nil)
 	if err != nil {
-		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 	}
 
 	if implemented {
-		issue, err = e.runRepairLoop(ctx, execution.ID, issueID, workerBase, ws.Path, repoCtx, issue)
+		issue, err = e.runRepairLoop(ctx, execution.ID, issueID, workerBase, ws.Path, env, repoCtx, issue)
 		if err != nil {
-			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 		}
 		if issue.State == domain.StateCommitting {
 			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, workerBase, ws, issue)
 			if err != nil {
-				return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, err)
+				return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 			}
 		}
 	}
@@ -582,6 +592,11 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: validate workspace for issue %s: %w", issueID, err)
 	}
+	// RepairCIFailure resumes an existing Workspace rather than Preparing a
+	// fresh one, so it wraps ws in the same environment type Prepare
+	// returns (ticket 301) instead of calling backend.Prepare, which would
+	// try to create a Workspace that already exists.
+	env := e.wrapWorkspace(executionID, issueID, ws)
 
 	workerBase, err := e.workerBase(ctx, state.Execution, issueID)
 	if err != nil {
@@ -619,7 +634,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return issue, nil
 	}
 
-	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, ws.Path, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, ws.Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -658,14 +673,14 @@ func workerRef(executionID, issueID string) string {
 // transitions straight to FAILED instead. The Workspace is the same one
 // Execute created before IMPLEMENTING and is never recreated or cleaned up
 // between iterations — repair works in place.
-func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue) (domain.Issue, error) {
+func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, workerBase, workspacePath string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue) (domain.Issue, error) {
 	for {
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateValidating)
 		if err != nil {
 			return domain.Issue{}, err
 		}
 
-		issue, gatesPassed, gateResults, failedGate, err := e.runQualityGates(ctx, executionID, issueID, workspacePath, issue)
+		issue, gatesPassed, gateResults, failedGate, err := e.runQualityGates(ctx, executionID, issueID, env, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -1170,14 +1185,11 @@ func (c *reviewTranscriptCoordinator) finalize(coverage []review.AxisCoverage) {
 // signal — callers should branch on it directly rather than re-deriving
 // the same fact by comparing the returned Issue's State against
 // domain.StateReviewing.
-func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, workspacePath string, issue domain.Issue) (_ domain.Issue, passed bool, _ []gate.Result, failed *gate.Result, _ error) {
-	runner := gate.NewRunner(e.Gates)
-	results := runner.Run(ctx, workspacePath, e.Config.Quality.Gates, gate.Options{
-		MaxOutputBytes: e.Config.Quality.MaxOutputBytes,
-	})
-
-	for i := range results {
-		res := results[i]
+func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, issue domain.Issue) (_ domain.Issue, passed bool, _ []gate.Result, failed *gate.Result, _ error) {
+	var results []gate.Result
+	for _, g := range e.Config.Quality.Gates {
+		res := e.runQualityGate(ctx, env, g)
+		results = append(results, res)
 		if err := e.Store.RecordGateRun(ctx, storage.GateRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -1192,8 +1204,9 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 		}); err != nil {
 			return domain.Issue{}, false, nil, nil, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
 		}
-		if !res.Passed && failed == nil {
-			failed = &results[i]
+		if !res.Passed {
+			failed = &results[len(results)-1]
+			break
 		}
 	}
 
@@ -1216,6 +1229,45 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID, work
 	}
 
 	return issue, false, nil, failed, nil
+}
+
+// runQualityGate runs one configured Quality Gate through env.Execute
+// (ticket 301, constructorfleet/forge#285: Quality Gates run through the
+// environment's single command primitive) and bounds its captured
+// stdout/stderr to Config.Quality.MaxOutputBytes, tail-preserving, exactly
+// as gate.Runner did when it owned this execution directly.
+func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEnvironment, g config.QualityGate) gate.Result {
+	started := e.Now()
+	result, err := env.Execute(ctx, execbackend.Command{Name: g.Name, Command: g.Command})
+	if err != nil {
+		if result.StartedAt.IsZero() {
+			result.StartedAt = started
+		}
+		result.FinishedAt = e.Now()
+		result.ExitCode = -1
+		result.Stderr += "\ngate runner: " + err.Error()
+	}
+	return gate.Result{
+		Name:       g.Name,
+		Command:    g.Command,
+		StartedAt:  result.StartedAt,
+		FinishedAt: result.FinishedAt,
+		ExitCode:   result.ExitCode,
+		Stdout:     capOutput(result.Stdout, e.Config.Quality.MaxOutputBytes),
+		Stderr:     capOutput(result.Stderr, e.Config.Quality.MaxOutputBytes),
+		Passed:     result.ExitCode == 0,
+	}
+}
+
+// capOutput bounds s to maxBytes, keeping the tail (see
+// internal/textcap.TailWriter): <= 0 means unbounded.
+func capOutput(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return s
+	}
+	w := textcap.NewTailWriter(maxBytes)
+	_, _ = w.Write([]byte(s))
+	return w.String()
 }
 
 // runReview implements REVIEWING once Quality Gates have passed (ticket 20,
@@ -1480,12 +1532,12 @@ func (e *Engine) appendEvent(ctx context.Context, executionID, issueID, eventTyp
 // to CANCELLED, which domain.ValidateTransition permits from any
 // non-terminal state — an infra failure before the Agent ever ran is better
 // described as an aborted run than a failed one.
-func (e *Engine) failOut(ctx context.Context, executionID, issueID string, origErr error) error {
+func (e *Engine) failOut(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, origErr error) error {
 	errs := []error{origErr}
 
 	cancelled := errors.Is(origErr, context.Canceled)
 	if !cancelled {
-		if err := e.Workspaces.Cleanup(ctx, executionID, issueID); err != nil {
+		if err := env.Cleanup(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("engine: cleanup workspace for issue %s: %w", issueID, err))
 		}
 	}
