@@ -587,7 +587,11 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 
 	issue, retried, err := e.repair(
 		ctx, executionID, issueID, ws.Path, repoCtx, issue,
-		issue.RetryBudget.CIExhausted(), (*domain.Issue).RecordCIFailure, []agent.Feedback{feedback}, "ci",
+		issue.RetryBudget.CIExhausted(),
+		func() (domain.Issue, error) {
+			return e.transition(ctx, executionID, issueID, domain.StateFailed)
+		},
+		(*domain.Issue).RecordCIFailure, []agent.Feedback{feedback}, "ci",
 	)
 	if err != nil {
 		return domain.Issue{}, err
@@ -650,7 +654,11 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		if !gatesPassed {
 			feedback := []agent.Feedback{gate.BuildFeedback(*failedGate)}
 			issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
-				issue.RetryBudget.GateExhausted(), (*domain.Issue).RecordGateFailure, feedback, "gate")
+				issue.RetryBudget.GateExhausted(),
+				func() (domain.Issue, error) {
+					return e.transition(ctx, executionID, issueID, domain.StateFailed)
+				},
+				(*domain.Issue).RecordGateFailure, feedback, "gate")
 			if err != nil {
 				return domain.Issue{}, err
 			}
@@ -665,7 +673,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 
 		// runReview itself short-circuits on a nil Reviewer (returning
 		// VerdictApproved, the ticket-20 predecessor resting state), so
-		// there is no separate nil check needed here.
+		// there is no separate nil check needed here. It also handles
+		// review.VerdictInconclusive itself (issue #161), routing straight
+		// to NEEDS_INFO, so only VerdictChangesRequired needs handling here.
 		issue, verdict, findings, err := e.runReview(ctx, executionID, issueID, workerBase, workspacePath, repoCtx, issue, gateResults)
 		if err != nil {
 			return domain.Issue{}, err
@@ -676,7 +686,18 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 
 		feedback := review.BuildFeedback(findings)
 		issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
-			issue.RetryBudget.ReviewExhausted(), (*domain.Issue).RecordReviewRejection, feedback, "review")
+			issue.RetryBudget.ReviewExhausted(),
+			func() (domain.Issue, error) {
+				// Issue #161: a standing CHANGES_REQUIRED once the review
+				// retry budget is exhausted routes to NEEDS_INFO, not FAILED
+				// — the loop cannot safely keep repairing (budget spent) but
+				// nothing here warrants the FAILED terminal either; a human
+				// needs to look.
+				return e.escalateReviewToNeedsInfo(ctx, executionID, issueID,
+					"Review requested changes and the review retry budget is exhausted; human input is needed to proceed.",
+					reviewFindingsContext(findings))
+			},
+			(*domain.Issue).RecordReviewRejection, feedback, "review")
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -688,30 +709,35 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 
 // repair implements the Retry Budget's (CONTEXT.md) shared shape for both
 // the gate and review repair paths — the two differ only in which
-// RetryBudget counter they consult/record and which bounded Feedback they
-// hand the Agent. exhausted is the caller's already-evaluated
-// GateExhausted()/ReviewExhausted() check; record is the corresponding
-// pointer-receiver mutator (domain.Issue.RecordGateFailure or
+// RetryBudget counter they consult/record, which bounded Feedback they hand
+// the Agent, and (issue #161) what happens once that counter is exhausted:
+// onExhausted is the caller's own closure for that terminal transition —
+// the gate path's remains e.transition(..., StateFailed) unchanged, while
+// the review path's now escalates to NEEDS_INFO via
+// escalateReviewToNeedsInfo instead of FAILED, since a standing
+// CHANGES_REQUIRED with the budget spent is not something a human should
+// see reported as an unrecoverable failure. exhausted is the caller's
+// already-evaluated GateExhausted()/ReviewExhausted() check; record is the
+// corresponding pointer-receiver mutator (domain.Issue.RecordGateFailure or
 // .RecordReviewRejection, passed as a method expression so it mutates the
 // addressable local issue this function holds, not a copy — see
 // RecordGateFailure's doc comment for why that matters); what names the
 // class purely for error messages. A future CI retry budget (ticket 24)
 // becomes a one-line call to this same helper rather than a third copy.
 //
-// exhausted transitions the Issue straight to FAILED and returns
-// retried=false. Otherwise it records the failure in memory, persists it
-// (Store.UpdateRetryBudget — TransitionIssue always reloads the Issue
-// fresh, so an unpersisted in-memory increment would otherwise be silently
-// discarded by the very next transition; this persist and the following
-// invokeAgent transition are two separate writes, safe today since nothing
-// resumes mid-repair, but worth folding into one transaction if a
-// resume-through-Execute path is ever added — see ticket 31/restart
-// recovery), and delegates to invokeAgent, returning its (issue,
-// implemented, error) directly: implemented is exactly this function's
-// retried.
-func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, exhausted bool, record func(*domain.Issue) error, feedback []agent.Feedback, what string) (_ domain.Issue, retried bool, _ error) {
+// exhausted calls onExhausted and returns retried=false. Otherwise it
+// records the failure in memory, persists it (Store.UpdateRetryBudget —
+// TransitionIssue always reloads the Issue fresh, so an unpersisted
+// in-memory increment would otherwise be silently discarded by the very
+// next transition; this persist and the following invokeAgent transition
+// are two separate writes, safe today since nothing resumes mid-repair, but
+// worth folding into one transaction if a resume-through-Execute path is
+// ever added — see ticket 31/restart recovery), and delegates to
+// invokeAgent, returning its (issue, implemented, error) directly:
+// implemented is exactly this function's retried.
+func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, exhausted bool, onExhausted func() (domain.Issue, error), record func(*domain.Issue) error, feedback []agent.Feedback, what string) (_ domain.Issue, retried bool, _ error) {
 	if exhausted {
-		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
+		issue, err := onExhausted()
 		return issue, false, err
 	}
 
@@ -1110,6 +1136,18 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 		return issue, review.VerdictApproved, nil, err
 	case review.VerdictChangesRequired:
 		return issue, review.VerdictChangesRequired, result.Findings, nil
+	case review.VerdictInconclusive:
+		// Issue #161: the Reviewer could not certify full axis coverage (at
+		// least one axis was unrecoverable and no surviving axis produced a
+		// blocking finding to route back as CHANGES_REQUIRED instead). A
+		// false APPROVED is the worst outcome Forge can produce, so this
+		// never auto-approves; it also never consumes RetryBudget.Review —
+		// this is an infra/coverage gap, not a repairable rejection — and
+		// escalates straight to NEEDS_INFO instead.
+		issue, err := e.escalateReviewToNeedsInfo(ctx, executionID, issueID,
+			"Review could not be completed on full axis coverage; human input is needed to proceed.",
+			result.Summary)
+		return issue, review.VerdictInconclusive, nil, err
 	default:
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer returned unknown verdict %q for issue %s", result.Verdict, issueID)
 	}

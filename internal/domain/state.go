@@ -86,9 +86,16 @@ var transitions = map[IssueState][]IssueState{
 	StatePreparing:         {StateImplementing},
 	StateImplementing:      {StateNeedsInfo, StateNeedsReplan, StateValidating, StateFailed},
 	StateValidating:        {StateImplementing, StateReviewing, StateFailed},
-	StateReviewing:         {StateImplementing, StateCommitting, StateFailed},
-	StateCommitting:        {StatePRCreating, StateNeedsReplan, StateFailed},
-	StatePRCreating:        {StateCIPending},
+	// Reviewing -> NeedsInfo (issue #161, review degradation): a Review that
+	// cannot certify full axis coverage (review.VerdictInconclusive) or that
+	// stays at CHANGES_REQUIRED once RetryBudget.Review is exhausted routes
+	// here instead of to FAILED — the same human-escalation resting state
+	// IMPLEMENTING and CIPending already use, since neither case is
+	// something an automated repair attempt should improvise past. See
+	// engine.escalateReviewToNeedsInfo.
+	StateReviewing:  {StateImplementing, StateCommitting, StateNeedsInfo, StateFailed},
+	StateCommitting: {StatePRCreating, StateNeedsReplan, StateFailed},
+	StatePRCreating: {StateCIPending},
 	// CIPending -> NeedsInfo (issue 109, "PR supervision"): the CI
 	// Supervisor's poll loop (internal/ci.Supervisor.Wait) also inspects
 	// pull-request mergeability and review feedback alongside required

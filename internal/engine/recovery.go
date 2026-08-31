@@ -231,7 +231,14 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 		return domain.Issue{}, err
 	}
 	if verdict == review.VerdictChangesRequired {
-		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue, issue.RetryBudget.ReviewExhausted(), (*domain.Issue).RecordReviewRejection, review.BuildFeedback(findings), "review")
+		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue,
+			issue.RetryBudget.ReviewExhausted(),
+			func() (domain.Issue, error) {
+				return e.escalateReviewToNeedsInfo(ctx, exec.ID, issue.ID,
+					"Review requested changes and the review retry budget is exhausted; human input is needed to proceed.",
+					reviewFindingsContext(findings))
+			},
+			(*domain.Issue).RecordReviewRejection, review.BuildFeedback(findings), "review")
 		if err != nil || !retried {
 			return issue, err
 		}
@@ -253,7 +260,12 @@ func (e *Engine) resumeAfterFailedGate(ctx context.Context, executionID, issueID
 	if failedGate == nil {
 		return issue, nil
 	}
-	issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue, issue.RetryBudget.GateExhausted(), (*domain.Issue).RecordGateFailure, []agent.Feedback{gate.BuildFeedback(*failedGate)}, "gate")
+	issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+		issue.RetryBudget.GateExhausted(),
+		func() (domain.Issue, error) {
+			return e.transition(ctx, executionID, issueID, domain.StateFailed)
+		},
+		(*domain.Issue).RecordGateFailure, []agent.Feedback{gate.BuildFeedback(*failedGate)}, "gate")
 	if err != nil || !retried {
 		return issue, err
 	}
@@ -277,7 +289,14 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 		return domain.Issue{}, err
 	}
 	if verdict == review.VerdictChangesRequired {
-		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue, issue.RetryBudget.ReviewExhausted(), (*domain.Issue).RecordReviewRejection, review.BuildFeedback(findings), "review")
+		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue,
+			issue.RetryBudget.ReviewExhausted(),
+			func() (domain.Issue, error) {
+				return e.escalateReviewToNeedsInfo(ctx, exec.ID, issue.ID,
+					"Review requested changes and the review retry budget is exhausted; human input is needed to proceed.",
+					reviewFindingsContext(findings))
+			},
+			(*domain.Issue).RecordReviewRejection, review.BuildFeedback(findings), "review")
 		if err != nil || !retried {
 			return issue, err
 		}

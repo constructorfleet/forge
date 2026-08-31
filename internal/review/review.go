@@ -66,6 +66,19 @@ const (
 	// VerdictChangesRequired means the implementation must return to
 	// IMPLEMENTING with Result.Findings routed back as agent.Feedback.
 	VerdictChangesRequired Verdict = "CHANGES_REQUIRED"
+
+	// VerdictInconclusive means the Review could not be completed on full
+	// axis coverage (issue #161): at least one review axis was
+	// unrecoverable (a crash, an idle-timeout, or a persistently
+	// unparseable envelope) after the Reviewer's own bounded in-place
+	// retries, and none of the surviving axes produced a blocking finding
+	// to route back as CHANGES_REQUIRED instead. A false APPROVED is the
+	// worst outcome Forge can produce, so an incomplete Review is never
+	// silently approved — it is never FAILED either, since nothing here is
+	// the implementation's fault. The engine routes VerdictInconclusive to
+	// NEEDS_INFO (the same human-escalation resting state used elsewhere)
+	// so a human, not an automated repair attempt, resolves the gap.
+	VerdictInconclusive Verdict = "INCONCLUSIVE"
 )
 
 // Severity is how serious one Finding is.
@@ -136,7 +149,8 @@ type Finding struct {
 
 // Result is the structured outcome of one Reviewer.Review call.
 type Result struct {
-	// Verdict is VerdictApproved or VerdictChangesRequired.
+	// Verdict is VerdictApproved, VerdictChangesRequired, or
+	// VerdictInconclusive.
 	Verdict Verdict
 
 	// Summary is a human-readable description of the Reviewer's overall
@@ -148,6 +162,34 @@ type Result struct {
 	// lower-severity or below-confidence-floor findings as advisory signal
 	// (issue #158) — only runReview's repair-loop caller treats a
 	// VerdictApproved Result's Findings as non-actionable, discarding them
-	// rather than routing them back as agent.Feedback.
+	// rather than routing them back as agent.Feedback. On
+	// VerdictInconclusive, Findings carries whatever advisory signal the
+	// surviving axes produced (never a blocker — a surviving blocker forces
+	// VerdictChangesRequired instead).
 	Findings []Finding
+
+	// Coverage records which axes a Reviewer actually ran to completion and
+	// which it could not, and why (issue #161). It is nil for a Reviewer
+	// that does not track per-axis coverage (e.g. FakeReviewer); the
+	// production agentreviewer.Reviewer always populates it. Full per-axis
+	// audit persistence across Review runs is issue #162 — this is
+	// deliberately just enough structure for one Result's caller (runReview,
+	// tests) to see the coverage picture without parsing Summary text.
+	Coverage []AxisCoverage
+}
+
+// AxisCoverage is one review axis's outcome within a single Review call:
+// whether it completed within the Reviewer's own bounded in-place retries,
+// and — when it did not — why.
+type AxisCoverage struct {
+	// Axis is the axis name ("bugs", "quality", "docs" for
+	// agentreviewer.Reviewer).
+	Axis string
+
+	// Ran is true when this axis produced a usable findings envelope.
+	Ran bool
+
+	// Reason explains why Ran is false (e.g. the wrapped Execute/parse
+	// error after exhausting in-place retries). Empty when Ran is true.
+	Reason string
 }
