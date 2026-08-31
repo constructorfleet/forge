@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/constructorfleet/forge/compare/forge-v0.13.0...forge-v0.14.0) (2026-08-31)
+
+
+### Features
+
+* [Feature Request] Automatic Self Reporting ([#229](https://github.com/constructorfleet/forge/issues/229)) ([0df930f](https://github.com/constructorfleet/forge/commit/0df930faaa29ffe56a9cdcb05b9dbf05c1554314)), closes [#141](https://github.com/constructorfleet/forge/issues/141)
+
 ## [0.13.0](https://github.com/constructorfleet/forge/compare/forge-v0.12.0...forge-v0.13.0) (2026-08-31)
 
 
