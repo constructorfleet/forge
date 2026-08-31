@@ -115,6 +115,15 @@ func (a *axisRoutingAgent) programEnvelope(marker, envelope string) {
 	a.programmed[marker] = agent.AgentResult{Status: agent.StatusImplemented, Summary: envelope}
 }
 
+// programEnvelopeWithUsage programs marker's axis to return an AgentResult
+// whose Summary is envelope and whose Usage is usage, for asserting
+// Result.Envelopes' per-axis token usage (issue #162).
+func (a *axisRoutingAgent) programEnvelopeWithUsage(marker, envelope string, usage *agent.TokenUsage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.programmed[marker] = agent.AgentResult{Status: agent.StatusImplemented, Summary: envelope, Usage: usage}
+}
+
 // programError programs marker's axis to return err instead of a result on
 // every call (simulating a persistently unrecoverable axis).
 func (a *axisRoutingAgent) programError(marker string, err error) {
@@ -571,5 +580,119 @@ func TestReview_DefaultConfidenceFloor_UsedWhenNonPositive(t *testing.T) {
 	}
 	if result.Verdict != review.VerdictChangesRequired {
 		t.Errorf("Verdict = %q, want %q (default floor 0.7 <= 0.9 confidence)", result.Verdict, review.VerdictChangesRequired)
+	}
+}
+
+// TestReview_PopulatesEnvelopesWithRawFindingsAndUsage is issue #162's core
+// agentreviewer acceptance criterion: every axis that ran to completion
+// surfaces its raw findings envelope and token usage on Result.Envelopes,
+// independent of and prior to synthesis.
+func TestReview_PopulatesEnvelopesWithRawFindingsAndUsage(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programEnvelopeWithUsage(bugsAxisMarker, highConfidenceEnvelope, &agent.TokenUsage{InputTokens: 111, OutputTokens: 222})
+	fake.programEnvelope(qualityAxisMarker, cleanEnvelope)
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{Diff: "d", Issue: newIssue()})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if len(result.Envelopes) != 3 {
+		t.Fatalf("Envelopes = %+v, want 3 entries (one per axis)", result.Envelopes)
+	}
+
+	byAxis := map[string]review.AxisEnvelope{}
+	for _, e := range result.Envelopes {
+		byAxis[e.Axis] = e
+	}
+
+	bugs, ok := byAxis["bugs"]
+	if !ok {
+		t.Fatalf("no bugs envelope among %+v", result.Envelopes)
+	}
+	if len(bugs.Findings) != 1 {
+		t.Fatalf("bugs.Findings = %+v, want 1", bugs.Findings)
+	}
+	want := review.AxisRawFinding{
+		Severity:   "HIGH",
+		Confidence: 0.9,
+		File:       "internal/foo/foo.go",
+		Line:       42,
+		Message:    "nil pointer dereference on the error path",
+		Evidence:   "foo() returns (nil, err) but the caller dereferences the result before checking err",
+		Remedy:     "check err before dereferencing the result",
+	}
+	if bugs.Findings[0] != want {
+		t.Errorf("bugs.Findings[0] = %+v, want %+v", bugs.Findings[0], want)
+	}
+	if bugs.Usage == nil || bugs.Usage.InputTokens != 111 || bugs.Usage.OutputTokens != 222 {
+		t.Errorf("bugs.Usage = %+v, want &{111 222}", bugs.Usage)
+	}
+
+	quality, ok := byAxis["quality"]
+	if !ok {
+		t.Fatalf("no quality envelope among %+v", result.Envelopes)
+	}
+	if len(quality.Findings) != 0 {
+		t.Errorf("quality.Findings = %+v, want empty", quality.Findings)
+	}
+	if quality.Usage != nil {
+		t.Errorf("quality.Usage = %+v, want nil (fake programmed no usage)", quality.Usage)
+	}
+}
+
+// TestReview_UnrecoverableAxisExcludedFromEnvelopes ensures an axis that
+// never produced a usable envelope (Coverage.Ran == false) does not appear
+// in Result.Envelopes — there is no raw envelope to persist for it.
+func TestReview_UnrecoverableAxisExcludedFromEnvelopes(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programError(qualityAxisMarker, errors.New("boom"))
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{Diff: "d", Issue: newIssue()})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, e := range result.Envelopes {
+		if e.Axis == "quality" {
+			t.Fatalf("Envelopes contains an entry for unrecoverable axis quality: %+v", result.Envelopes)
+		}
+	}
+	if len(result.Envelopes) != 2 {
+		t.Fatalf("Envelopes = %+v, want 2 entries (bugs, docs)", result.Envelopes)
+	}
+}
+
+// TestReview_RubricOverride_UsedWhenSet verifies issue #162's rubric
+// override: setting Reviewer.Rubrics.Bugs substitutes that text for the
+// bugs axis's embedded rubric.md in the agent invocation's Policy.Notes,
+// while quality/docs keep their embedded defaults.
+func TestReview_RubricOverride_UsedWhenSet(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	reviewer := agentreviewer.New(fake, 0.7)
+	reviewer.Rubrics = agentreviewer.RubricOverrides{Bugs: "CUSTOM BUGS RUBRIC override-marker"}
+
+	_, err := reviewer.Review(context.Background(), review.Request{Diff: "d", Issue: newIssue()})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	var bugsNotes, qualityNotes string
+	for _, inv := range fake.Invocations() {
+		switch {
+		case strings.Contains(inv.Policy.Notes, "override-marker"):
+			bugsNotes = inv.Policy.Notes
+		case strings.Contains(inv.Policy.Notes, qualityAxisMarker):
+			qualityNotes = inv.Policy.Notes
+		}
+	}
+	if bugsNotes == "" {
+		t.Fatal("no invocation used the overridden bugs rubric")
+	}
+	if strings.Contains(bugsNotes, bugsAxisMarker) {
+		t.Errorf("overridden bugs invocation still contains the embedded rubric marker: %q", bugsNotes)
+	}
+	if qualityNotes == "" || !strings.Contains(qualityNotes, qualityAxisMarker) {
+		t.Errorf("quality invocation should still use its embedded rubric, got Policy.Notes = %q", qualityNotes)
 	}
 }

@@ -47,6 +47,16 @@ func (s *SQLiteStore) RecordReviewRun(ctx context.Context, run ReviewRun) error 
 		}
 	}
 
+	for _, env := range run.Envelopes {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO review_axis_envelopes (review_run_id, axis, ran, reason, input_tokens, output_tokens, raw_findings)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			reviewRunID, env.Axis, env.Ran, env.Reason, env.InputTokens, env.OutputTokens, env.RawFindings,
+		); err != nil {
+			return fmt.Errorf("storage: record review run for issue %s/%s: insert axis envelope: %w", run.ExecutionID, run.IssueID, err)
+		}
+	}
+
 	if err := appendReviewRunEvent(ctx, tx, run); err != nil {
 		return fmt.Errorf("storage: record review run for issue %s/%s: %w", run.ExecutionID, run.IssueID, err)
 	}
@@ -134,6 +144,13 @@ func (s *SQLiteStore) ReviewRunsByIssue(ctx context.Context, executionID, issueI
 			return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
 		}
 		ir.run.Findings = findings
+
+		envelopes, err := s.reviewAxisEnvelopesByRun(ctx, ir.id)
+		if err != nil {
+			return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
+		}
+		ir.run.Envelopes = envelopes
+
 		out[i] = ir.run
 	}
 	return out, nil
@@ -164,4 +181,46 @@ func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64
 		return nil, err
 	}
 	return findings, nil
+}
+
+// reviewAxisEnvelopesByRun returns every ReviewAxisEnvelope recorded for one
+// ReviewRun (issue #162), ordered by insertion — the same one-row-per-axis
+// order Reviewer.Review's fan-out wrote them in.
+func (s *SQLiteStore) reviewAxisEnvelopesByRun(ctx context.Context, reviewRunID int64) ([]ReviewAxisEnvelope, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT axis, ran, reason, input_tokens, output_tokens, raw_findings
+		FROM review_axis_envelopes
+		WHERE review_run_id = ?
+		ORDER BY id`,
+		reviewRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var envelopes []ReviewAxisEnvelope
+	for rows.Next() {
+		var (
+			e           ReviewAxisEnvelope
+			inputTokens sql.NullInt64
+			outTokens   sql.NullInt64
+		)
+		if err := rows.Scan(&e.Axis, &e.Ran, &e.Reason, &inputTokens, &outTokens, &e.RawFindings); err != nil {
+			return nil, fmt.Errorf("scan review axis envelope: %w", err)
+		}
+		if inputTokens.Valid {
+			v := int(inputTokens.Int64)
+			e.InputTokens = &v
+		}
+		if outTokens.Valid {
+			v := int(outTokens.Int64)
+			e.OutputTokens = &v
+		}
+		envelopes = append(envelopes, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return envelopes, nil
 }
