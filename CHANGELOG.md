@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/constructorfleet/forge/compare/forge-v0.11.2...forge-v0.11.3) (2026-08-31)
+
+
+### Bug Fixes
+
+* Claude adapter: honor ModeStructured (verbatim prompt, per-call --json-schema, result as Summary) ([#211](https://github.com/constructorfleet/forge/issues/211)) ([2b8e0f4](https://github.com/constructorfleet/forge/commit/2b8e0f4d767e3c962759c3713f6746d14f184c6b)), closes [#200](https://github.com/constructorfleet/forge/issues/200)
+
 ## [0.11.2](https://github.com/constructorfleet/forge/compare/forge-v0.11.1...forge-v0.11.2) (2026-08-31)
 
 
