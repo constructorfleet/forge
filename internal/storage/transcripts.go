@@ -64,8 +64,8 @@ func insertTranscriptEvents(ctx context.Context, tx *sql.Tx, executionID, issueI
 	}
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO transcript_events
-			(execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			(execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at, phase, subagent)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("storage: insert transcript events for issue %s/%s: %w", executionID, issueID, err)
 	}
@@ -75,6 +75,7 @@ func insertTranscriptEvents(ctx context.Context, tx *sql.Tx, executionID, issueI
 		if _, err := stmt.ExecContext(ctx,
 			executionID, issueID, agentRunID, event.Seq, event.Type, event.Role, event.Text,
 			event.ToolName, event.ToolInput, event.ToolOutput, event.ToolCallID, event.OccurredAt.UTC(),
+			event.Phase, event.Subagent,
 		); err != nil {
 			return fmt.Errorf("storage: insert transcript events for issue %s/%s: %w", executionID, issueID, err)
 		}
@@ -86,7 +87,7 @@ func insertTranscriptEvents(ctx context.Context, tx *sql.Tx, executionID, issueI
 // AgentRun (attempt), ordered by Seq.
 func (s *SQLiteStore) TranscriptEventsByAgentRun(ctx context.Context, executionID, issueID string, agentRunID int64) ([]TranscriptEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at
+		SELECT execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at, phase, subagent
 		FROM transcript_events
 		WHERE execution_id = ? AND issue_id = ? AND agent_run_id = ?
 		ORDER BY seq`,
@@ -103,7 +104,7 @@ func (s *SQLiteStore) TranscriptEventsByAgentRun(ctx context.Context, executionI
 // i.e. chronological order across the Issue's full history.
 func (s *SQLiteStore) TranscriptEventsByIssue(ctx context.Context, executionID, issueID string) ([]TranscriptEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at
+		SELECT execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at, phase, subagent
 		FROM transcript_events
 		WHERE execution_id = ? AND issue_id = ?
 		ORDER BY agent_run_id, seq`,
@@ -124,6 +125,7 @@ func scanTranscriptEvents(rows *sql.Rows, contextMsg string) ([]TranscriptEvent,
 		if err := rows.Scan(
 			&event.ExecutionID, &event.IssueID, &event.AgentRunID, &event.Seq, &event.Type, &event.Role,
 			&event.Text, &event.ToolName, &event.ToolInput, &event.ToolOutput, &event.ToolCallID, &event.OccurredAt,
+			&event.Phase, &event.Subagent,
 		); err != nil {
 			return nil, fmt.Errorf("%s: scan transcript event: %w", contextMsg, err)
 		}

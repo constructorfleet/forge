@@ -327,13 +327,21 @@ func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax 
 // JSON findings envelope, returning the AgentResult's token usage alongside
 // it (issue #162) for Result.Envelopes.
 func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
-	result, err := r.Agent.Execute(ctx, agent.AgentRequest{
+	agentReq := agent.AgentRequest{
 		Mode:          agent.ModeReview,
 		Issue:         req.Issue,
 		Repository:    req.Repository,
 		Policy:        agent.WorkflowPolicy{Notes: buildPolicyNotes(req, ax.rubric)},
 		WorkspacePath: req.WorkspacePath,
-	})
+	}
+	// TranscriptSinkFor, when the engine supplies it, gives this axis its
+	// own transcript sink (issue #219) so its Agent invocation is captured
+	// exactly as the implementation Agent's is, keyed by axis name rather
+	// than shared across the three concurrent axes.
+	if req.TranscriptSinkFor != nil {
+		agentReq.Transcript = req.TranscriptSinkFor(ax.name)
+	}
+	result, err := r.Agent.Execute(ctx, agentReq)
 	if err != nil {
 		return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: execute: %w", ax.name, err)
 	}

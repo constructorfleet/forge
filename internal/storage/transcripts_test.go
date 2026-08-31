@@ -236,6 +236,43 @@ func TestReplaceTranscriptEvents_EmptySliceClearsEvents(t *testing.T) {
 	}
 }
 
+func TestRecordTranscriptEvents_PersistsPhaseAndSubagent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-transcript-phase", "issue-transcript-phase")
+
+	runID, err := store.RecordAgentRun(ctx, storage.AgentRun{
+		ExecutionID:  "exec-transcript-phase",
+		IssueID:      "issue-transcript-phase",
+		Backend:      "claude-code",
+		StartedAt:    time.Now(),
+		FinishedAt:   time.Now(),
+		Result:       "APPROVED",
+		ContextBytes: 10,
+	})
+	if err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	events := []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "checking docs", Phase: "REVIEWING", Subagent: "docs", OccurredAt: time.Now()},
+	}
+	if err := store.RecordTranscriptEvents(ctx, "exec-transcript-phase", "issue-transcript-phase", runID, events); err != nil {
+		t.Fatalf("RecordTranscriptEvents: %v", err)
+	}
+
+	got, err := store.TranscriptEventsByAgentRun(ctx, "exec-transcript-phase", "issue-transcript-phase", runID)
+	if err != nil {
+		t.Fatalf("TranscriptEventsByAgentRun: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+	if got[0].Phase != "REVIEWING" || got[0].Subagent != "docs" {
+		t.Fatalf("event = %+v, want Phase=REVIEWING Subagent=docs", got[0])
+	}
+}
+
 func TestReplaceTranscriptEvents_WithStartAgentRun(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
