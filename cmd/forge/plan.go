@@ -100,7 +100,11 @@ func runPlan(args []string) int {
 	// A single Backend is reused across wayfinding, spec generation, and
 	// ticket-plan generation within one `forge plan` invocation -- there is
 	// no per-stage reason to invoke a fresh one.
-	backend := planningagent.NewFakeBackend()
+	backend, err := buildPlanningBackend(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
+		return 1
+	}
 
 	// Wayfinding: only needed while no spec exists yet -- once a spec has
 	// been generated, the Decisions it was derived from are done being
