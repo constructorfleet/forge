@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // fencedJSONBlock matches fenced code blocks (optionally tagged "json") so
@@ -38,15 +41,54 @@ func InvokeStructured[Req any, Res any](
 		return zero, fmt.Errorf("planningagent: build must not be nil")
 	}
 
+	schema, err := schemaFor[Res]()
+	if err != nil {
+		return zero, fmt.Errorf("planningagent: derive schema: %w", err)
+	}
+
 	prompt := build(req)
-	raw, err := backend.Invoke(ctx, InvokeRequest{Key: key, Prompt: prompt})
+	raw, err := backend.Invoke(ctx, InvokeRequest{Key: key, Prompt: prompt, Schema: schema})
 	if err != nil {
 		return zero, fmt.Errorf("planningagent: invoke: %w", err)
+	}
+
+	if res, err := decodeStrict[Res](raw); err == nil {
+		if validate == nil {
+			return res, nil
+		}
+		if err := validate(res); err == nil {
+			return res, nil
+		}
 	}
 
 	res, ok := extractStructuredResult(raw, validate)
 	if !ok {
 		return zero, fmt.Errorf("planningagent: no valid structured result found in backend output")
+	}
+	return res, nil
+}
+
+// schemaFor derives the JSON Schema for Res via jsonschema-go's reflection-
+// based inference, marshaled to bytes for InvokeRequest.Schema.
+func schemaFor[Res any]() ([]byte, error) {
+	schema, err := jsonschema.For[Res](nil)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(schema)
+}
+
+// decodeStrict decodes raw directly into Res, rejecting unknown fields. It
+// is InvokeStructured's primary decode path -- for backends that return a
+// bare JSON result matching the schema threaded through InvokeRequest.Schema,
+// rather than a fenced block buried in free-form prose.
+func decodeStrict[Res any](raw string) (Res, error) {
+	var res Res
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&res); err != nil {
+		var zero Res
+		return zero, err
 	}
 	return res, nil
 }
