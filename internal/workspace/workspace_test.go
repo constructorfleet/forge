@@ -521,6 +521,59 @@ func TestRebase_MissingWorkspaceReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+func TestConflictCandidate_RebasesInDisposableWorkspaceAndCleansUp(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	commitFile(t, ws.Path, "worker.txt", "worker\n", "worker commit")
+	originalHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+
+	commitFile(t, root, "base.txt", "base advance\n", "base advance")
+	newBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	candidate, err := mgr.CreateConflictCandidate(context.Background(), "exec1", "issue-42", originalHead)
+	if err != nil {
+		t.Fatalf("CreateConflictCandidate: %v", err)
+	}
+	if candidate.Path == ws.Path || candidate.Branch == ws.Branch {
+		t.Fatalf("candidate = %+v, want separate path and branch from live workspace %+v", candidate, ws)
+	}
+	if candidate.HeadSHA != originalHead {
+		t.Fatalf("candidate head = %s, want original %s", candidate.HeadSHA, originalHead)
+	}
+
+	conflicts, err := mgr.RebaseConflictCandidate(context.Background(), candidate, newBase)
+	if err != nil {
+		t.Fatalf("RebaseConflictCandidate: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none", conflicts)
+	}
+	candidateHead := strings.TrimSpace(runGit(t, candidate.Path, "rev-parse", "HEAD"))
+	if candidateHead == originalHead {
+		t.Fatalf("candidate HEAD stayed at original %s after rebase", originalHead)
+	}
+	liveHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+	if liveHead != originalHead {
+		t.Fatalf("live workspace HEAD = %s, want untouched original %s", liveHead, originalHead)
+	}
+
+	candidate.HeadSHA = candidateHead
+	if err := mgr.CleanupConflictCandidate(context.Background(), candidate); err != nil {
+		t.Fatalf("CleanupConflictCandidate: %v", err)
+	}
+	if _, err := os.Stat(candidate.Path); !os.IsNotExist(err) {
+		t.Fatalf("candidate path stat err = %v, want removed", err)
+	}
+	if got := runGit(t, root, "branch", "--list", candidate.Branch); strings.TrimSpace(got) != "" {
+		t.Fatalf("candidate branch still exists: %q", got)
+	}
+}
+
 func TestBranchName_MatchesCreate(t *testing.T) {
 	root, base := newTempRepo(t)
 	mgr := newManager(t, root)

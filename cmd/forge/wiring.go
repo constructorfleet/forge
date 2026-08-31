@@ -206,7 +206,8 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		publisher := gitPublisher{locks: locks}
 		sup.Rebaser = wsMgr
 		sup.Pusher = publisher
-		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, publisher, gate.ExecCommandRunner{}, cfg)
+		sup.ConflictRestorer = publisher
+		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, nil, gate.ExecCommandRunner{}, cfg)
 		eng.CIWaiter = sup
 	}
 	return eng, nil
@@ -302,7 +303,8 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		publisher := gitPublisher{locks: repolock.New(repoRoot)}
 		sup.Rebaser = wsMgr
 		sup.Pusher = publisher
-		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, publisher, gate.ExecCommandRunner{}, cfg)
+		sup.ConflictRestorer = publisher
+		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, nil, gate.ExecCommandRunner{}, cfg)
 		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}

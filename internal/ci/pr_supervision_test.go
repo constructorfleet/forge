@@ -2,6 +2,8 @@ package ci_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +83,37 @@ func (s *stubConflictResolver) ResolveMergeConflict(_ context.Context, req ci.Co
 	return s.result, s.err
 }
 
+type stubConflictRestorer struct {
+	calls       int
+	paths       []string
+	branch      []string
+	restoreSHA  []string
+	expectedSHA []string
+	resetPath   []string
+	resetSHA    []string
+	err         error
+	readyErr    error
+}
+
+func (s *stubConflictRestorer) EnsureWorkspaceReady(context.Context, string) error {
+	return s.readyErr
+}
+
+func (s *stubConflictRestorer) ForcePushCommitWithLease(_ context.Context, path, branch, commitSHA, expectedRemoteSHA string) error {
+	s.calls++
+	s.paths = append(s.paths, path)
+	s.branch = append(s.branch, branch)
+	s.restoreSHA = append(s.restoreSHA, commitSHA)
+	s.expectedSHA = append(s.expectedSHA, expectedRemoteSHA)
+	return s.err
+}
+
+func (s *stubConflictRestorer) Reset(_ context.Context, path, commitSHA string) error {
+	s.resetPath = append(s.resetPath, path)
+	s.resetSHA = append(s.resetSHA, commitSHA)
+	return nil
+}
+
 func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict", "30")
@@ -139,6 +172,125 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	}
 	if !checkpoint.CommentPosted || checkpoint.CommentAuthor != "forge-bot" {
 		t.Fatalf("checkpoint = %+v, want CommentPosted with forge-bot author", checkpoint)
+	}
+}
+
+func TestWait_PublishedConflictCandidateFailedCheck_RestoresAndRoutesToNeedsInfo(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-conflict-ci-failed", "36")
+	seedWorkspace(t, store, "exec-conflict-ci-failed", "36", "/tmp/ws-36", "forge/exec-conflict-ci-failed/36")
+	now := time.Date(2026, 8, 31, 11, 0, 0, 0, time.UTC)
+	if err := store.RecordConflictResolutionAttempt(context.Background(), storage.ConflictResolutionAttempt{
+		ExecutionID:  "exec-conflict-ci-failed",
+		IssueID:      "36",
+		PRNumber:     23,
+		Branch:       "forge/exec-conflict-ci-failed/36",
+		OriginalSHA:  "abc123",
+		CandidateSHA: "def456",
+		Status:       storage.ConflictResolutionStatusPublished,
+		Details:      "published candidate",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("RecordConflictResolutionAttempt: %v", err)
+	}
+
+	trk := &stubTrackerWithMergeStatus{
+		stubTracker: stubTracker{
+			mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+			checkResponses: [][]tracker.PullRequestCheck{
+				{{Name: "build", State: tracker.CheckFailure, Details: "unit tests failed"}},
+			},
+		},
+	}
+
+	cfg := config.Default()
+	cfg.Blocked.Label = "forge-blocked"
+	supervisor := ci.New(store, trk, cfg, "main")
+	restorer := &stubConflictRestorer{}
+	supervisor.ConflictRestorer = restorer
+	supervisor.NeedsInfoTracker = newStubNeedsInfoTracker()
+	supervisor.Now = func() time.Time { return time.Date(2026, 8, 31, 11, 5, 0, 0, time.UTC) }
+
+	state, err := supervisor.Wait(context.Background(), "exec-conflict-ci-failed", "36")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateNeedsInfo {
+		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	}
+	if restorer.calls != 1 {
+		t.Fatalf("ForcePushCommitWithLease calls = %d, want 1", restorer.calls)
+	}
+	if restorer.paths[0] != "/tmp/ws-36" || restorer.branch[0] != "forge/exec-conflict-ci-failed/36" || restorer.restoreSHA[0] != "abc123" || restorer.expectedSHA[0] != "def456" {
+		t.Fatalf("restore call = path %q branch %q restore %q expected %q, want live workspace/original/candidate lease", restorer.paths[0], restorer.branch[0], restorer.restoreSHA[0], restorer.expectedSHA[0])
+	}
+	if len(restorer.resetSHA) != 1 || restorer.resetSHA[0] != "abc123" {
+		t.Fatalf("Reset calls = %v, want abc123", restorer.resetSHA)
+	}
+	if _, err := store.ActiveConflictResolutionAttempt(context.Background(), "exec-conflict-ci-failed", "36"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("ActiveConflictResolutionAttempt err = %v, want ErrNotFound after restore", err)
+	}
+	issue, err := store.GetIssue(context.Background(), "exec-conflict-ci-failed", "36")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.State != domain.StateNeedsInfo {
+		t.Fatalf("persisted state = %s, want NEEDS_INFO", issue.State)
+	}
+}
+
+func TestWait_PublishedConflictCandidateActionableReview_RestoresAndRoutesToNeedsInfo(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-conflict-review-failed", "37")
+	seedWorkspace(t, store, "exec-conflict-review-failed", "37", "/tmp/ws-37", "forge/exec-conflict-review-failed/37")
+	now := time.Date(2026, 8, 31, 11, 10, 0, 0, time.UTC)
+	if err := store.RecordConflictResolutionAttempt(context.Background(), storage.ConflictResolutionAttempt{
+		ExecutionID:  "exec-conflict-review-failed",
+		IssueID:      "37",
+		PRNumber:     23,
+		Branch:       "forge/exec-conflict-review-failed/37",
+		OriginalSHA:  "abc123",
+		CandidateSHA: "def456",
+		Status:       storage.ConflictResolutionStatusPublished,
+		Details:      "published candidate",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("RecordConflictResolutionAttempt: %v", err)
+	}
+
+	trk := &stubTrackerWithReviews{
+		stubTracker: stubTracker{mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}}},
+		reviews: []tracker.PullRequestReview{
+			{ID: 1, Author: "bob", State: tracker.ReviewChangesRequested, Body: "this replay broke the edge case"},
+		},
+	}
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	restorer := &stubConflictRestorer{}
+	supervisor.ConflictRestorer = restorer
+	supervisor.NeedsInfoTracker = newStubNeedsInfoTracker()
+	supervisor.Now = func() time.Time { return time.Date(2026, 8, 31, 11, 15, 0, 0, time.UTC) }
+
+	state, err := supervisor.Wait(context.Background(), "exec-conflict-review-failed", "37")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateNeedsInfo {
+		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	}
+	if restorer.calls != 1 || restorer.restoreSHA[0] != "abc123" || restorer.expectedSHA[0] != "def456" {
+		t.Fatalf("restore calls = %+v restore %v expected %v, want original abc123 with candidate lease def456", restorer.calls, restorer.restoreSHA, restorer.expectedSHA)
+	}
+	if _, err := store.ActiveConflictResolutionAttempt(context.Background(), "exec-conflict-review-failed", "37"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("ActiveConflictResolutionAttempt err = %v, want ErrNotFound after restore", err)
+	}
+	runs, err := store.CIRunsByIssue(context.Background(), "exec-conflict-review-failed", "37")
+	if err != nil {
+		t.Fatalf("CIRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Kind != storage.CIRunKindReview || runs[0].Status != storage.CIRunStatusFailed {
+		t.Fatalf("runs = %+v, want one failed review run before NEEDS_INFO", runs)
 	}
 }
 
@@ -244,6 +396,47 @@ func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testi
 	}
 	if runs[0].Details != "automatic conflict replay refused: README.md still has unresolved hunks" {
 		t.Fatalf("run details = %q, want resolver refusal details", runs[0].Details)
+	}
+}
+
+func TestWait_MergeConflict_MissingRecordedHeadRoutesToNeedsInfoWithoutResolver(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-conflict-no-head", "38")
+	prs, err := store.PullRequestsByIssue(context.Background(), "exec-conflict-no-head", "38")
+	if err != nil {
+		t.Fatalf("PullRequestsByIssue: %v", err)
+	}
+	prs[0].CommitSHA = ""
+	if err := store.RecordPullRequest(context.Background(), prs[0]); err != nil {
+		t.Fatalf("RecordPullRequest: %v", err)
+	}
+
+	trk := &stubTrackerWithMergeStatus{
+		stubTracker: stubTracker{mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}}},
+		conflicted:  true,
+	}
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	resolver := &stubConflictResolver{result: ci.ConflictResolutionResult{Resolved: true}}
+	supervisor.ConflictResolver = resolver
+	supervisor.NeedsInfoTracker = newStubNeedsInfoTracker()
+	supervisor.Now = func() time.Time { return time.Date(2026, 8, 31, 11, 20, 0, 0, time.UTC) }
+
+	state, err := supervisor.Wait(context.Background(), "exec-conflict-no-head", "38")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if state != domain.StateNeedsInfo {
+		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("ResolveMergeConflict calls = %d, want 0 without recorded PR head", resolver.calls)
+	}
+	runs, err := store.CIRunsByIssue(context.Background(), "exec-conflict-no-head", "38")
+	if err != nil {
+		t.Fatalf("CIRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 || !strings.Contains(runs[0].Details, "recorded pull request head SHA is empty") {
+		t.Fatalf("runs = %+v, want missing-head conflict failure", runs)
 	}
 }
 

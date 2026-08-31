@@ -69,6 +69,13 @@ type Supervisor struct {
 	// repair allowed by ADR 0017. Optional: nil preserves the conservative
 	// issue-109 behavior of routing merge conflicts to NEEDS_INFO.
 	ConflictResolver ConflictResolver
+
+	// ConflictRestorer restores a published automatic conflict-repair
+	// candidate when required CI or actionable review feedback fails after
+	// publication. Optional: without it, Wait cannot safely continue the
+	// automatic-resolution detour and routes to NEEDS_INFO with the attempt
+	// left published.
+	ConflictRestorer ConflictBranchRestorer
 }
 
 // NeedsInfoTracker is the subset of tracker.Tracker Wait needs when routing
@@ -143,7 +150,7 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 		// that doesn't implement/configure them (including every existing
 		// test double) leaves this exactly the pre-issue-109 check-only
 		// behavior.
-		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr.Number); handled || err != nil {
+		if handled, state, err := s.pollConflict(ctx, executionID, issueID, pr); handled || err != nil {
 			return state, err
 		}
 		if handled, state, err := s.pollStale(ctx, executionID, issueID, pr.Number); handled || err != nil {
@@ -201,6 +208,9 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			}
 			return issue.State, nil
 		case storage.CIRunStatusFailed:
+			if handled, state, err := s.handlePublishedConflictCandidateFailure(ctx, executionID, issueID, "required check "+failed.Name+" failed: "+failed.Details); handled || err != nil {
+				return state, err
+			}
 			issue, err := s.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCIFailed)
 			if err != nil {
 				return "", fmt.Errorf("ci: transition issue %s to CI_FAILED: %w", issueID, err)

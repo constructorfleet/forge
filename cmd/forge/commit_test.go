@@ -87,6 +87,69 @@ func TestGitPublisherPush_PushesBranchToOrigin(t *testing.T) {
 	}
 }
 
+func TestGitPublisherForcePushWithLeaseRequiresExpectedRemoteSHA(t *testing.T) {
+	t.Parallel()
+
+	origin := t.TempDir()
+	gittest.RunGit(t, origin, "init", "--bare", "-q")
+
+	root, base := gittest.NewTempRepo(t)
+	gittest.RunGit(t, root, "remote", "add", "origin", origin)
+	gittest.RunGit(t, root, "checkout", "-q", "-b", "forge/exec/35")
+	gittest.RunGit(t, root, "push", "-u", "origin", "forge/exec/35")
+
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	gittest.RunGit(t, root, "add", "feature.txt")
+	gittest.RunGit(t, root, "commit", "-q", "-m", "candidate")
+	candidate := strings.TrimSpace(gittest.RunGit(t, root, "rev-parse", "HEAD"))
+
+	if err := (gitPublisher{}).ForcePushWithLease(context.Background(), root, "forge/exec/35", base); err != nil {
+		t.Fatalf("ForcePushWithLease: %v", err)
+	}
+	if got := strings.TrimSpace(gittest.RunGit(t, origin, "rev-parse", "refs/heads/forge/exec/35")); got != candidate {
+		t.Fatalf("remote head = %s, want candidate %s", got, candidate)
+	}
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("second candidate\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	gittest.RunGit(t, root, "add", "feature.txt")
+	gittest.RunGit(t, root, "commit", "-q", "-m", "second candidate")
+
+	if err := (gitPublisher{}).ForcePushWithLease(context.Background(), root, "forge/exec/35", base); err == nil {
+		t.Fatal("ForcePushWithLease with stale expected SHA succeeded, want lease failure")
+	}
+}
+
+func TestGitPublisherForcePushCommitWithLeaseRestoresSpecificCommit(t *testing.T) {
+	t.Parallel()
+
+	origin := t.TempDir()
+	gittest.RunGit(t, origin, "init", "--bare", "-q")
+
+	root, original := gittest.NewTempRepo(t)
+	gittest.RunGit(t, root, "remote", "add", "origin", origin)
+	gittest.RunGit(t, root, "checkout", "-q", "-b", "forge/exec/36")
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	gittest.RunGit(t, root, "add", "feature.txt")
+	gittest.RunGit(t, root, "commit", "-q", "-m", "candidate")
+	candidate := strings.TrimSpace(gittest.RunGit(t, root, "rev-parse", "HEAD"))
+	gittest.RunGit(t, root, "push", "-u", "origin", "forge/exec/36")
+
+	if err := (gitPublisher{}).ForcePushCommitWithLease(context.Background(), root, "forge/exec/36", original, candidate); err != nil {
+		t.Fatalf("ForcePushCommitWithLease: %v", err)
+	}
+	if got := strings.TrimSpace(gittest.RunGit(t, origin, "rev-parse", "refs/heads/forge/exec/36")); got != original {
+		t.Fatalf("remote head = %s, want original %s", got, original)
+	}
+	if err := (gitPublisher{}).ForcePushCommitWithLease(context.Background(), root, "forge/exec/36", candidate, candidate); err == nil {
+		t.Fatal("ForcePushCommitWithLease with stale expected SHA succeeded, want lease failure")
+	}
+}
+
 func TestGitPublisherReset_RestoresWorkspaceToCommit(t *testing.T) {
 	t.Parallel()
 

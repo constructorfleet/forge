@@ -41,13 +41,13 @@ type ConflictResolver interface {
 // A successful automatic repair records a passed conflict CIRun and lets Wait
 // continue normal CI supervision; an unconfigured or unresolved conflict is
 // recorded as failed and routed to NEEDS_INFO.
-func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID string, number int) (handled bool, state domain.IssueState, err error) {
+func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID string, pr storage.PullRequest) (handled bool, state domain.IssueState, err error) {
 	getter, ok := s.Tracker.(tracker.MergeStatusGetter)
 	if !ok {
 		return false, "", nil
 	}
 
-	status, err := getter.GetPullRequestMergeStatus(ctx, number)
+	status, err := getter.GetPullRequestMergeStatus(ctx, pr.Number)
 	if err != nil {
 		return true, "", fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
 	}
@@ -55,23 +55,14 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 		return false, "", nil
 	}
 
-	prs, err := s.Store.PullRequestsByIssue(ctx, executionID, issueID)
-	if err != nil {
-		return true, "", fmt.Errorf("ci: load pull requests for issue %s: %w", issueID, err)
-	}
-	pr := storage.PullRequest{Number: number}
-	for i := len(prs) - 1; i >= 0; i-- {
-		if prs[i].Number == number {
-			pr = prs[i]
-			break
-		}
-	}
-
 	if s.ConflictResolver != nil {
+		if pr.CommitSHA == "" {
+			return s.routeUnresolvedConflict(ctx, executionID, issueID, "automatic conflict replay refused: recorded pull request head SHA is empty")
+		}
 		result, err := s.ConflictResolver.ResolveMergeConflict(ctx, ConflictResolutionRequest{
 			ExecutionID:        executionID,
 			IssueID:            issueID,
-			PullRequestNumber:  number,
+			PullRequestNumber:  pr.Number,
 			BaseBranch:         s.BaseBranch,
 			PullRequestHeadSHA: pr.CommitSHA,
 		})
