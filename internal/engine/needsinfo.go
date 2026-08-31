@@ -146,15 +146,18 @@ func isNotFound(err error) bool {
 // cannot safely resolve on its own to a human, via the same NEEDS_INFO
 // mechanism (handleNeedsInfo) used elsewhere, rather than the FAILED
 // terminal or a false APPROVED (issue #161's governing principle: a false
-// APPROVED is the worst outcome). It covers two distinct call sites:
+// APPROVED is the worst outcome). Its call site is:
 //
-//   - runReview, when the Reviewer itself returns review.VerdictInconclusive
-//     (it could not certify full axis coverage);
 //   - runRepairLoop's review branch, when a standing
 //     review.VerdictChangesRequired verdict finds RetryBudget.Review already
-//     exhausted.
+//     exhausted — a genuine "a human must decide" state, since the reviewer
+//     is actively requesting changes the repair loop can no longer make.
 //
-// Neither case consumes or even inspects any RetryBudget counter: this is
+// (review.VerdictInconclusive no longer escalates here: an unrecoverable axis
+// is a review *error*, routed to the retryable FAILED terminal instead — see
+// runReview, issue #257.)
+//
+// This case neither consumes nor inspects any RetryBudget counter: this is
 // Forge's own escalation, not another repair attempt the Agent gets a turn
 // at, so the review-rejection counter (ADR-0007) is left untouched. question
 // and reviewContext become the synthetic AgentResult's NeedsInfo.Question/

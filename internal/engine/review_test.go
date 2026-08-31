@@ -246,14 +246,15 @@ func TestExecute_ReviewerError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 	}
 }
 
-// TestExecute_ReviewInconclusive_RoutesToNeedsInfoWithoutConsumingReviewBudget
-// covers issue #161's other escalation path: the Reviewer itself reports
-// VerdictInconclusive (it could not certify full axis coverage). This must
-// never auto-approve and must never be treated as a repairable rejection —
-// the engine routes straight to NEEDS_INFO, the Agent is never re-invoked,
-// and RetryBudget.Review is left untouched (this is an infra/coverage gap,
-// not a CHANGES_REQUIRED repair).
-func TestExecute_ReviewInconclusive_RoutesToNeedsInfoWithoutConsumingReviewBudget(t *testing.T) {
+// TestExecute_ReviewInconclusive_RoutesToRetryableFailedWithoutConsumingReviewBudget
+// covers issue #161/#257: the Reviewer reports VerdictInconclusive (it could
+// not certify full axis coverage because an axis was unrecoverable). This is
+// a review *error*, not a request for human input, so the engine routes to
+// the retryable FAILED terminal (recoverable via `forge retry`) — never
+// NEEDS_INFO. It must still never auto-approve, never re-invoke the Agent,
+// and never consume RetryBudget.Review (operator-driven retry, not the repair
+// loop, owns recovery).
+func TestExecute_ReviewInconclusive_RoutesToRetryableFailedWithoutConsumingReviewBudget(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"35": {ID: "35"},
 	})
@@ -272,8 +273,8 @@ func TestExecute_ReviewInconclusive_RoutesToNeedsInfoWithoutConsumingReviewBudge
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateNeedsInfo {
-		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	if result.Issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED (retryable; an unrecoverable axis is an error, not a human-input request)", result.Issue.State)
 	}
 
 	issue, err := te.store.GetIssue(ctx, result.ExecutionID, "35")
