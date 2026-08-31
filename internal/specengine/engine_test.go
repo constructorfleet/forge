@@ -267,8 +267,67 @@ func TestSpecEngineGenerateSpec_ReviewBudgetExhausted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for exhausted review budget, got nil")
 	}
+	if !strings.Contains(err.Error(), "Non-Goals section is too brief") {
+		t.Errorf("error should surface the recurring finding, got: %v", err)
+	}
 	if loader.spec != nil {
 		t.Error("spec should not be saved when budget exhausted")
+	}
+}
+
+// TestSpecEngineGenerateSpec_ReviewNoiseNotHardFailed is issue #249's
+// reliability acceptance criterion: when the automated reviewer disagrees
+// with itself across every retry (no finding recurs in every attempt), that
+// is reviewer noise, not a genuine defect. The spec already passed
+// deterministic validation, so budget exhaustion must not hard-fail the
+// feature in this case.
+func TestSpecEngineGenerateSpec_ReviewNoiseNotHardFailed(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	loader := &fakeLoaderForTest{goal: goal}
+
+	backend := planningagent.NewFakeBackend()
+	genResult := func(v string) string {
+		return fmt.Sprintf(`{
+			"summary": "A widget builder %s",
+			"requirements": [{"id": "REQ-001", "description": "Widget must be buildable"}],
+			"non_goals": ["Not building a gadget"],
+			"decision_refs": []
+		}`, v)
+	}
+	reviewChangesRequired := func(msg string) string {
+		return fmt.Sprintf(`{
+			"verdict": "CHANGES_REQUIRED",
+			"summary": "Specification needs improvement",
+			"findings": [{"severity": "WARNING", "file": "", "line": 0, "message": %q}]
+		}`, msg)
+	}
+
+	// Default ReviewRetryLimit is 3, which drives 4 review calls before
+	// exhaustion (the 3 that trigger a repair, plus the one that observes
+	// the budget is spent). Program each with a distinct finding so none
+	// recurs across every attempt.
+	backend.ProgramResult("specification-generation", genResult("v1"))
+	backend.ProgramResult("specification-review", reviewChangesRequired("issue A"))
+	backend.ProgramResult("specification-generation", genResult("v2"))
+	backend.ProgramResult("specification-review", reviewChangesRequired("issue B"))
+	backend.ProgramResult("specification-generation", genResult("v3"))
+	backend.ProgramResult("specification-review", reviewChangesRequired("issue C"))
+	backend.ProgramResult("specification-generation", genResult("v4"))
+	backend.ProgramResult("specification-review", reviewChangesRequired("issue D"))
+
+	engine := specengine.NewSpecEngine(backend)
+	err := engine.GenerateSpec(context.Background(), "feature-1", loader)
+	if err != nil {
+		t.Fatalf("GenerateSpec should not hard-fail on reviewer noise: %v", err)
+	}
+	if loader.spec == nil {
+		t.Fatal("spec should still be saved when the exhausted budget reflects reviewer noise, not a real defect")
 	}
 }
 

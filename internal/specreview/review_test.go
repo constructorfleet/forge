@@ -2,6 +2,7 @@ package specreview
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/planning"
@@ -109,6 +110,31 @@ func TestSpecificationReview_ChangesRequired(t *testing.T) {
 	}
 	if res.Findings[1].Severity != SeverityWarning {
 		t.Errorf("findings[1].severity = %q, want %q", res.Findings[1].Severity, SeverityWarning)
+	}
+}
+
+// TestBuildSpecReviewPrompt_GroundsAgainstDeterministicValidation is issue
+// #249's rubric-tightening acceptance criterion: the prompt must tell the
+// reviewer which criteria deterministic validation already enforces
+// mechanically (section presence, REQ-ID formatting, decision resolution,
+// provenance revisions), so the LLM's pass/fail judgment is reproducible
+// across identical inputs instead of re-litigating things a machine already
+// checked.
+func TestBuildSpecReviewPrompt_GroundsAgainstDeterministicValidation(t *testing.T) {
+	req := specReviewRequest{Context: makeTestSpecPC()}
+	prompt := buildSpecReviewPrompt(req)
+
+	for _, want := range []string{
+		"Already Mechanically Verified",
+		"required sections are present",
+		"requirement IDs are uniquely and correctly formatted",
+		"blocking decisions are resolved",
+		"provenance",
+		"Do not re-flag",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing grounding text %q; prompt:\n%s", want, prompt)
+		}
 	}
 }
 

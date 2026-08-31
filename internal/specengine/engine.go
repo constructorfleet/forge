@@ -3,6 +3,7 @@ package specengine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/planning"
@@ -163,6 +164,7 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 	pc planningagent.PlanningContext,
 ) error {
 	budget := &ReviewRepairBudget{limit: e.ReviewRetryLimit}
+	var reviewAttempts [][]specreview.Finding
 
 	for {
 		// Compile planning context with current spec for review
@@ -192,8 +194,22 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 		}
 
 		// CHANGES_REQUIRED - enter bounded repair loop
+		reviewAttempts = append(reviewAttempts, reviewResult.Findings)
+
 		if budget.Exhausted() {
-			return fmt.Errorf("specengine: spec review repair budget exhausted after %d attempts", e.ReviewRetryLimit)
+			if recurring := recurringFindings(reviewAttempts); len(recurring) > 0 {
+				return fmt.Errorf("specengine: spec review repair budget exhausted after %d attempts; recurring findings across every attempt:\n%s  summary: %s",
+					e.ReviewRetryLimit, formatFindingsForError(recurring), reviewResult.Summary)
+			}
+			// The reviewer never agreed with itself across every attempt --
+			// that is non-determinism in the automated reviewer, not a
+			// genuine defect, and the spec already passed deterministic
+			// validation. Save it rather than hard-failing the feature on
+			// reviewer noise.
+			if err := loader.SaveSpec(ctx, featureID, specArtifact); err != nil {
+				return fmt.Errorf("specengine: save spec: %w", err)
+			}
+			return nil
 		}
 
 		if err := budget.Record(); err != nil {
@@ -263,6 +279,66 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 		// Loop continues with new spec for next review iteration
 		specArtifact = &newSpecArtifact.Artifact
 	}
+}
+
+// findingKey identifies a specreview.Finding for recurrence tracking,
+// independent of exact whitespace: severity and message text are what a
+// reviewer is actually re-raising, not incidental file/line noise.
+func findingKey(f specreview.Finding) string {
+	return strings.ToLower(strings.TrimSpace(string(f.Severity))) + "|" + strings.ToLower(strings.TrimSpace(f.Message))
+}
+
+// recurringFindings returns the findings that appear in every attempt, in
+// the order they first appeared, deduplicated. A finding present in every
+// attempt is a stable, reproducible defect worth hard-failing on; one that
+// appears in some attempts but not others is reviewer noise.
+func recurringFindings(attempts [][]specreview.Finding) []specreview.Finding {
+	if len(attempts) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int)
+	first := make(map[string]specreview.Finding)
+	for _, findings := range attempts {
+		seen := make(map[string]bool)
+		for _, f := range findings {
+			key := findingKey(f)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			counts[key]++
+			if _, ok := first[key]; !ok {
+				first[key] = f
+			}
+		}
+	}
+
+	var recurring []specreview.Finding
+	seenOut := make(map[string]bool)
+	for _, findings := range attempts[0] {
+		key := findingKey(findings)
+		if seenOut[key] {
+			continue
+		}
+		seenOut[key] = true
+		if counts[key] == len(attempts) {
+			recurring = append(recurring, first[key])
+		}
+	}
+	return recurring
+}
+
+func formatFindingsForError(findings []specreview.Finding) string {
+	var out string
+	for _, f := range findings {
+		loc := ""
+		if f.File != "" {
+			loc = fmt.Sprintf(" %s:%d", f.File, f.Line)
+		}
+		out += fmt.Sprintf("  [%s]%s %s\n", f.Severity, loc, f.Message)
+	}
+	return out
 }
 
 func buildRepairFeedback(findings []specreview.Finding) string {
