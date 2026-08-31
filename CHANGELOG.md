@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.5](https://github.com/constructorfleet/forge/compare/forge-v0.15.4...forge-v0.15.5) (2026-08-31)
+
+
+### Bug Fixes
+
+* Automatically resolve fixable PR merge conflicts instead of always routing to NEEDS_INFO ([#270](https://github.com/constructorfleet/forge/issues/270)) ([e8e7411](https://github.com/constructorfleet/forge/commit/e8e741184c9f880777a6ef5369de53ab464f67ad))
+
 ## [0.15.4](https://github.com/constructorfleet/forge/compare/forge-v0.15.3...forge-v0.15.4) (2026-08-31)
 
 
