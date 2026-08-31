@@ -11,16 +11,16 @@ import (
 // tagging every Finding with axis (the axis this Reviewer intended to run,
 // not env.Axis — the agent's self-reported axis field is informational
 // only and never trusted for routing). It also reports blocked: whether any
-// Finding in env maps to review.SeverityError (axis HIGH) with Confidence
-// at or above confidenceFloor, the #158 verdict-blocking rule applied per
-// axis before combine folds every axis's blocked flag together.
+// Finding in env maps to MED or higher with Confidence at or above
+// confidenceFloor, the verdict-blocking rule applied per axis before
+// combine folds every axis's blocked flag together.
 func findingsForAxis(env envelope, axis string, confidenceFloor float64) ([]review.Finding, bool) {
 	findings := make([]review.Finding, 0, len(env.Findings))
 	blocked := false
 
 	for _, f := range env.Findings {
 		severity := review.MapAxisSeverity(review.AxisSeverity(strings.ToUpper(strings.TrimSpace(f.Severity))))
-		if severity == review.SeverityError && f.Confidence >= confidenceFloor {
+		if blocksReview(severity, f.Confidence, confidenceFloor) {
 			blocked = true
 		}
 		findings = append(findings, review.Finding{
@@ -38,13 +38,17 @@ func findingsForAxis(env envelope, axis string, confidenceFloor float64) ([]revi
 	return findings, blocked
 }
 
+func blocksReview(severity review.Severity, confidence, confidenceFloor float64) bool {
+	return severityRank(severity) <= severityRank(review.SeverityWarning) && confidence >= confidenceFloor
+}
+
 // buildResult maps one axis's envelope onto a standalone review.Result,
 // applying the verdict rule: VerdictChangesRequired iff at least one
-// Finding maps to review.SeverityError (axis HIGH) with Confidence >=
-// confidenceFloor; otherwise VerdictApproved. Every Finding in env is
+// Finding maps to MED or higher with Confidence >= confidenceFloor;
+// otherwise VerdictApproved. Every Finding in env is
 // carried into Result.Findings regardless of verdict, so a HIGH finding
-// below the floor (or any MED/LOW finding) still surfaces as advisory
-// signal on VerdictApproved rather than being silently dropped.
+// below the floor (or any LOW finding) still surfaces as advisory signal on
+// VerdictApproved rather than being silently dropped.
 //
 // This is used directly by verdict_test.go's per-axis unit tests; Reviewer's
 // concurrent fan-out itself calls findingsForAxis and combine (below), since
@@ -78,9 +82,9 @@ type axisOutcome struct {
 // dedups matched cross-axis findings, folds their confidences, surfaces
 // remedy conflicts as tensions instead of dropping either side, and ranks
 // the merged set. The #158 verdict rule is then applied ONCE over that
-// merged set: VerdictChangesRequired iff at least one merged Finding maps
-// to review.SeverityError with Confidence >= confidenceFloor — recomputed
-// on the merged confidence, not on any single axis's, so cross-axis
+// merged set: VerdictChangesRequired iff at least one merged Finding maps to
+// MED or higher with Confidence >= confidenceFloor — recomputed on the
+// merged confidence, not on any single axis's, so cross-axis
 // agreement can push a finding neither axis was confident enough alone to
 // block on over the floor (see TestCombine_AgreementLiftsConfidenceOverFloor_ChangesRequired).
 func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
@@ -88,7 +92,7 @@ func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
 
 	blocked := false
 	for _, f := range findings {
-		if f.Severity == review.SeverityError && f.Confidence >= confidenceFloor {
+		if blocksReview(f.Severity, f.Confidence, confidenceFloor) {
 			blocked = true
 			break
 		}
@@ -112,7 +116,7 @@ func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
 // the worst outcome Forge can produce, so a degraded Review is never
 // approved outright, even when every surviving axis is clean:
 //
-//   - a surviving blocker (merged Severity ERROR at/above confidenceFloor)
+//   - a surviving blocker (merged Severity WARNING or ERROR at/above confidenceFloor)
 //     still forces review.VerdictChangesRequired, exactly as combine would
 //     with full coverage — the loop must still act on what a healthy axis
 //     actually found, rather than escalating past a real, actionable
@@ -128,7 +132,7 @@ func combineDegraded(survivors []axisOutcome, failedAxes []string, confidenceFlo
 
 	blocked := false
 	for _, f := range findings {
-		if f.Severity == review.SeverityError && f.Confidence >= confidenceFloor {
+		if blocksReview(f.Severity, f.Confidence, confidenceFloor) {
 			blocked = true
 			break
 		}
