@@ -106,6 +106,70 @@ func combine(outcomes []axisOutcome, confidenceFloor float64) review.Result {
 	}
 }
 
+// combineDegraded folds the surviving axes' outcomes into a coverage-honest
+// review.Result when at least one axis in failedAxes could not be recovered
+// within axisMaxAttempts in-place retries (issue #161). A false APPROVED is
+// the worst outcome Forge can produce, so a degraded Review is never
+// approved outright, even when every surviving axis is clean:
+//
+//   - a surviving blocker (merged Severity ERROR at/above confidenceFloor)
+//     still forces review.VerdictChangesRequired, exactly as combine would
+//     with full coverage — the loop must still act on what a healthy axis
+//     actually found, rather than escalating past a real, actionable
+//     finding;
+//   - otherwise (survivors clean, or no axis survived at all) the Review
+//     cannot certify full coverage, so it returns review.VerdictInconclusive
+//     — never review.VerdictApproved on partial evidence, and never
+//     VerdictChangesRequired with nothing concrete to act on. The engine
+//     routes VerdictInconclusive to a human (NEEDS_INFO) rather than
+//     treating it as either a pass or a repairable rejection.
+func combineDegraded(survivors []axisOutcome, failedAxes []string, confidenceFloor float64) review.Result {
+	findings, tensions := synthesizeFindings(survivors, confidenceFloor)
+
+	blocked := false
+	for _, f := range findings {
+		if f.Severity == review.SeverityError && f.Confidence >= confidenceFloor {
+			blocked = true
+			break
+		}
+	}
+
+	if blocked {
+		verdict := review.VerdictChangesRequired
+		return review.Result{
+			Verdict: verdict,
+			Summary: fmt.Sprintf("%s; degraded coverage: axis(es) %s unrecoverable, routed as %s on a surviving blocker",
+				summarizeCombined(survivors, verdict, findings, tensions), strings.Join(failedAxes, ", "), verdict),
+			Findings: findings,
+		}
+	}
+
+	return review.Result{
+		Verdict:  review.VerdictInconclusive,
+		Summary:  summarizeInconclusive(survivors, failedAxes, findings),
+		Findings: findings,
+	}
+}
+
+// summarizeInconclusive produces the Result.Summary text for a degraded
+// Review that could not certify full coverage: which axes survived clean,
+// which axes are missing, and why escalation (not approval) is the correct
+// outcome.
+func summarizeInconclusive(survivors []axisOutcome, failedAxes []string, findings []review.Finding) string {
+	survivorNames := make([]string, 0, len(survivors))
+	for _, o := range survivors {
+		survivorNames = append(survivorNames, o.axis)
+	}
+	survivorDesc := "none"
+	if len(survivorNames) > 0 {
+		survivorDesc = strings.Join(survivorNames, "+")
+	}
+	return fmt.Sprintf(
+		"review incomplete: axis(es) %s unrecoverable after %d attempt(s) each; surviving axes (%s) clean (%d advisory finding(s)); escalating to a human rather than approving on partial coverage",
+		strings.Join(failedAxes, ", "), axisMaxAttempts, survivorDesc, len(findings),
+	)
+}
+
 // composeMessage folds one axisFinding's message and evidence into
 // review.Finding's single Message field (review.Finding predates the
 // envelope's dedicated evidence field, mirroring how agent.Feedback predates

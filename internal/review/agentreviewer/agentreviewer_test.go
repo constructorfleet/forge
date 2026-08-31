@@ -84,7 +84,20 @@ type axisRoutingAgent struct {
 	mu          sync.Mutex
 	programmed  map[string]agent.AgentResult
 	errs        map[string]error
+	flaky       map[string]*flakyProgram
 	invocations []agent.AgentRequest
+}
+
+// flakyProgram makes one axis marker fail its first failTimes Execute calls
+// (returning err) before succeeding with thenResult on every subsequent
+// call — used to test axisMaxAttempts' in-place retry (issue #161): a
+// transient axis failure that recovers within the retry budget must produce
+// a normal (non-degraded) Result.
+type flakyProgram struct {
+	failTimes  int
+	err        error
+	thenResult agent.AgentResult
+	calls      int
 }
 
 func newAxisRoutingAgent() *axisRoutingAgent {
@@ -102,11 +115,28 @@ func (a *axisRoutingAgent) programEnvelope(marker, envelope string) {
 	a.programmed[marker] = agent.AgentResult{Status: agent.StatusImplemented, Summary: envelope}
 }
 
-// programError programs marker's axis to return err instead of a result.
+// programError programs marker's axis to return err instead of a result on
+// every call (simulating a persistently unrecoverable axis).
 func (a *axisRoutingAgent) programError(marker string, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.errs[marker] = err
+}
+
+// programFlaky programs marker's axis to fail its first failTimes calls
+// with err, then succeed with an AgentResult whose Summary is thenEnvelope
+// on every call after that.
+func (a *axisRoutingAgent) programFlaky(marker string, failTimes int, err error, thenEnvelope string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.flaky == nil {
+		a.flaky = map[string]*flakyProgram{}
+	}
+	a.flaky[marker] = &flakyProgram{
+		failTimes:  failTimes,
+		err:        err,
+		thenResult: agent.AgentResult{Status: agent.StatusImplemented, Summary: thenEnvelope},
+	}
 }
 
 func (a *axisRoutingAgent) Execute(_ context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
@@ -114,6 +144,15 @@ func (a *axisRoutingAgent) Execute(_ context.Context, req agent.AgentRequest) (a
 	defer a.mu.Unlock()
 	a.invocations = append(a.invocations, req)
 
+	for marker, flaky := range a.flaky {
+		if strings.Contains(req.Policy.Notes, marker) {
+			flaky.calls++
+			if flaky.calls <= flaky.failTimes {
+				return agent.AgentResult{}, flaky.err
+			}
+			return flaky.thenResult, nil
+		}
+	}
 	for marker, err := range a.errs {
 		if strings.Contains(req.Policy.Notes, marker) {
 			return agent.AgentResult{}, err
@@ -305,51 +344,165 @@ func TestReview_DifferentAxesReportOnSameChange_BothAppearNoDedup(t *testing.T) 
 	}
 }
 
-func TestReview_OneAxisErrors_PropagatesError(t *testing.T) {
+// TestReview_OneAxisUnrecoverable_CleanSurvivors_Inconclusive is issue
+// #161's core degradation case: one axis (quality) errors on every attempt
+// (persistently unrecoverable, exhausting axisMaxAttempts in-place
+// retries), the other two axes are clean. Since no surviving axis produced
+// a blocking finding, Review must never approve on this partial coverage —
+// it returns VerdictInconclusive instead, with a Coverage record naming
+// exactly which axis failed and why.
+func TestReview_OneAxisUnrecoverable_CleanSurvivors_Inconclusive(t *testing.T) {
 	fake := newAxisRoutingAgent()
 	wantErr := errors.New("boom")
 	fake.programError(qualityAxisMarker, wantErr)
 	reviewer := agentreviewer.New(fake, 0.7)
 
-	_, err := reviewer.Review(context.Background(), review.Request{
+	result, err := reviewer.Review(context.Background(), review.Request{
 		Diff:  "diff",
 		Issue: newIssue(),
 	})
-	if err == nil || !errors.Is(err, wantErr) {
-		t.Fatalf("Review() error = %v, want it to wrap %v", err, wantErr)
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil (axis failures degrade, never error the call)", err)
+	}
+	if result.Verdict != review.VerdictInconclusive {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictInconclusive)
+	}
+
+	invocations := fake.Invocations()
+	qualityAttempts := 0
+	for _, inv := range invocations {
+		if strings.Contains(inv.Policy.Notes, qualityAxisMarker) {
+			qualityAttempts++
+		}
+	}
+	if qualityAttempts != 2 {
+		t.Errorf("quality axis attempts = %d, want 2 (axisMaxAttempts in-place retry)", qualityAttempts)
+	}
+
+	var qualityCoverage, bugsCoverage *review.AxisCoverage
+	for i := range result.Coverage {
+		switch result.Coverage[i].Axis {
+		case "quality":
+			qualityCoverage = &result.Coverage[i]
+		case "bugs":
+			bugsCoverage = &result.Coverage[i]
+		}
+	}
+	if qualityCoverage == nil || qualityCoverage.Ran {
+		t.Fatalf("quality Coverage = %+v, want Ran=false", qualityCoverage)
+	}
+	if !strings.Contains(qualityCoverage.Reason, "boom") {
+		t.Errorf("quality Coverage.Reason = %q, want it to mention the underlying error", qualityCoverage.Reason)
+	}
+	if bugsCoverage == nil || !bugsCoverage.Ran {
+		t.Fatalf("bugs Coverage = %+v, want Ran=true", bugsCoverage)
 	}
 }
 
-func TestReview_AgentExecuteError_Propagates(t *testing.T) {
+// TestReview_OneAxisUnrecoverable_SurvivingBlocker_ChangesRequired asserts
+// issue #161's other degradation branch: even with the docs axis
+// unrecoverable, a surviving blocking finding (bugs, HIGH severity at/above
+// the confidence floor) must still route to VerdictChangesRequired — a
+// degraded Review never escalates past a real, actionable finding a healthy
+// axis actually found.
+func TestReview_OneAxisUnrecoverable_SurvivingBlocker_ChangesRequired(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programEnvelope(bugsAxisMarker, highConfidenceEnvelope)
+	fake.programError(docsAxisMarker, errors.New("idle-timeout"))
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "diff",
+		Issue: newIssue(),
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil", err)
+	}
+	if result.Verdict != review.VerdictChangesRequired {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictChangesRequired)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].Axis != "bugs" {
+		t.Fatalf("Findings = %+v, want the surviving bugs axis's blocker", result.Findings)
+	}
+}
+
+// TestReview_AxisRecoversWithinRetry_NormalApproved asserts a transient
+// axis failure (errors once, then succeeds) recovers within
+// axisMaxAttempts and produces an ordinary, non-degraded Result: all three
+// axes clean, VerdictApproved, and Coverage reporting every axis as Ran.
+func TestReview_AxisRecoversWithinRetry_NormalApproved(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programFlaky(qualityAxisMarker, 1, errors.New("transient crash"), cleanEnvelope)
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "diff",
+		Issue: newIssue(),
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil", err)
+	}
+	if result.Verdict != review.VerdictApproved {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictApproved)
+	}
+	if len(result.Coverage) != 3 {
+		t.Fatalf("Coverage = %+v, want 3 entries", result.Coverage)
+	}
+	for _, c := range result.Coverage {
+		if !c.Ran {
+			t.Errorf("Coverage[%s].Ran = false, want true (recovered within retry)", c.Axis)
+		}
+	}
+
+	qualityAttempts := 0
+	for _, inv := range fake.Invocations() {
+		if strings.Contains(inv.Policy.Notes, qualityAxisMarker) {
+			qualityAttempts++
+		}
+	}
+	if qualityAttempts != 2 {
+		t.Errorf("quality axis attempts = %d, want 2 (1 failure + 1 successful retry)", qualityAttempts)
+	}
+}
+
+// TestReview_AllThreeAxesUnrecoverable_Inconclusive: an extreme but
+// coverage-honest edge case — every axis unrecoverable, no survivors at
+// all. There is nothing to block on, so Review must still never approve;
+// it returns VerdictInconclusive with an empty Coverage-Ran set rather than
+// erroring or approving on zero evidence.
+func TestReview_AllThreeAxesUnrecoverable_Inconclusive(t *testing.T) {
 	fake := agent.NewFakeAgent()
 	wantErr := errors.New("boom")
 	fake.ProgramError("42", wantErr)
 	reviewer := agentreviewer.New(fake, 0.7)
 
-	_, err := reviewer.Review(context.Background(), review.Request{
+	result, err := reviewer.Review(context.Background(), review.Request{
 		Diff:  "diff",
 		Issue: newIssue(),
 	})
-	if err == nil || !errors.Is(err, wantErr) {
-		t.Fatalf("Review() error = %v, want it to wrap %v", err, wantErr)
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil", err)
+	}
+	if result.Verdict != review.VerdictInconclusive {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictInconclusive)
+	}
+	for _, c := range result.Coverage {
+		if c.Ran {
+			t.Errorf("Coverage[%s].Ran = true, want false (all axes unrecoverable)", c.Axis)
+		}
 	}
 }
 
-func TestReview_MalformedEnvelope_ReturnsError(t *testing.T) {
-	_, _, err := reviewWithBugsSummary(t, "the axis agent forgot to emit JSON")
-	if err == nil {
-		t.Fatal("Review() error = nil, want an error for a malformed envelope")
+// TestReview_PersistentlyMalformedEnvelope_Inconclusive: an axis that keeps
+// emitting non-JSON across every retry attempt is unrecoverable exactly
+// like an Execute error, and degrades the same way.
+func TestReview_PersistentlyMalformedEnvelope_Inconclusive(t *testing.T) {
+	_, result, err := reviewWithBugsSummary(t, "the axis agent forgot to emit JSON")
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil", err)
 	}
-}
-
-func TestReview_EmptyEnvelope_ReturnsError(t *testing.T) {
-	fake := agent.NewFakeAgent()
-	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: ""})
-	reviewer := agentreviewer.New(fake, 0.7)
-
-	_, err := reviewer.Review(context.Background(), review.Request{Diff: "d", Issue: newIssue()})
-	if err == nil {
-		t.Fatal("Review() error = nil, want an error for an empty envelope")
+	if result.Verdict != review.VerdictInconclusive {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictInconclusive)
 	}
 }
 

@@ -134,16 +134,18 @@ func TestExecute_ReviewApproved_AdvancesToCommitting(t *testing.T) {
 	}
 }
 
-// TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed
+// TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToNeedsInfo
 // is ticket 20's second integration test, updated for ticket 21's repair
-// loop: gates pass, Review returns CHANGES_REQUIRED, and — with the review
-// retry budget pinned to 0 so this stays a single Review attempt — the
-// Issue is routed straight to FAILED once that budget is exhausted, with
-// the structured Findings persisted. (The full retry path, where a
-// remaining budget instead re-invokes the Agent with these Findings as
-// agent.Feedback per review.BuildFeedback, has its own dedicated tests in
-// retry_test.go.)
-func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed(t *testing.T) {
+// loop and then for ticket 161's escalation: gates pass, Review returns
+// CHANGES_REQUIRED, and — with the review retry budget pinned to 0 so this
+// stays a single Review attempt — the Issue is routed to NEEDS_INFO (not
+// FAILED: issue #161 makes a standing CHANGES_REQUIRED with the review
+// budget exhausted a human-escalation, never the FAILED terminal or a false
+// approval) once that budget is exhausted, with the structured Findings
+// persisted. (The full retry path, where a remaining budget instead
+// re-invokes the Agent with these Findings as agent.Feedback per
+// review.BuildFeedback, has its own dedicated tests in retry_test.go.)
+func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToNeedsInfo(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"31": {ID: "31"},
 	})
@@ -166,8 +168,8 @@ func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToFailed(t *te
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateFailed {
-		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
 	}
 
 	runs, err := te.store.ReviewRunsByIssue(ctx, result.ExecutionID, "31")
@@ -241,6 +243,55 @@ func TestExecute_ReviewerError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 	}
 	if !te.ws.CleanupCalled() {
 		t.Error("Cleanup was not called after a Reviewer error, want the orphaned Workspace removed")
+	}
+}
+
+// TestExecute_ReviewInconclusive_RoutesToNeedsInfoWithoutConsumingReviewBudget
+// covers issue #161's other escalation path: the Reviewer itself reports
+// VerdictInconclusive (it could not certify full axis coverage). This must
+// never auto-approve and must never be treated as a repairable rejection —
+// the engine routes straight to NEEDS_INFO, the Agent is never re-invoked,
+// and RetryBudget.Review is left untouched (this is an infra/coverage gap,
+// not a CHANGES_REQUIRED repair).
+func TestExecute_ReviewInconclusive_RoutesToNeedsInfoWithoutConsumingReviewBudget(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"35": {ID: "35"},
+	})
+	te.fake.ProgramResult("35", agent.AgentResult{Status: agent.StatusImplemented})
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramResult("35", review.Result{
+		Verdict: review.VerdictInconclusive,
+		Summary: "review incomplete: axis(es) quality unrecoverable; surviving axes (bugs+docs) clean",
+	})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff --git a/main.go b/main.go"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "35", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+
+	issue, err := te.store.GetIssue(ctx, result.ExecutionID, "35")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.RetryBudget.ReviewFailures() != 0 {
+		t.Errorf("ReviewFailures() = %d, want 0 (VerdictInconclusive never consumes the review retry budget)", issue.RetryBudget.ReviewFailures())
+	}
+	if issue.RetryBudget.ReviewExhausted() {
+		t.Error("ReviewExhausted() = true, want false")
+	}
+
+	if got := len(reviewer.Invocations()); got != 1 {
+		t.Errorf("got %d reviewer invocations, want 1 (no retry on an inconclusive verdict)", got)
+	}
+	if got := len(te.fake.Invocations()); got != 1 {
+		t.Errorf("got %d agent invocations, want 1 (the implementation Agent is never re-invoked for an inconclusive review)", got)
 	}
 }
 

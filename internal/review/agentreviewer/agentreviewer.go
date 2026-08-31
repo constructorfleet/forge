@@ -21,11 +21,21 @@
 // combine itself delegates to synthesizeFindings (synthesizer.go), issue
 // #160's deterministic synthesizer: cross-axis dedup, confidence-fold,
 // ranking, and tension detection over the merged set, all a pure function
-// of the three axes' outcomes. Degradation handling for one axis's
-// malformed envelope or Execute error (#161) and full audit persistence
-// (#162) are separate, later tickets — this package deliberately does none
-// of that: an axis error still propagates as Review's error, per #158's
-// original behavior.
+// of the three axes' outcomes.
+//
+// Issue #161 makes this robust to a failing axis: each axis's own Execute
+// call or envelope parse is retried, in place, up to axisMaxAttempts times
+// (see its doc comment) before that axis is considered unrecoverable — this
+// in-place retry is entirely internal to one Review call and never touches
+// the engine's RetryBudget.Review counter (ADR-0007), which only tracks
+// CHANGES_REQUIRED repairs. Review no longer returns an axis error to its
+// caller (a change from #158's original all-or-nothing behavior); instead
+// it degrades to a coverage-honest Result via combineDegraded: a surviving
+// blocker still forces review.VerdictChangesRequired, but survivors-clean
+// with at least one unrecoverable axis returns review.VerdictInconclusive
+// rather than ever approving on partial coverage. Every Result also carries
+// a Coverage record of which axes ran and which did not. Full per-axis
+// audit persistence across runs (#162) is a separate, later ticket.
 package agentreviewer
 
 import (
@@ -53,6 +63,18 @@ var docsRubric string
 // behaves sensibly rather than blocking on every ERROR-severity finding
 // regardless of confidence.
 const defaultConfidenceFloor = 0.7
+
+// axisMaxAttempts bounds one axis's own in-place retry (issue #161): a
+// total of axisMaxAttempts Agent.Execute+parse attempts (the initial
+// attempt plus axisMaxAttempts-1 retries) before that axis is treated as
+// unrecoverable for this Review call. Deliberately small and fixed (not
+// configurable) — this only exists to absorb a transient infra flake
+// (a crash, an idle-timeout, an agent that forgot to emit JSON once), not to
+// paper over a persistently broken axis, and it is entirely internal to one
+// Reviewer.Review call: it never consumes or even inspects the engine's
+// RetryBudget.Review counter, which is reserved for CHANGES_REQUIRED
+// repairs (ADR-0007).
+const axisMaxAttempts = 2
 
 // var declaration ensures Reviewer satisfies review.Reviewer at compile
 // time.
@@ -102,8 +124,10 @@ var axes = []axis{
 }
 
 // Review runs all three axes concurrently, each as one fresh Agent.Execute
-// call, parses each axis's JSON findings envelope, and folds them into one
-// review.Result via combine.
+// call (retried in place per axis, see axisMaxAttempts), parses each
+// surviving axis's JSON findings envelope, and folds them into one
+// review.Result: combine for full coverage (every axis recovered),
+// combineDegraded when at least one axis is unrecoverable.
 //
 // req.WorkspacePath is passed straight through to every axis's
 // AgentRequest.WorkspacePath so each axis agent runs in, and can read, the
@@ -111,11 +135,10 @@ var axes = []axis{
 // beyond the diff to trace cross-file/cross-package effects, rather than
 // being confined to the diff text itself.
 //
-// If any axis's Execute call or envelope parse fails, Review returns that
-// error (the first one observed) rather than a partial Result — per #158's
-// original error behavior, unchanged here; tolerating one axis's failure
-// while still combining the other two is #161's degradation handling, a
-// separate later ticket.
+// Review itself never returns a non-nil error for an axis failure (a change
+// from #158's original all-or-nothing behavior, see the package doc
+// comment): every axis outcome, success or not, is folded into Result via
+// Coverage instead.
 func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Result, error) {
 	floor := r.ConfidenceFloor
 	if floor <= 0 {
@@ -123,16 +146,18 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 	}
 
 	outcomes := make([]axisOutcome, len(axes))
-	errs := make([]error, len(axes))
+	axisErrs := make([]error, len(axes))
+	unrecoverable := make([]bool, len(axes))
 
 	var wg sync.WaitGroup
 	wg.Add(len(axes))
 	for i, ax := range axes {
 		go func(i int, ax axis) {
 			defer wg.Done()
-			env, err := r.runAxis(ctx, req, ax)
+			env, err := r.runAxisWithRetry(ctx, req, ax)
 			if err != nil {
-				errs[i] = err
+				unrecoverable[i] = true
+				axisErrs[i] = err
 				return
 			}
 			outcomes[i] = axisOutcome{axis: ax.name, env: env}
@@ -140,20 +165,51 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 	}
 	wg.Wait()
 
-	for _, err := range errs {
-		if err != nil {
-			return review.Result{}, err
+	coverage := make([]review.AxisCoverage, len(axes))
+	survivors := make([]axisOutcome, 0, len(axes))
+	var failedAxes []string
+	for i, ax := range axes {
+		if unrecoverable[i] {
+			coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: false, Reason: axisErrs[i].Error()}
+			failedAxes = append(failedAxes, ax.name)
+			continue
 		}
+		coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: true}
+		survivors = append(survivors, outcomes[i])
 	}
 
-	return combine(outcomes, floor), nil
+	var result review.Result
+	if len(failedAxes) == 0 {
+		result = combine(survivors, floor)
+	} else {
+		result = combineDegraded(survivors, failedAxes, floor)
+	}
+	result.Coverage = coverage
+
+	return result, nil
+}
+
+// runAxisWithRetry runs one axis via runAxis, retrying in place up to
+// axisMaxAttempts times (issue #161) when Execute errors or the envelope
+// fails to parse. It returns the first successful envelope, or the last
+// attempt's error once axisMaxAttempts is exhausted. Each goroutine Review
+// launches calls this with its own axis and writes only to its own index of
+// the caller's slices, so no additional synchronization is needed beyond
+// the sync.WaitGroup Review already waits on.
+func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax axis) (envelope, error) {
+	var lastErr error
+	for attempt := 1; attempt <= axisMaxAttempts; attempt++ {
+		env, err := r.runAxis(ctx, req, ax)
+		if err == nil {
+			return env, nil
+		}
+		lastErr = err
+	}
+	return envelope{}, fmt.Errorf("agentreviewer: axis %s: unrecoverable after %d attempt(s): %w", ax.name, axisMaxAttempts, lastErr)
 }
 
 // runAxis runs one axis as a single fresh Agent.Execute call and parses its
-// JSON findings envelope. Each goroutine Review launches calls this with
-// its own axis and writes only to its own index of the caller's outcomes/
-// errs slices, so no additional synchronization is needed beyond the
-// sync.WaitGroup Review already waits on.
+// JSON findings envelope.
 func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, error) {
 	result, err := r.Agent.Execute(ctx, agent.AgentRequest{
 		Issue:         req.Issue,

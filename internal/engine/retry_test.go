@@ -372,7 +372,13 @@ func TestExecute_GateRepair_AgentReturnsFailed_RoutesToFailed(t *testing.T) {
 // exhaustion integration test for the review side: Review keeps returning
 // CHANGES_REQUIRED, so once the review retry budget (independent from
 // gate's) is exhausted the Issue transitions to FAILED.
-func TestExecute_ReviewBudgetExhaustion_RoutesToFailed(t *testing.T) {
+// TestExecute_ReviewBudgetExhaustion_RoutesToNeedsInfo asserts issue #161's
+// escalation: a standing CHANGES_REQUIRED verdict, once RetryBudget.Review
+// is exhausted, routes to NEEDS_INFO rather than the FAILED terminal this
+// test asserted before #161 (nothing here is the implementation's fault, so
+// FAILED is the wrong terminal, and approving on a standing rejection would
+// be the false-approval Forge must never produce).
+func TestExecute_ReviewBudgetExhaustion_RoutesToNeedsInfo(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"43": {ID: "43"},
 	})
@@ -394,8 +400,8 @@ func TestExecute_ReviewBudgetExhaustion_RoutesToFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateFailed {
-		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
 	}
 
 	if got := len(reviewer.Invocations()); got != 2 {

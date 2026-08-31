@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -138,4 +140,53 @@ func needsInfoCommentBody(detail *agent.NeedsInfoDetail, summary string) string 
 // isNotFound reports whether err wraps storage.ErrNotFound.
 func isNotFound(err error) bool {
 	return errors.Is(err, storage.ErrNotFound)
+}
+
+// escalateReviewToNeedsInfo routes a review outcome Forge's autonomous loop
+// cannot safely resolve on its own to a human, via the same NEEDS_INFO
+// mechanism (handleNeedsInfo) used elsewhere, rather than the FAILED
+// terminal or a false APPROVED (issue #161's governing principle: a false
+// APPROVED is the worst outcome). It covers two distinct call sites:
+//
+//   - runReview, when the Reviewer itself returns review.VerdictInconclusive
+//     (it could not certify full axis coverage);
+//   - runRepairLoop's review branch, when a standing
+//     review.VerdictChangesRequired verdict finds RetryBudget.Review already
+//     exhausted.
+//
+// Neither case consumes or even inspects any RetryBudget counter: this is
+// Forge's own escalation, not another repair attempt the Agent gets a turn
+// at, so the review-rejection counter (ADR-0007) is left untouched. question
+// and reviewContext become the synthetic AgentResult's NeedsInfo.Question/
+// Context, rendered into the same structured comment (needsInfoCommentBody)
+// a real Agent-reported NEEDS_INFO would produce.
+func (e *Engine) escalateReviewToNeedsInfo(ctx context.Context, executionID, issueID, question, reviewContext string) (domain.Issue, error) {
+	synthetic := agent.AgentResult{
+		Status:  agent.StatusNeedsInfo,
+		Summary: question,
+		NeedsInfo: &agent.NeedsInfoDetail{
+			Question: question,
+			Context:  reviewContext,
+		},
+	}
+	return e.handleNeedsInfo(ctx, executionID, issueID, workerRef(executionID, issueID), synthetic)
+}
+
+// reviewFindingsContext renders findings as short bullet lines for a
+// NEEDS_INFO comment's Context field, so a human reading the escalation
+// sees exactly what the surviving/standing review findings were without
+// needing to open the stored ReviewRun separately.
+func reviewFindingsContext(findings []review.Finding) string {
+	if len(findings) == 0 {
+		return "no findings were attached to this review outcome."
+	}
+	lines := make([]string, 0, len(findings))
+	for _, f := range findings {
+		line := fmt.Sprintf("- [%s/%s] %s", f.Severity, f.Axis, f.Message)
+		if f.File != "" {
+			line = fmt.Sprintf("%s (%s:%d)", line, f.File, f.Line)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
