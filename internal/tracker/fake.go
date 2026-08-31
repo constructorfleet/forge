@@ -10,8 +10,10 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 )
 
-// var declaration ensures FakeTracker satisfies Tracker at compile time.
+// var declarations ensure FakeTracker satisfies both the issue-only Tracker
+// and the pre-split combined LegacyProvider at compile time.
 var _ Tracker = (*FakeTracker)(nil)
+var _ LegacyProvider = (*FakeTracker)(nil)
 
 // FakeTracker is an in-memory Tracker and LegacyProvider implementation for
 // tests: it never hits a real tracker API. It includes the old combined

@@ -9,8 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
-var _ tracker.IssueTracker = (*issueOnlyTracker)(nil)
-var _ tracker.Tracker = (*combinedTracker)(nil)
+var _ tracker.Tracker = (*issueOnlyTracker)(nil)
 var _ tracker.LegacyProvider = (*combinedTracker)(nil)
 var _ tracker.Tracker = (*tracker.FakeTracker)(nil)
 var _ tracker.SCM = (*scmOnly)(nil)
@@ -96,6 +95,22 @@ func TestMergeBlockerCarriesReasonSourceAndRawProviderDetail(t *testing.T) {
 	}
 	if blocker.RawDetail != "GitHub Actions reported build failed" {
 		t.Fatalf("RawDetail = %q", blocker.RawDetail)
+	}
+}
+
+func TestTrackerIsIssueDomainOnlyAndLegacyProviderPreservesCombinedContract(t *testing.T) {
+	trackerType := reflect.TypeOf((*tracker.Tracker)(nil)).Elem()
+	for _, legacyMethod := range []string{"CreatePullRequest", "GetPullRequestChecks", "GetMergeRequirements"} {
+		if _, ok := trackerType.MethodByName(legacyMethod); ok {
+			t.Fatalf("tracker.Tracker must not expose legacy change-request method %s", legacyMethod)
+		}
+	}
+
+	legacyType := reflect.TypeOf((*tracker.LegacyProvider)(nil)).Elem()
+	for _, method := range []string{"GetIssue", "CreateIssue", "CreatePullRequest", "GetPullRequestChecks", "GetMergeRequirements"} {
+		if _, ok := legacyType.MethodByName(method); !ok {
+			t.Fatalf("tracker.LegacyProvider missing method %s", method)
+		}
 	}
 }
 

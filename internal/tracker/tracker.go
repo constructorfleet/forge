@@ -279,10 +279,10 @@ type ChangeRequestMergeStatus struct {
 	RawDetail  string
 }
 
-// IssueTracker is the normalized issue-tracking capability (GitHub Issues,
+// Tracker is the normalized issue-tracking capability (GitHub Issues,
 // Linear, etc.). It owns issue-domain operations only; SCM and CI behavior
 // lives in their own capability interfaces below.
-type IssueTracker interface {
+type Tracker interface {
 	// GetIssue fetches a single Issue, normalized to domain.Issue, with its
 	// Dependencies parsed from the canonical `## Dependencies` block and
 	// any configured overrides applied.
@@ -349,11 +349,11 @@ type ReviewGetter interface {
 	GetReviews(ctx context.Context, ref ChangeRequestRef) ([]Review, error)
 }
 
-// Tracker is the pre-split combined provider contract. It remains for callers
-// and tests that still depend on the old all-in-one shape while new
-// orchestration code migrates to IssueTracker, SCM, and CI independently.
-type Tracker interface {
-	IssueTracker
+// LegacyProvider is the pre-split combined provider contract. It remains for
+// callers and tests that still depend on the old all-in-one shape while new
+// orchestration code migrates to Tracker, SCM, and CI independently.
+type LegacyProvider interface {
+	Tracker
 
 	// GetMergeRequirements returns the Merge Requirements for branch,
 	// sourced from the tracker's native branch protection/rulesets (see
@@ -370,9 +370,6 @@ type Tracker interface {
 	// CONTEXT.md "COMMITTING"/"PR_CREATING" (ticket 22).
 	CreatePullRequest(ctx context.Context, req PullRequestRequest) (PullRequest, error)
 }
-
-// LegacyProvider is an alias for the pre-split combined provider contract.
-type LegacyProvider = Tracker
 
 // AuthPreflighter is an optional capability a Tracker adapter implements
 // when it needs a credential and can verify it cheaply up front. cmd/forge
