@@ -26,10 +26,13 @@ var (
 	reNoneLine       = regexp.MustCompile(`(?i)^none[.!]?$`)
 	reInlineDepends  = regexp.MustCompile(`(?i)^Depends on:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$`)
 	// A bullet is a single explicit issue ref, optionally followed by a
-	// human-readable parenthetical annotation (e.g. "- #96 (SaveGoal loader
-	// method)"). The annotation is descriptive text, not another dependency —
-	// the "#\d+" is still explicit, so accepting it requires no NLP inference.
-	reBullet   = regexp.MustCompile(`^-\s*#(\d+)\s*(?:\([^)]*\))?\s*$`)
+	// human-readable annotation — either a parenthetical ("- #96 (SaveGoal
+	// loader method)") or a separator-led description ("- #198 — Add the
+	// contract field", "- #7: rationale"). The annotation is descriptive
+	// text, not another dependency — the "#\d+" is still explicit, so
+	// accepting it requires no NLP inference. Capture group 2 holds the
+	// annotation so the caller can fail closed if it hides a second ref.
+	reBullet   = regexp.MustCompile(`^-\s*#(\d+)\s*([(:—–-].*)?$`)
 	reIssueRef = regexp.MustCompile(`#(\d+)`)
 )
 
@@ -40,8 +43,9 @@ var (
 //   - `## Dependencies` followed by a bare `None` (or `None.`) line — same
 //     as the inline `None` form (returns an empty slice)
 //   - `## Dependencies` followed by a bullet list (`- #123`, optionally with
-//     a trailing parenthetical annotation like `- #123 (why)`), optionally
-//     preceded by a `Depends on:` label line
+//     a trailing annotation — a parenthetical like `- #123 (why)` or a
+//     separator-led description like `- #123 — why` / `- #123: why`),
+//     optionally preceded by a `Depends on:` label line
 //   - `## Dependencies` followed by an inline `Depends on: #123, #456` line
 //
 // If the issue body contains no `## Dependencies` block at all, it returns
@@ -105,6 +109,15 @@ func ParseDependencyBlock(body string) ([]string, error) {
 				}
 			case reBullet.MatchString(t):
 				m := reBullet.FindStringSubmatch(t)
+				// A single bullet declares a single dependency. If the
+				// descriptive annotation itself contains another issue
+				// ref, fail closed rather than silently drop it.
+				if reIssueRef.MatchString(m[2]) {
+					return nil, fmt.Errorf(
+						"tracker: multiple issue refs on one dependency bullet in %q block: %q (use one \"- #123\" bullet per dependency)",
+						"## Dependencies", t,
+					)
+				}
 				ids = append(ids, m[1])
 			default:
 				return nil, fmt.Errorf(

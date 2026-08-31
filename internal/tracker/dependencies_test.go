@@ -33,6 +33,39 @@ func TestParseDependencyBlock_BulletWithAnnotation(t *testing.T) {
 	}
 }
 
+func TestParseDependencyBlock_BulletWithDashDescription(t *testing.T) {
+	// The forms Forge itself emits in generated issue bodies: an em dash,
+	// en dash, hyphen, or colon introducing a human-readable description.
+	for _, body := range []string{
+		"## Dependencies\n- #198 \xe2\x80\x94 Add ModeStructured + Prompt/Schema fields to the Agent contract\n",
+		"## Dependencies\n- #198 \xe2\x80\x93 en dash description\n",
+		"## Dependencies\n- #198 - hyphen description\n",
+		"## Dependencies\n- #198: colon description\n",
+	} {
+		got, err := tracker.ParseDependencyBlock(body)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", body, err)
+		}
+		if !equalSlices(got, []string{"198"}) {
+			t.Fatalf("body %q: got %v", body, got)
+		}
+	}
+}
+
+func TestParseDependencyBlock_RejectsMultipleRefsOnOneBullet(t *testing.T) {
+	// A description that hides a second issue ref must fail closed rather
+	// than silently drop the extra dependency.
+	body := "## Dependencies\n- #198 \xe2\x80\x94 also blocked by #199\n"
+
+	_, err := tracker.ParseDependencyBlock(body)
+	if err == nil {
+		t.Fatal("expected an error for multiple refs on one bullet, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple issue refs") {
+		t.Fatalf("error message %q does not describe multiple refs", err.Error())
+	}
+}
+
 func TestParseDependencyBlock_DependsOnLabelPlusList(t *testing.T) {
 	body := "## Dependencies\nDepends on:\n- #7\n"
 
