@@ -57,3 +57,28 @@ func TestResolve_Failed(t *testing.T) {
 		t.Fatalf("res = %+v, want FAILED/nope", res)
 	}
 }
+
+func TestResolve_ImplementedCarriesFollowUps(t *testing.T) {
+	structured := StructuredResult{
+		Status:  "IMPLEMENTED",
+		Summary: "done",
+		FollowUps: []FollowUpFields{
+			{Title: "flaky test", Body: "TestFoo occasionally times out"},
+		},
+	}
+	res := Resolve("codex", structured, true, 0, "", "")
+	if len(res.FollowUps) != 1 {
+		t.Fatalf("res.FollowUps = %+v, want 1 entry", res.FollowUps)
+	}
+	if res.FollowUps[0].Title != "flaky test" || res.FollowUps[0].Body != "TestFoo occasionally times out" {
+		t.Errorf("res.FollowUps[0] = %+v, want title/body passed through", res.FollowUps[0])
+	}
+}
+
+func TestResolve_NoFollowUpsLeavesFieldNil(t *testing.T) {
+	structured := StructuredResult{Status: "IMPLEMENTED", Summary: "done"}
+	res := Resolve("codex", structured, true, 0, "", "")
+	if res.FollowUps != nil {
+		t.Errorf("res.FollowUps = %+v, want nil when the backend reported none", res.FollowUps)
+	}
+}

@@ -20,7 +20,12 @@ const resultContract = "## Result\n\n" +
 	"completed the work, \"NEEDS_INFO\" if you need information from a " +
 	"human before you can proceed, or \"FAILED\" if you cannot complete " +
 	"the work. Populate \"needs_info\" (with \"question\" and \"context\") " +
-	"only when status is \"NEEDS_INFO\"."
+	"only when status is \"NEEDS_INFO\". If, while working this Issue, you " +
+	"noticed a genuine inefficiency, bug, or edge case that is out of scope " +
+	"for this Issue's own requirements, list each one as its own entry in " +
+	"\"follow_ups\" (\"title\", \"body\") instead of expanding this Issue's " +
+	"scope to address it — Forge files each entry as its own tracker Issue. " +
+	"Leave \"follow_ups\" empty when there is nothing to report."
 
 // rules is the fixed set of workflow-mechanics boundaries every invocation
 // carries: the Agent does the engineering, Forge owns everything else (see

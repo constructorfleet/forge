@@ -144,6 +144,17 @@ type BlockedConfig struct {
 	Comment bool   `yaml:"comment"`
 }
 
+// FollowUpConfig configures automatic self reporting: when an Agent notices
+// an out-of-scope inefficiency or edge case while working an Issue (see
+// agent.FollowUpReport), the engine files it as a new tracker Issue and
+// applies Label to it, so it lands in the same triage queue a human-filed
+// Issue would (see docs/agents/triage-labels.md).
+type FollowUpConfig struct {
+	// Label is applied to every Issue created from a FollowUpReport. Must
+	// not be empty.
+	Label string `yaml:"label"`
+}
+
 // AgentConfig selects the Agent Adapter backend.
 type AgentConfig struct {
 	Provider string `yaml:"provider"`
@@ -363,6 +374,7 @@ type Config struct {
 	PullRequests     PullRequestsConfig     `yaml:"pull_requests"`
 	CI               CIConfig               `yaml:"ci"`
 	Blocked          BlockedConfig          `yaml:"blocked"`
+	FollowUp         FollowUpConfig         `yaml:"follow_up"`
 	Agent            AgentConfig            `yaml:"agent"`
 	Dependencies     DependenciesConfig     `yaml:"dependencies"`
 	StatusReflection StatusReflectionConfig `yaml:"status_reflection"`
@@ -440,7 +452,8 @@ func Default() Config {
 			PollInterval:      30 * time.Second,
 			MaxOutputBytes:    4000,
 		},
-		Blocked: BlockedConfig{Label: "needs-info", Comment: true},
+		Blocked:  BlockedConfig{Label: "needs-info", Comment: true},
+		FollowUp: FollowUpConfig{Label: "needs-triage"},
 		Agent: AgentConfig{
 			Provider:       "claude-code",
 			PermissionMode: PermissionModeBypassPermissions,

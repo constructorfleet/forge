@@ -110,6 +110,11 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// trk implements tracker.Tracker in full, a superset of both
 	// engine.IssueFetcher (Tracker, above) and engine.NeedsInfoTracker.
 	eng.NeedsInfoTracker = trk
+	// trk also implements engine.FollowUpTracker (CreateIssue/AddLabel) in
+	// full; wired unconditionally like NeedsInfoTracker above, since
+	// automatic self reporting (issue 141) only fires when an Agent
+	// actually returns FollowUps.
+	eng.FollowUpTracker = trk
 	// eng.Diff is wired unconditionally since it is inert without a
 	// Reviewer (Engine only calls it from runReview, which itself is a
 	// no-op when eng.Reviewer is nil).

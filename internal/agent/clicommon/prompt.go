@@ -21,11 +21,18 @@ const ResultContract = "## Required output format\n\n" +
 	"  \"needs_info\": {\n" +
 	"    \"question\": \"what you need answered (only if status is NEEDS_INFO)\",\n" +
 	"    \"context\": \"why the question arose (only if status is NEEDS_INFO)\"\n" +
-	"  }\n" +
+	"  },\n" +
+	"  \"follow_ups\": [\n" +
+	"    {\"title\": \"one-line summary\", \"body\": \"what you noticed, why it is out of scope, and supporting detail\"}\n" +
+	"  ]\n" +
 	"}\n" +
 	"```\n\n" +
-	"Omit \"needs_info\" unless status is \"NEEDS_INFO\". Do not emit more " +
-	"than one such block."
+	"Omit \"needs_info\" unless status is \"NEEDS_INFO\". Omit \"follow_ups\" " +
+	"(or leave it empty) unless, while working this Issue, you noticed a " +
+	"genuine inefficiency, bug, or edge case that is out of scope for this " +
+	"Issue's requirements — list each one as a separate entry so Forge can " +
+	"file it as its own tracker Issue; do not use it to expand this Issue's " +
+	"own scope. Do not emit more than one such block."
 
 // Rules is the fixed set of workflow-mechanics boundaries every invocation
 // carries: the Agent does the engineering, Forge owns everything else (see

@@ -43,6 +43,7 @@ type StructuredResult struct {
 	Status    string           `json:"status"`
 	Summary   string           `json:"summary"`
 	NeedsInfo *NeedsInfoFields `json:"needs_info,omitempty"`
+	FollowUps []FollowUpFields `json:"follow_ups,omitempty"`
 	Usage     *UsageFields     `json:"usage,omitempty"`
 }
 
@@ -50,6 +51,14 @@ type StructuredResult struct {
 type NeedsInfoFields struct {
 	Question string `json:"question"`
 	Context  string `json:"context"`
+}
+
+// FollowUpFields carries one out-of-scope observation the backend wants
+// filed as a new tracker Issue (see agent.FollowUpReport). Independent of
+// status: a backend may emit these alongside any outcome.
+type FollowUpFields struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 // UsageFields carries a backend's optional token accounting for one
@@ -103,4 +112,17 @@ func ToTokenUsage(in *UsageFields) *agent.TokenUsage {
 		InputTokens:  in.InputTokens,
 		OutputTokens: in.OutputTokens,
 	}
+}
+
+// ToFollowUps converts a StructuredResult's optional FollowUps into
+// agent.FollowUpReports, or nil when the backend reported none.
+func ToFollowUps(in []FollowUpFields) []agent.FollowUpReport {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]agent.FollowUpReport, len(in))
+	for i, f := range in {
+		out[i] = agent.FollowUpReport{Title: f.Title, Body: f.Body}
+	}
+	return out
 }

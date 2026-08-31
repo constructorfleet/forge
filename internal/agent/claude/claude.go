@@ -388,9 +388,9 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 
 	switch agent.AgentStatus(res.Status) {
 	case agent.StatusImplemented:
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: res.Summary, Usage: toTokenUsage(res.Usage)}, nil
+		return agent.AgentResult{Status: agent.StatusImplemented, Summary: res.Summary, FollowUps: toFollowUps(res.FollowUps), Usage: toTokenUsage(res.Usage)}, nil
 	case agent.StatusFailed:
-		return agent.AgentResult{Status: agent.StatusFailed, Summary: res.Summary, Usage: toTokenUsage(res.Usage)}, nil
+		return agent.AgentResult{Status: agent.StatusFailed, Summary: res.Summary, FollowUps: toFollowUps(res.FollowUps), Usage: toTokenUsage(res.Usage)}, nil
 	case agent.StatusNeedsInfo:
 		if res.NeedsInfo == nil || strings.TrimSpace(res.NeedsInfo.Question) == "" {
 			return agent.AgentResult{
@@ -408,7 +408,8 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 				Question: res.NeedsInfo.Question,
 				Context:  res.NeedsInfo.Context,
 			},
-			Usage: toTokenUsage(res.Usage),
+			FollowUps: toFollowUps(res.FollowUps),
+			Usage:     toTokenUsage(res.Usage),
 		}, nil
 	default:
 		// parseStructuredResult only returns ok=true for recognized
@@ -429,6 +430,17 @@ func toTokenUsage(in *usageFields) *agent.TokenUsage {
 		InputTokens:  in.InputTokens,
 		OutputTokens: in.OutputTokens,
 	}
+}
+
+func toFollowUps(in []followUpFields) []agent.FollowUpReport {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]agent.FollowUpReport, len(in))
+	for i, f := range in {
+		out[i] = agent.FollowUpReport{Title: f.Title, Body: f.Body}
+	}
+	return out
 }
 
 // diagnosticSummary composes a human-readable Summary for FAILED outcomes,
