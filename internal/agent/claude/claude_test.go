@@ -306,6 +306,84 @@ func mustJSONString(t *testing.T, s string) string {
 	return string(b)
 }
 
+// TestExecute_StructuredModeUsesPromptVerbatim covers issue 200: a
+// ModeStructured invocation runs the CLI with req.Prompt used verbatim as
+// stdin — no implement/review prompt scaffolding (Issue/Repository/Policy
+// framing) built around it.
+func TestExecute_StructuredModeUsesPromptVerbatim(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"answer":"42"}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeStructured
+	req.Prompt = "STRUCTURED-PROMPT-MARKER: answer with a number."
+	req.Schema = `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+
+	if _, err := a.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	if calls[0].stdin != req.Prompt {
+		t.Fatalf("stdin = %q, want req.Prompt %q verbatim", calls[0].stdin, req.Prompt)
+	}
+}
+
+// TestExecute_StructuredModeUsesCallerSchema covers issue 200: the
+// `--json-schema` argument must carry req.Schema, not the fixed
+// implementation-result envelope schema.
+func TestExecute_StructuredModeUsesCallerSchema(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"answer":"42"}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeStructured
+	req.Prompt = "STRUCTURED-PROMPT-MARKER"
+	req.Schema = `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+
+	if _, err := a.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+
+	schema := findFlagValue(t, calls[0].args, "--json-schema")
+	if schema != req.Schema {
+		t.Fatalf("--json-schema = %q, want caller schema %q", schema, req.Schema)
+	}
+}
+
+// TestExecute_StructuredModeReturnsResultAsSummary covers issue 200: the
+// schema-conforming result text is returned verbatim as AgentResult.Summary;
+// the run must not attempt to decode Phase 1's {status,summary} envelope out
+// of it.
+func TestExecute_StructuredModeReturnsResultAsSummary(t *testing.T) {
+	var calls []recordedCall
+	result := `{"answer":"42"}`
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":` + mustJSONString(t, result) + "}\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeStructured
+	req.Prompt = "STRUCTURED-PROMPT-MARKER"
+	req.Schema = `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+
+	got, err := a.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if got.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", got.Status)
+	}
+	if strings.TrimSpace(got.Summary) != result {
+		t.Fatalf("Summary = %q, want the raw schema-conforming result %q", got.Summary, result)
+	}
+}
+
 func TestExecute_DefaultPermissionModeIsBypassPermissions(t *testing.T) {
 	var calls []recordedCall
 	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
@@ -1040,6 +1118,21 @@ func TestBuildPrompt_ImplementModeUnchanged(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("implement prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// TestBuildPrompt_StructuredModeReturnsPromptVerbatim covers issue 200:
+// ModeStructured returns req.Prompt verbatim, with none of the
+// Issue/Repository/Policy scaffolding buildPrompt otherwise assembles.
+func TestBuildPrompt_StructuredModeReturnsPromptVerbatim(t *testing.T) {
+	req := baseRequest()
+	req.Mode = agent.ModeStructured
+	req.Prompt = "STRUCTURED-PROMPT-MARKER: answer with a number."
+
+	prompt := buildPrompt(req)
+
+	if prompt != req.Prompt {
+		t.Fatalf("prompt = %q, want req.Prompt verbatim %q", prompt, req.Prompt)
 	}
 }
 

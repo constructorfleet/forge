@@ -214,7 +214,15 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	// message IS the deliverable (a findings envelope the reviewer parses),
 	// so the {status, summary} result schema must NOT be enforced — it would
 	// force the answer into that envelope and clobber the findings.
-	if req.Mode != agent.ModeReview {
+	// Structured mode (issue 200) enforces the caller's own per-call schema
+	// (req.Schema) instead of the fixed implementation-result schema, since
+	// the caller — not the implement/review flow — owns the result shape.
+	switch req.Mode {
+	case agent.ModeReview:
+		// no --json-schema
+	case agent.ModeStructured:
+		args = append(args, "--json-schema", req.Schema)
+	default:
 		args = append(args, jsonSchemaArgs...)
 	}
 
@@ -334,6 +342,25 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 				Status: agent.StatusFailed,
 				Summary: diagnosticSummary(
 					fmt.Sprintf("claude adapter: review produced no output (exit code %d)", exitCode),
+					finalText, stderr,
+				),
+			}, nil
+		}
+		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
+	}
+
+	// Structured mode (issue 200) does not go through the {status, summary}
+	// result schema either: the caller supplied its own per-call schema
+	// (req.Schema) and expects the schema-conforming result back verbatim as
+	// Summary, exactly as review mode returns its findings envelope. Status
+	// is IMPLEMENTED whenever there is output; an empty final message is the
+	// one failure this mode can detect on its own.
+	if req.Mode == agent.ModeStructured {
+		if strings.TrimSpace(finalText) == "" {
+			return agent.AgentResult{
+				Status: agent.StatusFailed,
+				Summary: diagnosticSummary(
+					fmt.Sprintf("claude adapter: structured call produced no output (exit code %d)", exitCode),
 					finalText, stderr,
 				),
 			}, nil
