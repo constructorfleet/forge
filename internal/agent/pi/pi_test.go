@@ -2,6 +2,7 @@ package pi
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -14,15 +15,39 @@ type capturedCall struct {
 	env   []string
 }
 
-func fixedRunner(stdout string) (Runner, *capturedCall) {
+// fixedRunner returns a Runner that streams assistantMessage as a pi
+// `--mode json` assistant message_end event (the shape the adapter's
+// streamParser consumes) through onLine, and returns it as the full captured
+// stdout — mirroring DefaultRunner's contract now that pi runs in --mode json.
+func fixedRunner(assistantMessage string) (Runner, *capturedCall) {
 	call := &capturedCall{}
-	return func(_ context.Context, dir string, args []string, stdin string, env []string, _ func(string)) (string, string, int, error) {
+	ev, _ := json.Marshal(piEvent{
+		Type: "message_end",
+		Message: &piMessage{
+			Role:    "assistant",
+			Content: []json.RawMessage{textBlock(assistantMessage)},
+		},
+	})
+	line := string(ev)
+	return func(_ context.Context, dir string, args []string, stdin string, env []string, onLine func(string)) (string, string, int, error) {
 		call.dir = dir
 		call.args = args
 		call.stdin = stdin
 		call.env = env
-		return stdout, "", 0, nil
+		if onLine != nil {
+			onLine(line)
+		}
+		return line + "\n", "", 0, nil
 	}, call
+}
+
+// textBlock marshals text into a pi content block ({"type":"text","text":…}).
+func textBlock(text string) json.RawMessage {
+	b, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{Type: "text", Text: text})
+	return b
 }
 
 func TestAdapter_ExecuteDelegatesToPiCLI(t *testing.T) {

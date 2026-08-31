@@ -1205,3 +1205,25 @@ func TestAdapter_SemanticProfileDeclaresAllButTypeHierarchyViaLSPPlugin(t *testi
 		t.Fatalf("SemanticProfile() = %+v, want %+v", got, want)
 	}
 }
+
+// A failure before the stream yields anything (subprocess never produced
+// stdout, only an error/stderr) must still persist a diagnostic transcript
+// event — no run is ever a blank transcript (issue #257).
+func TestExecute_SubprocessErrorNeverBlankTranscript(t *testing.T) {
+	var calls []recordedCall
+	a := &Adapter{Runner: newFakeRunner(&calls, "", "boom: could not start claude", -1, errors.New("exec: not found"))}
+	sink := agent.NewTranscriptRecorder()
+	req := baseRequest()
+	req.Transcript = sink
+
+	res, err := a.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Execute returned error %v, want nil (subprocess errors surface via Status)", err)
+	}
+	if res.Status != agent.StatusFailed {
+		t.Fatalf("Status = %v, want FAILED", res.Status)
+	}
+	if len(sink.Events()) == 0 {
+		t.Fatalf("Events() = 0, want a non-blank fallback transcript on early failure")
+	}
+}

@@ -139,6 +139,22 @@ var defaultAuthEnvVars = []string{
 	"ANTHROPIC_AUTH_TOKEN",
 }
 
+// countingSink wraps a TranscriptSink to count how many events were emitted,
+// letting Execute tell whether a failed run already produced a transcript
+// before falling back to a single diagnostic event (issue #257: no run is
+// ever a blank transcript). It forwards every event unchanged.
+type countingSink struct {
+	inner agent.TranscriptSink
+	count int
+}
+
+func (s *countingSink) Emit(event agent.TranscriptEvent) {
+	s.count++
+	if s.inner != nil {
+		s.inner.Emit(event)
+	}
+}
+
 // Adapter is a production Agent Adapter that invokes Claude Code as a
 // subprocess in the Worker's Workspace.
 type Adapter struct {
@@ -195,9 +211,32 @@ type Adapter struct {
 // so a retry loop (tickets 21/24) can distinguish "the caller gave up on
 // this attempt" from "the agent genuinely failed" and avoid miscounting it
 // against the retry budget.
-func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (outRes agent.AgentResult, outErr error) {
 	prompt := buildPrompt(req)
 	env := sanitizedEnv(a.ExtraEnvPassthrough)
+
+	// Never leave a failed run with a blank transcript (issue #257). The
+	// streaming parser below emits a TranscriptEvent per line as the run
+	// proceeds, so any run that produced output is already non-blank; but a
+	// failure before the stream yields anything (a subprocess that never
+	// started, an immediate CLI error carrying only stderr) would otherwise
+	// persist nothing. counter tracks how many events actually streamed, and
+	// this defer emits the diagnostic Summary as a fallback only when a
+	// FAILED run streamed none.
+	sink := req.Transcript
+	if req.Transcript != nil {
+		counter := &countingSink{inner: req.Transcript}
+		sink = counter
+		defer func() {
+			if outRes.Status == agent.StatusFailed && counter.count == 0 && outRes.Summary != "" {
+				req.Transcript.Emit(agent.TranscriptEvent{
+					Type: agent.TranscriptEventMessage,
+					Role: "assistant",
+					Text: outRes.Summary,
+				})
+			}
+		}()
+	}
 
 	runner := a.Runner
 	if runner == nil {
@@ -260,7 +299,7 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	runCtx, timedOut, touch, stop := clicommon.IdleTimeout(ctx, a.Timeout)
 	defer stop()
 
-	parser := newStreamParser(req.Transcript, now)
+	parser := newStreamParser(sink, now)
 	onLine := func(line string) {
 		touch()
 		parser.consume(line)
@@ -336,36 +375,14 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 	// this mode can detect on its own, surfaced as FAILED so the reviewer's
 	// per-axis retry can react. The ctx/timeout/subprocess/CLI-error guards
 	// above already handled every other failure before this point.
-	if req.Mode == agent.ModeReview {
-		if strings.TrimSpace(finalText) == "" {
-			return agent.AgentResult{
-				Status: agent.StatusFailed,
-				Summary: diagnosticSummary(
-					fmt.Sprintf("claude adapter: review produced no output (exit code %d)", exitCode),
-					finalText, stderr,
-				),
-			}, nil
-		}
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
-	}
-
-	// Structured mode (issue 200) does not go through the {status, summary}
-	// result schema either: the caller supplied its own per-call schema
-	// (req.Schema) and expects the schema-conforming result back verbatim as
-	// Summary, exactly as review mode returns its findings envelope. Status
-	// is IMPLEMENTED whenever there is output; an empty final message is the
-	// one failure this mode can detect on its own.
-	if req.Mode == agent.ModeStructured {
-		if strings.TrimSpace(finalText) == "" {
-			return agent.AgentResult{
-				Status: agent.StatusFailed,
-				Summary: diagnosticSummary(
-					fmt.Sprintf("claude adapter: structured call produced no output (exit code %d)", exitCode),
-					finalText, stderr,
-				),
-			}, nil
-		}
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
+	// ModeReview and ModeStructured return the reconstructed final message
+	// verbatim as Summary via the shared clicommon.ModeResult — the one place
+	// every backend applies these modes' result semantics (a findings
+	// envelope, or a caller-schema-conforming result; empty output -> FAILED).
+	// finalText doubles as the diagnostic body, matching claude's earlier
+	// per-mode wording.
+	if modeRes, handled := clicommon.ModeResult("claude", req.Mode, finalText, finalText, stderr, exitCode); handled {
+		return modeRes, nil
 	}
 
 	// parseSchemaResult decodes the `--json-schema`-conforming result
