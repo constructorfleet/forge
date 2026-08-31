@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/constructorfleet/forge/compare/forge-v0.17.0...forge-v0.18.0) (2026-08-31)
+
+
+### Features
+
+* Provider split · 3: composition config + wiring + validation (GitHub) ([#317](https://github.com/constructorfleet/forge/issues/317)) ([40abd4c](https://github.com/constructorfleet/forge/commit/40abd4cc57cb27ce38617376b4e9c2b20dd0c631)), closes [#295](https://github.com/constructorfleet/forge/issues/295)
+
 ## [0.17.0](https://github.com/constructorfleet/forge/compare/forge-v0.16.2...forge-v0.17.0) (2026-08-31)
 
 
