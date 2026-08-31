@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.3](https://github.com/constructorfleet/forge/compare/forge-v0.15.2...forge-v0.15.3) (2026-08-31)
+
+
+### Bug Fixes
+
+* **engine:** review VerdictInconclusive routes to retryable FAILED, not NEEDS_INFO ([#260](https://github.com/constructorfleet/forge/issues/260)) ([421543a](https://github.com/constructorfleet/forge/commit/421543a7277816ffa6db37deec3cacf16eba7750))
+
 ## [0.15.2](https://github.com/constructorfleet/forge/compare/forge-v0.15.1...forge-v0.15.2) (2026-08-31)
 
 
