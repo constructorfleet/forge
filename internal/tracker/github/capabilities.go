@@ -9,7 +9,7 @@ import (
 // CreateChangeRequest adapts the neutral SCM capability to GitHub's existing
 // pull-request creation behavior.
 func (c *Client) CreateChangeRequest(ctx context.Context, req tracker.ChangeRequestRequest) (tracker.ChangeRequest, error) {
-	pr, err := c.CreatePullRequest(ctx, req)
+	pr, err := c.CreatePullRequest(ctx, tracker.PullRequestRequest(req))
 	if err != nil {
 		return tracker.ChangeRequest{}, err
 	}
@@ -39,11 +39,32 @@ func (c *Client) GetChangeRequestMergeStatus(ctx context.Context, ref tracker.Ch
 // GetChecks adapts the neutral CI capability to GitHub's existing pull-request
 // check reporting behavior.
 func (c *Client) GetChecks(ctx context.Context, ref tracker.ChangeRequestRef) ([]tracker.Check, error) {
-	return c.GetPullRequestChecks(ctx, ref.Number)
+	checks, err := c.GetPullRequestChecks(ctx, ref.Number)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tracker.Check, 0, len(checks))
+	for _, check := range checks {
+		out = append(out, tracker.Check(check))
+	}
+	return out, nil
 }
 
 // GetReviews adapts SCM's optional neutral review sub-capability to GitHub's
 // existing pull-request review behavior.
 func (c *Client) GetReviews(ctx context.Context, ref tracker.ChangeRequestRef) ([]tracker.Review, error) {
-	return c.GetPullRequestReviews(ctx, ref.Number)
+	reviews, err := c.GetPullRequestReviews(ctx, ref.Number)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tracker.Review, 0, len(reviews))
+	for _, review := range reviews {
+		out = append(out, tracker.Review{
+			Author:      review.Author,
+			State:       review.State,
+			Body:        review.Body,
+			SubmittedAt: review.SubmittedAt,
+		})
+	}
+	return out, nil
 }

@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -105,5 +106,20 @@ func TestNeutralChangeRequestValueTypes(t *testing.T) {
 	}
 	if eligibility.Mergeable || len(eligibility.Blockers) != 1 {
 		t.Fatalf("eligibility = %+v", eligibility)
+	}
+}
+
+func TestNeutralCapabilityTypesAreDistinctFromLegacyPullRequestTypes(t *testing.T) {
+	if reflect.TypeOf(tracker.ChangeRequestRequest{}) == reflect.TypeOf(tracker.PullRequestRequest{}) {
+		t.Fatal("ChangeRequestRequest must be a distinct neutral type, not an alias of PullRequestRequest")
+	}
+	if reflect.TypeOf(tracker.Check{}) == reflect.TypeOf(tracker.PullRequestCheck{}) {
+		t.Fatal("Check must be a distinct neutral type, not an alias of PullRequestCheck")
+	}
+	if reflect.TypeOf(tracker.Review{}) == reflect.TypeOf(tracker.PullRequestReview{}) {
+		t.Fatal("Review must be a distinct neutral type, not an alias of PullRequestReview")
+	}
+	if _, ok := reflect.TypeOf(tracker.Review{}).FieldByName("ID"); ok {
+		t.Fatal("Review must not expose provider-native review IDs")
 	}
 }

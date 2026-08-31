@@ -222,13 +222,33 @@ type ChangeRequest struct {
 
 // ChangeRequestRequest carries everything SCM needs to create, or
 // idempotently recover, a change request.
-type ChangeRequestRequest = PullRequestRequest
+type ChangeRequestRequest struct {
+	// Base is the target branch name, not a commit SHA or remote-qualified
+	// ref.
+	Base string
+	// Head is the source branch name Forge pushed the Workspace to.
+	Head string
+	// Title is the change request title.
+	Title string
+	// Body is the change request description.
+	Body string
+}
 
 // Check is Forge's neutral representation of one reported CI check.
-type Check = PullRequestCheck
+type Check struct {
+	Name    string
+	State   CheckState
+	Details string
+}
 
 // Review is Forge's neutral representation of one SCM review.
-type Review = PullRequestReview
+type Review struct {
+	Author      string
+	State       ReviewState
+	Body        string
+	SubmittedAt time.Time
+	RawDetail   string
+}
 
 // Approval is Forge's neutral representation of one SCM approval.
 type Approval struct {

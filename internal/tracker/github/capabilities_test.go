@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/tracker"
@@ -56,5 +57,58 @@ func TestCreateChangeRequestDelegatesToPullRequestCreation(t *testing.T) {
 	}
 	if cr.Ref.Provider != "github" || cr.Ref.Number != 293 || cr.URL != "https://example.invalid/pr/293" {
 		t.Fatalf("change request = %+v", cr)
+	}
+}
+
+func TestGetChecksDelegatesToPullRequestChecksAndMapsNeutralType(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/widgets/pulls/293":
+			_, _ = w.Write([]byte(`{"head":{"sha":"abc123"}}`))
+		case "/repos/acme/widgets/commits/abc123/status":
+			_, _ = w.Write([]byte(`{"statuses":[{"context":"build","state":"success","description":"ok"}]}`))
+		case "/repos/acme/widgets/commits/abc123/check-runs":
+			_, _ = w.Write([]byte(`{"check_runs":[]}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+	})
+
+	checks, err := c.GetChecks(context.Background(), tracker.ChangeRequestRef{Provider: "github", Number: 293})
+	if err != nil {
+		t.Fatalf("GetChecks: %v", err)
+	}
+	if reflect.TypeOf(checks[0]) != reflect.TypeOf(tracker.Check{}) {
+		t.Fatalf("check type = %T, want tracker.Check", checks[0])
+	}
+	want := tracker.Check{Name: "build", State: tracker.CheckSuccess, Details: "ok"}
+	if checks[0] != want {
+		t.Fatalf("check = %+v, want %+v", checks[0], want)
+	}
+}
+
+func TestGetReviewsDelegatesToPullRequestReviewsAndOmitsProviderID(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/acme/widgets/pulls/293/reviews" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+		_, _ = w.Write([]byte(`[
+			{"id":42,"user":{"login":"alice"},"state":"APPROVED","body":"ship it","submitted_at":"2026-01-01T00:00:00Z"}
+		]`))
+	})
+
+	reviews, err := c.GetReviews(context.Background(), tracker.ChangeRequestRef{Provider: "github", Number: 293})
+	if err != nil {
+		t.Fatalf("GetReviews: %v", err)
+	}
+	if reflect.TypeOf(reviews[0]) != reflect.TypeOf(tracker.Review{}) {
+		t.Fatalf("review type = %T, want tracker.Review", reviews[0])
+	}
+	if _, ok := reflect.TypeOf(reviews[0]).FieldByName("ID"); ok {
+		t.Fatal("neutral Review must not expose GitHub review ID")
+	}
+	want := tracker.Review{Author: "alice", State: tracker.ReviewApproved, Body: "ship it"}
+	if reviews[0].Author != want.Author || reviews[0].State != want.State || reviews[0].Body != want.Body {
+		t.Fatalf("review = %+v, want %+v", reviews[0], want)
 	}
 }
