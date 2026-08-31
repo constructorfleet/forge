@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/constructorfleet/forge/compare/forge-v0.11.1...forge-v0.11.2) (2026-08-31)
+
+
+### Bug Fixes
+
+* **tracker:** accept dash/colon-led descriptions on dependency bullets ([#209](https://github.com/constructorfleet/forge/issues/209)) ([076a9a5](https://github.com/constructorfleet/forge/commit/076a9a543a8cca0ce7a759a13d3087ae2987c726))
+
 ## [0.11.1](https://github.com/constructorfleet/forge/compare/forge-v0.11.0...forge-v0.11.1) (2026-08-31)
 
 
