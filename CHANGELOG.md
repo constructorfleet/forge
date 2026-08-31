@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/constructorfleet/forge/compare/forge-v0.14.0...forge-v0.14.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* CI_PENDING is still not actually waiting for CI status checks to pass ([#234](https://github.com/constructorfleet/forge/issues/234)) ([9dfeae5](https://github.com/constructorfleet/forge/commit/9dfeae582c33749c444954eec8eceb0b5b9fd5d0)), closes [#231](https://github.com/constructorfleet/forge/issues/231)
+
 ## [0.14.0](https://github.com/constructorfleet/forge/compare/forge-v0.13.0...forge-v0.14.0) (2026-08-31)
 
 
