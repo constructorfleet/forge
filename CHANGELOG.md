@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/constructorfleet/forge/compare/forge-v0.11.3...forge-v0.12.0) (2026-08-31)
+
+
+### Features
+
+* [Question] Are review agent findings actually being addressed? ([#223](https://github.com/constructorfleet/forge/issues/223)) ([a113176](https://github.com/constructorfleet/forge/commit/a113176ba7b23b078866e9f38345f12a3b205234)), closes [#222](https://github.com/constructorfleet/forge/issues/222)
+
 ## [0.11.3](https://github.com/constructorfleet/forge/compare/forge-v0.11.2...forge-v0.11.3) (2026-08-31)
 
 
