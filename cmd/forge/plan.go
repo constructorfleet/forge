@@ -99,8 +99,11 @@ func runPlan(args []string) int {
 
 	// A single Backend is reused across wayfinding, spec generation, and
 	// ticket-plan generation within one `forge plan` invocation -- there is
-	// no per-stage reason to invoke a fresh one.
-	backend, err := buildPlanningBackend(cfg)
+	// no per-stage reason to invoke a fresh one. It is also the one seam
+	// every stage's agent invocation passes through, so handing it the
+	// Store here is what gets planning transcripts into transcript_events
+	// (issue #248); see buildPlanningBackend for the Feature-scoped keying.
+	backend, err := buildPlanningBackend(cfg, store, featureID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 		return 1
