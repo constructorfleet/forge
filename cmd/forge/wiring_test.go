@@ -141,6 +141,22 @@ func TestRepoFromOrigin_ErrorsOnUnrecognizedRemote(t *testing.T) {
 	}
 }
 
+func TestBuildTrackerUsesConfiguredIssueProvider(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.Tracker.Provider = "linear"
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	if trk.Provider != "linear" {
+		t.Fatalf("buildTracker Provider = %q, want linear", trk.Provider)
+	}
+}
+
 func TestBuildAgent_SelectsByProvider(t *testing.T) {
 	cases := []struct {
 		provider string

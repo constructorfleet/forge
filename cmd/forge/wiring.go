@@ -545,6 +545,7 @@ func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
 		return nil, err
 	}
 	trk := github.NewClient(nil, "", owner, repo)
+	trk.Provider = cfg.Tracker.Provider
 	trk.DependencyOverrides = cfg.Dependencies.Overrides
 	// Reachability is only exercised by CheckExternal (ticket 27); wiring
 	// it unconditionally here, rather than only for `forge execute`, keeps

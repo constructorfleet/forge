@@ -125,10 +125,19 @@ func (c *Client) normalizeIssue(gh ghIssue, native []string, nativeOK bool) (dom
 		base = parsed
 	}
 	final := tracker.ApplyOverrides(issueID, base, c.DependencyOverrides)
+	provider := c.Provider
+	if provider == "" {
+		provider = "github"
+	}
 
 	deps := make([]domain.Dependency, len(final))
 	for i, dependsOn := range final {
-		deps[i] = domain.Dependency{IssueID: issueID, DependsOnID: dependsOn}
+		deps[i] = domain.Dependency{
+			IssueID:      issueID,
+			DependsOnID:  dependsOn,
+			IssueRef:     domain.IssueRef{Provider: provider, ID: issueID},
+			DependsOnRef: domain.IssueRef{Provider: provider, ID: dependsOn},
+		}
 	}
 
 	// Scope (Managed vs External) is execution-set membership, which the
@@ -137,6 +146,7 @@ func (c *Client) normalizeIssue(gh ghIssue, native []string, nativeOK bool) (dom
 	// there is exactly one writer of the field.
 	return domain.Issue{
 		ID:           issueID,
+		Provider:     provider,
 		Title:        gh.Title,
 		Body:         gh.Body,
 		Dependencies: deps,

@@ -1,10 +1,12 @@
 package domain_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // TestDomainTypesConstruct is a smoke test that exercises the core domain
@@ -17,12 +19,15 @@ func TestDomainTypesConstruct(t *testing.T) {
 	}
 
 	dep := domain.Dependency{
-		IssueID:     "345",
-		DependsOnID: "344",
+		IssueID:      "345",
+		DependsOnID:  "344",
+		IssueRef:     domain.IssueRef{Provider: "github", ID: "345"},
+		DependsOnRef: domain.IssueRef{Provider: "github", ID: "344"},
 	}
 
 	issue := domain.Issue{
 		ID:           "345",
+		Provider:     "github",
 		ExecutionID:  exec.ID,
 		State:        domain.StatePending,
 		Scope:        domain.ScopeManaged,
@@ -44,6 +49,15 @@ func TestDomainTypesConstruct(t *testing.T) {
 
 	if issue.Dependencies[0].IssueID != "345" || issue.Dependencies[0].DependsOnID != "344" {
 		t.Fatalf("dependency not wired correctly: %+v", issue.Dependencies[0])
+	}
+	if issue.Provider != "github" {
+		t.Fatalf("issue provider not wired correctly: %+v", issue)
+	}
+	if issue.Dependencies[0].IssueRef != (domain.IssueRef{Provider: "github", ID: "345"}) {
+		t.Fatalf("dependency issue ref not wired correctly: %+v", issue.Dependencies[0])
+	}
+	if issue.Dependencies[0].DependsOnRef != (domain.IssueRef{Provider: "github", ID: "344"}) {
+		t.Fatalf("dependency depends-on ref not wired correctly: %+v", issue.Dependencies[0])
 	}
 	if worker.Workspace.Branch != "agent/345" {
 		t.Fatalf("worker workspace not wired correctly: %+v", worker.Workspace)
@@ -84,5 +98,20 @@ func TestIssueRecordGateFailurePersistsThroughPointer(t *testing.T) {
 	}
 	if got := issues[0].RetryBudget.RemainingCI(); got != 2 {
 		t.Fatalf("expected CI failure to persist on the Issue, remaining CI = %d, want 2", got)
+	}
+}
+
+func TestIssueRefAndChangeRequestRefAreDistinctTypes(t *testing.T) {
+	issueRefType := reflect.TypeOf(domain.IssueRef{})
+	changeRequestRefType := reflect.TypeOf(tracker.ChangeRequestRef{})
+
+	if issueRefType == changeRequestRefType {
+		t.Fatal("IssueRef and ChangeRequestRef must remain distinct types")
+	}
+	if _, ok := issueRefType.FieldByName("ID"); !ok {
+		t.Fatal("IssueRef must carry the branch-safe issue ID as a string ID field")
+	}
+	if _, ok := changeRequestRefType.FieldByName("Number"); !ok {
+		t.Fatal("ChangeRequestRef must carry its change-request number separately from IssueRef.ID")
 	}
 }

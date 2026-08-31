@@ -20,7 +20,8 @@ import (
 
 // TrackerConfig identifies the issue tracker backing an Execution.
 type TrackerConfig struct {
-	Type string `yaml:"type"`
+	Type     string `yaml:"type"`
+	Provider string `yaml:"provider"`
 
 	// SkipAuthPreflight opts a context that legitimately needs no tracker
 	// credential (e.g. an offline dry run against a tracker the Execution
@@ -428,7 +429,7 @@ const defaultReviewConfidenceFloor = 0.7
 func Default() Config {
 	return Config{
 		Version: 1,
-		Tracker: TrackerConfig{Type: "github"},
+		Tracker: TrackerConfig{Type: "github", Provider: "github"},
 		Git: GitConfig{
 			Base:           "origin/main",
 			BranchTemplate: "forge/{execution}/{issue}",

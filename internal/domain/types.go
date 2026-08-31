@@ -16,19 +16,31 @@ type Execution struct {
 	StartedAt    time.Time
 }
 
+// IssueRef is Forge's neutral, provider-qualified Issue identity for the few
+// cross-provider surfaces that need to disambiguate ID spaces. Issue.ID stays
+// the adapter-resolvable, branch/path-safe, human-facing string used by
+// existing call sites.
+type IssueRef struct {
+	Provider string
+	ID       string
+}
+
 // Dependency is a directed relationship indicating that DependsOnID must
 // complete before IssueID can begin. Dependencies form a DAG; cycles are
 // errors. A Dependency is satisfied only when the prerequisite Issue's PR is
 // merged into the applicable base.
 type Dependency struct {
-	IssueID     string
-	DependsOnID string
+	IssueID      string
+	DependsOnID  string
+	IssueRef     IssueRef
+	DependsOnRef IssueRef
 }
 
 // Issue is Forge's normalized representation of an issue-tracker item. All
 // internal code operates on Issues, never on tracker-specific models.
 type Issue struct {
 	ID           string
+	Provider     string
 	ExecutionID  string
 	Title        string
 	Body         string

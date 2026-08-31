@@ -31,6 +31,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Tracker.Type != "github" {
 		t.Errorf("Tracker.Type = %q, want github", cfg.Tracker.Type)
 	}
+	if cfg.Tracker.Provider != "github" {
+		t.Errorf("Tracker.Provider = %q, want github", cfg.Tracker.Provider)
+	}
 	if cfg.Git.Base != "origin/main" {
 		t.Errorf("Git.Base = %q, want origin/main", cfg.Git.Base)
 	}
@@ -99,6 +102,7 @@ func TestLoad_CompleteConfig(t *testing.T) {
 version: 1
 tracker:
   type: github
+  provider: github
 git:
   base: origin/main
   branch_template: agent/{execution}/{issue}
@@ -147,6 +151,9 @@ dependencies:
 
 	if cfg.Execution.MaxParallel != 8 {
 		t.Errorf("Execution.MaxParallel = %d, want 8", cfg.Execution.MaxParallel)
+	}
+	if cfg.Tracker.Provider != "github" {
+		t.Errorf("Tracker.Provider = %q, want github", cfg.Tracker.Provider)
 	}
 	wantRetry := domain.RetryLimits{Gate: 5, Review: 4, CI: 6}
 	if cfg.Retry != wantRetry {
@@ -482,6 +489,18 @@ func TestLoad_DependencyOverrideSelfReference(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "dependencies.overrides[1]") {
 		t.Errorf("Load() error = %v, want it to identify dependencies.overrides[1]", err)
+	}
+}
+
+func TestLoad_TrackerProviderMustNotBeEmpty(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  provider: \"\"\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want tracker.provider validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.provider") {
+		t.Errorf("Load() error = %v, want it to identify tracker.provider", err)
 	}
 }
 
