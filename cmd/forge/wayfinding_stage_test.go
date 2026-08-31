@@ -50,8 +50,8 @@ func TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution(t *testing.T) 
 	chdirTemp(t, repoRoot)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"SQLite"}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", `{"outcome":"SQLite"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	paused, executionID, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", goal, decisions, loader)
 	if err != nil {
@@ -108,8 +108,8 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 	chdirTemp(t, repoRoot)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", `{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	paused, executionID, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", goal, decisions, loader)
 	if err != nil {

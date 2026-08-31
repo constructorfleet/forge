@@ -14,8 +14,8 @@ import "context"
 // for scripting/diagnostics by Key, and an optional JSON Schema describing
 // the structured result the caller expects back. Schema travels with the
 // request so a backend can pass it through to whatever native structured-
-// output mechanism it has (or ignore it); InvokeStructured itself still
-// extracts and decodes the result from fenced JSON in the raw output.
+// output mechanism it has (or ignore it); InvokeStructured itself strictly
+// decodes the result from bare JSON in the raw output.
 type InvokeRequest struct {
 	Key    string
 	Prompt string
@@ -27,8 +27,7 @@ type InvokeRequest struct {
 // analogue of internal/agent.Agent's Execute -- planning contracts don't
 // share Phase 1's fixed IMPLEMENTED/NEEDS_INFO/FAILED result shape, so they
 // invoke a Backend directly and let InvokeStructured decode a
-// contract-specific typed result from whatever fenced JSON the backend's
-// output contains.
+// contract-specific typed result from the backend's bare JSON output.
 //
 // req.Key identifies the invocation for a scripted test double (see
 // FakeBackend); production backends ignore it.

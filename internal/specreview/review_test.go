@@ -55,11 +55,11 @@ func TestSpecificationReview_Approved(t *testing.T) {
 	pc := makeTestSpecPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	backend.ProgramResult("specification-review", `{
 		"verdict": "APPROVED",
 		"summary": "Specification is clear, complete, and well-structured",
 		"findings": []
-	}`+"\n```\n")
+	}`)
 
 	res, err := Review(context.Background(), backend, pc)
 	if err != nil {
@@ -81,14 +81,14 @@ func TestSpecificationReview_ChangesRequired(t *testing.T) {
 	pc := makeTestSpecPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-review", "```json\n"+`{
+	backend.ProgramResult("specification-review", `{
 		"verdict": "CHANGES_REQUIRED",
 		"summary": "Specification has issues",
 		"findings": [
 			{"severity": "ERROR", "file": "", "line": 0, "message": "Requirements section lacks measurable acceptance criteria"},
 			{"severity": "WARNING", "file": "", "line": 0, "message": "Non-Goals section is too brief"}
 		]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Review(context.Background(), backend, pc)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestSpecificationReviewValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pc := makeTestSpecPC()
 			backend := planningagent.NewFakeBackend()
-			backend.ProgramResult("specification-review", "```json\n"+tt.json+"\n```\n")
+			backend.ProgramResult("specification-review", tt.json)
 
 			_, err := Review(context.Background(), backend, pc)
 			if tt.wantErr {

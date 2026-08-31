@@ -134,7 +134,7 @@ func buildPrompt(req Request) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("Respond with exactly one fenced json block containing either a resolution:\n" +
+	b.WriteString("Respond with a JSON object containing either a resolution:\n" +
 		`{"outcome":"...","rationale":"...","consequences":"...","assumptions":"...",` +
 		`"new_unknowns":[{"temp_key":"...","title":"...","question":"...",` +
 		`"depends_on":["..."],"consequential":true}]}` + "\n" +

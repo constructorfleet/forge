@@ -41,7 +41,7 @@ func TestSpecificationGeneration(t *testing.T) {
 	pc := makeTestPC()
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("specification-generation", "```json\n"+`{
+	backend.ProgramResult("specification-generation", `{
 		"summary": "A widget builder",
 		"requirements": [
 			{"id": "REQ-001", "description": "Widget must be buildable"},
@@ -49,7 +49,7 @@ func TestSpecificationGeneration(t *testing.T) {
 		],
 		"non_goals": ["Not building a gadget"],
 		"decision_refs": ["001-storage"]
-	}`+"\n```\n")
+	}`)
 
 	res, err := Generate(context.Background(), backend, pc)
 	if err != nil {
@@ -120,7 +120,7 @@ func TestSpecificationGenerationValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pc := makeTestPC()
 			backend := planningagent.NewFakeBackend()
-			backend.ProgramResult("specification-generation", "```json\n"+tt.json+"\n```\n")
+			backend.ProgramResult("specification-generation", tt.json)
 
 			_, err := Generate(context.Background(), backend, pc)
 			if tt.wantErr {

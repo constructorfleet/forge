@@ -28,12 +28,10 @@ func goalContext(t *testing.T) planningagent.PlanningContext {
 func TestPropose_DecodesProposedDecisions(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramDefault(`` +
-		"```json\n" +
 		`{"decisions":[` +
 		`{"temp_key":"a","title":"Pick storage","question":"Where does state live?","depends_on":[],"consequential":true},` +
 		`{"temp_key":"b","title":"Pick logger","question":"Which logger?","depends_on":["a"],"consequential":false}` +
-		`]}` +
-		"\n```\n")
+		`]}`)
 
 	res, err := planningsurvey.Propose(context.Background(), backend, goalContext(t))
 	if err != nil {
@@ -60,7 +58,7 @@ func TestPropose_DecodesProposedDecisions(t *testing.T) {
 
 func TestPropose_RejectsBlankTempKey(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"decisions":[{"temp_key":"","title":"x","depends_on":[],"consequential":true}]}` + "\n```\n")
+	backend.ProgramDefault(`{"decisions":[{"temp_key":"","title":"x","depends_on":[],"consequential":true}]}`)
 
 	if _, err := planningsurvey.Propose(context.Background(), backend, goalContext(t)); err == nil {
 		t.Fatal("Propose: want error for blank temp_key, got nil")
@@ -69,11 +67,10 @@ func TestPropose_RejectsBlankTempKey(t *testing.T) {
 
 func TestPropose_RejectsDuplicateTempKey(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" +
-		`{"decisions":[` +
+	backend.ProgramDefault(`{"decisions":[` +
 		`{"temp_key":"a","title":"x","depends_on":[],"consequential":true},` +
 		`{"temp_key":"a","title":"y","depends_on":[],"consequential":true}` +
-		`]}` + "\n```\n")
+		`]}`)
 
 	if _, err := planningsurvey.Propose(context.Background(), backend, goalContext(t)); err == nil {
 		t.Fatal("Propose: want error for duplicate temp_key, got nil")
@@ -82,7 +79,7 @@ func TestPropose_RejectsDuplicateTempKey(t *testing.T) {
 
 func TestPropose_RejectsBlankTitle(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"decisions":[{"temp_key":"a","title":"","depends_on":[],"consequential":true}]}` + "\n```\n")
+	backend.ProgramDefault(`{"decisions":[{"temp_key":"a","title":"","depends_on":[],"consequential":true}]}`)
 
 	if _, err := planningsurvey.Propose(context.Background(), backend, goalContext(t)); err == nil {
 		t.Fatal("Propose: want error for blank title, got nil")

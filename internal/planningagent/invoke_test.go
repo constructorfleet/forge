@@ -23,12 +23,9 @@ func buildDraftPrompt(req draftRequest) string {
 	return fmt.Sprintf("draft something about %s", req.Topic)
 }
 
-func TestInvokeStructured_ExtractsLastValidFencedBlock(t *testing.T) {
+func TestInvokeStructured_DecodesBareJSONResult(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-1", "some preamble\n"+
-		"```json\n{\"title\":\"wrong\",\"body\":\"stale\"}\n```\n"+
-		"more text\n"+
-		"```json\n{\"title\":\"Right Title\",\"body\":\"Right body\"}\n```\n")
+	backend.ProgramResult("draft-1", `{"title":"Right Title","body":"Right body"}`)
 
 	res, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-1", draftRequest{Topic: "forge"}, buildDraftPrompt, nil,
@@ -37,7 +34,7 @@ func TestInvokeStructured_ExtractsLastValidFencedBlock(t *testing.T) {
 		t.Fatalf("InvokeStructured: %v", err)
 	}
 	if res.Title != "Right Title" || res.Body != "Right body" {
-		t.Errorf("res = %+v, want the last fenced block decoded", res)
+		t.Errorf("res = %+v, want the bare JSON result decoded", res)
 	}
 
 	invocations := backend.Invocations()
@@ -52,11 +49,9 @@ func TestInvokeStructured_ExtractsLastValidFencedBlock(t *testing.T) {
 	}
 }
 
-func TestInvokeStructured_SkipsBlocksFailingValidation(t *testing.T) {
+func TestInvokeStructured_FailingValidation_FailsPredictably(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-2",
-		"```json\n{\"title\":\"\",\"body\":\"no title\"}\n```\n"+
-			"```json\n{\"title\":\"Has Title\",\"body\":\"ok\"}\n```\n")
+	backend.ProgramResult("draft-2", `{"title":"","body":"no title"}`)
 
 	validate := func(r draftResult) error {
 		if r.Title == "" {
@@ -65,20 +60,17 @@ func TestInvokeStructured_SkipsBlocksFailingValidation(t *testing.T) {
 		return nil
 	}
 
-	res, err := planningagent.InvokeStructured[draftRequest, draftResult](
+	_, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-2", draftRequest{Topic: "forge"}, buildDraftPrompt, validate,
 	)
-	if err != nil {
-		t.Fatalf("InvokeStructured: %v", err)
-	}
-	if res.Title != "Has Title" {
-		t.Errorf("res.Title = %q, want the block passing validation, not an earlier one", res.Title)
+	if err == nil {
+		t.Fatal("InvokeStructured: want error for result failing validation, got nil")
 	}
 }
 
-func TestInvokeStructured_NoValidBlock_FailsPredictably(t *testing.T) {
+func TestInvokeStructured_NonJSONResult_FailsPredictably(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-3", "no fenced block here, just prose")
+	backend.ProgramResult("draft-3", "no json here, just prose")
 
 	_, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-3", draftRequest{Topic: "forge"}, buildDraftPrompt, nil,
@@ -90,7 +82,7 @@ func TestInvokeStructured_NoValidBlock_FailsPredictably(t *testing.T) {
 
 func TestInvokeStructured_MalformedJSON_FailsPredictably(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-4", "```json\n{not valid json\n```\n")
+	backend.ProgramResult("draft-4", "{not valid json")
 
 	_, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-4", draftRequest{Topic: "forge"}, buildDraftPrompt, nil,
@@ -115,7 +107,7 @@ func TestInvokeStructured_BackendError_Propagates(t *testing.T) {
 func TestInvokeStructured_RetriesTransientBackendErrorThenSucceeds(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramError("draft-8", errors.New("transient boom"))
-	backend.ProgramResult("draft-8", "```json\n{\"title\":\"Recovered\",\"body\":\"ok\"}\n```\n")
+	backend.ProgramResult("draft-8", "{\"title\":\"Recovered\",\"body\":\"ok\"}")
 
 	res, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-8", draftRequest{Topic: "forge"}, buildDraftPrompt, nil,
@@ -139,7 +131,7 @@ func TestInvokeStructured_RetriesTransientBackendErrorThenSucceeds(t *testing.T)
 func TestInvokeStructured_RetriesStrictDecodeFailureThenSucceeds(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
 	backend.ProgramResult("draft-9", "not json at all, no fenced block either")
-	backend.ProgramResult("draft-9", "```json\n{\"title\":\"Recovered\",\"body\":\"ok\"}\n```\n")
+	backend.ProgramResult("draft-9", "{\"title\":\"Recovered\",\"body\":\"ok\"}")
 
 	res, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "draft-9", draftRequest{Topic: "forge"}, buildDraftPrompt, nil,
@@ -157,8 +149,8 @@ func TestInvokeStructured_RetriesStrictDecodeFailureThenSucceeds(t *testing.T) {
 
 func TestInvokeStructured_RetriesValidateFailureThenSucceeds(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-10", "```json\n{\"title\":\"\",\"body\":\"missing title\"}\n```\n")
-	backend.ProgramResult("draft-10", "```json\n{\"title\":\"Has Title\",\"body\":\"ok\"}\n```\n")
+	backend.ProgramResult("draft-10", "{\"title\":\"\",\"body\":\"missing title\"}")
+	backend.ProgramResult("draft-10", "{\"title\":\"Has Title\",\"body\":\"ok\"}")
 
 	validate := func(r draftResult) error {
 		if r.Title == "" {
@@ -233,7 +225,7 @@ func TestInvokeStructured_NilBuild_FailsPredictably(t *testing.T) {
 
 func TestFakeBackend_Invoke_RecordsInvokeRequestFields(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("draft-7", "```json\n{\"title\":\"t\",\"body\":\"b\"}\n```\n")
+	backend.ProgramResult("draft-7", `{"title":"t","body":"b"}`)
 
 	raw, err := backend.Invoke(context.Background(), planningagent.InvokeRequest{
 		Key:    "draft-7",
@@ -243,7 +235,7 @@ func TestFakeBackend_Invoke_RecordsInvokeRequestFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if raw != "```json\n{\"title\":\"t\",\"body\":\"b\"}\n```\n" {
+	if raw != `{"title":"t","body":"b"}` {
 		t.Errorf("Invoke raw = %q, want programmed result", raw)
 	}
 
@@ -264,9 +256,9 @@ func TestFakeBackend_Invoke_RecordsInvokeRequestFields(t *testing.T) {
 
 func TestFakeBackend_DefaultAndRepeatLast(t *testing.T) {
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n{\"title\":\"default\",\"body\":\"d\"}\n```\n")
-	backend.ProgramResult("scripted", "```json\n{\"title\":\"first\",\"body\":\"a\"}\n```\n")
-	backend.ProgramResult("scripted", "```json\n{\"title\":\"second\",\"body\":\"b\"}\n```\n")
+	backend.ProgramDefault(`{"title":"default","body":"d"}`)
+	backend.ProgramResult("scripted", `{"title":"first","body":"a"}`)
+	backend.ProgramResult("scripted", `{"title":"second","body":"b"}`)
 
 	res, err := planningagent.InvokeStructured[draftRequest, draftResult](
 		context.Background(), backend, "unscripted", draftRequest{}, buildDraftPrompt, nil,

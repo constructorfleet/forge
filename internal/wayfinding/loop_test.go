@@ -49,9 +49,9 @@ func TestLoop_ResolvesReadyDecisionsInDependencyOrder(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"SQLite"}`+"\n```\n")
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"stdlib log"}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", `{"outcome":"SQLite"}`)
+	backend.ProgramResult("decision-resolution", `{"outcome":"stdlib log"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -87,14 +87,12 @@ func TestLoop_SpawnsNewUnknownsAndRecomputesFrontier(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+
-		`{"outcome":"SQLite","new_unknowns":[`+
+	backend.ProgramResult("decision-resolution", `{"outcome":"SQLite","new_unknowns":[`+
 		`{"temp_key":"a","title":"Pick migration tool","question":"Which tool?","depends_on":[],"consequential":true},`+
 		`{"temp_key":"skip","title":"incidental","consequential":false}`+
-		`]}`+
-		"\n```\n")
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"golang-migrate"}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+		`]}`)
+	backend.ProgramResult("decision-resolution", `{"outcome":"golang-migrate"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -129,8 +127,8 @@ func TestLoop_EmptyFrontierRunsReadinessReviewAndCompletesWhenReady(t *testing.T
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"outcome":"should not be invoked"}` + "\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramDefault(`{"outcome":"should not be invoked"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -155,13 +153,11 @@ func TestLoop_NotReadyMaterializesDecisionsAndContinues(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-readiness-review", "```json\n"+
-		`{"status":"NOT_READY","decisions":[`+
+	backend.ProgramResult("planning-readiness-review", `{"status":"NOT_READY","decisions":[`+
 		`{"temp_key":"a","title":"Pick auth","question":"Which auth strategy?","depends_on":[],"consequential":true}`+
-		`]}`+
-		"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"OAuth"}`+"\n```\n")
+		`]}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
+	backend.ProgramResult("decision-resolution", `{"outcome":"OAuth"}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -191,7 +187,7 @@ func TestLoop_NotReadyWithNoDecisionsIsAnError(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": d}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"status":"NOT_READY","decisions":[]}` + "\n```\n")
+	backend.ProgramDefault(`{"status":"NOT_READY","decisions":[]}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err == nil {
@@ -212,8 +208,8 @@ func TestLoop_ResumesFromPartiallyResolvedState(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"stdlib log"}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", `{"outcome":"stdlib log"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	persist := &fakePersist{}
 	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
@@ -240,9 +236,9 @@ func TestLoop_NeedsHumanPausesOnlyAffectedPathAndContinuesOthers(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`+"\n```\n")
-	backend.ProgramResult("decision-resolution", "```json\n"+`{"outcome":"Redis"}`+"\n```\n")
-	backend.ProgramResult("planning-readiness-review", "```json\n"+`{"status":"READY_FOR_SPEC","decisions":[]}`+"\n```\n")
+	backend.ProgramResult("decision-resolution", `{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`)
+	backend.ProgramResult("decision-resolution", `{"outcome":"Redis"}`)
+	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
 	var handled []string
 	onNeedsHuman := func(ctx context.Context, decisionID string, decision *planning.Artifact, detail decisionresolution.NeedsHumanDetail) (*planning.Artifact, error) {
@@ -281,7 +277,7 @@ func TestLoop_NeedsHumanWithoutHandlerReturnsError(t *testing.T) {
 	decisions := map[string]*planning.Artifact{"001-storage": questionDecision("Which vendor?")}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramDefault("```json\n" + `{"needs_human":{"question":"Which vendor?"}}` + "\n```\n")
+	backend.ProgramDefault(`{"needs_human":{"question":"Which vendor?"}}`)
 
 	persist := &fakePersist{}
 	err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil)

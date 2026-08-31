@@ -44,21 +44,21 @@ func runFullPipeline(t *testing.T, ctx context.Context) pipeline {
 	loader := newMemLoader(goal)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-survey", fenced(`{"decisions":[
+	backend.ProgramResult("planning-survey", bareJSON(`{"decisions":[
 		{"temp_key":"store","title":"Storage engine","question":"Which storage engine?",
 		 "depends_on":[],"consequential":true}
 	]}`))
-	backend.ProgramResult("decision-resolution", fenced(`{"outcome":"SQLite","rationale":"single node",
+	backend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"SQLite","rationale":"single node",
 		"consequences":"no clustering","assumptions":"one writer","new_unknowns":[]}`))
-	backend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
 	programApprovedSpec(backend)
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":[]},
 		{"key":"TKT-002","objective":"List widgets","requirements":["REQ-002"],
 		 "acceptance_criteria":["listing returns every widget"],"dependencies":["TKT-001"]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"good","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"good","findings":[]}`))
 
 	surveyPC, err := planningagent.Compile(repoCtx, []planningagent.NamedArtifact{{ID: "goal", Artifact: goal}}, nil)
 	if err != nil {

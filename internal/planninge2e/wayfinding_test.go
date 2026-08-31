@@ -38,20 +38,20 @@ func TestScenario01_GoalRequiringNoDecisions(t *testing.T) {
 	loader := newMemLoader(goal)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-survey", fenced(`{"decisions":[]}`))
-	backend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
-	backend.ProgramResult("specification-generation", fenced(`{
+	backend.ProgramResult("planning-survey", bareJSON(`{"decisions":[]}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	backend.ProgramResult("specification-generation", bareJSON(`{
 		"summary": "A widget service backed by SQLite",
 		"requirements": [{"id":"REQ-001","description":"Widgets persist across restarts"}],
 		"non_goals": ["No distributed storage"],
 		"decision_refs": []
 	}`))
-	backend.ProgramResult("specification-review", fenced(`{"verdict":"APPROVED","summary":"clear","findings":[]}`))
-	backend.ProgramResult("ticket-plan-generation", fenced(`{"tickets":[
+	backend.ProgramResult("specification-review", bareJSON(`{"verdict":"APPROVED","summary":"clear","findings":[]}`))
+	backend.ProgramResult("ticket-plan-generation", bareJSON(`{"tickets":[
 		{"key":"TKT-001","objective":"Persist widgets","requirements":["REQ-001"],
 		 "acceptance_criteria":["widgets survive a restart"],"dependencies":[]}
 	]}`))
-	backend.ProgramResult("ticket-plan-review", fenced(`{"verdict":"APPROVED","summary":"covers everything","findings":[]}`))
+	backend.ProgramResult("ticket-plan-review", bareJSON(`{"verdict":"APPROVED","summary":"covers everything","findings":[]}`))
 
 	// Survey -> materialize: nothing consequential to record.
 	surveyPC, err := planningagent.Compile(repoCtx, []planningagent.NamedArtifact{{ID: "goal", Artifact: goal}}, nil)
@@ -139,7 +139,7 @@ func TestScenario02_MultipleDependentDecisions(t *testing.T) {
 	loader := newMemLoader(goal)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-survey", fenced(`{"decisions":[
+	backend.ProgramResult("planning-survey", bareJSON(`{"decisions":[
 		{"temp_key":"schema","title":"Schema shape","question":"What shape is the widget row?",
 		 "depends_on":["store"],"consequential":true},
 		{"temp_key":"store","title":"Storage engine","question":"Which storage engine?",
@@ -149,9 +149,9 @@ func TestScenario02_MultipleDependentDecisions(t *testing.T) {
 		{"temp_key":"logger","title":"Logging library","question":"Which logger?",
 		 "depends_on":[],"consequential":false}
 	]}`))
-	backend.ProgramResult("decision-resolution", fenced(`{"outcome":"SQLite","rationale":"single node",
+	backend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"SQLite","rationale":"single node",
 		"consequences":"no clustering","assumptions":"one writer","new_unknowns":[]}`))
-	backend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
 
 	surveyPC, err := planningagent.Compile(repoCtx, []planningagent.NamedArtifact{{ID: "goal", Artifact: goal}}, nil)
 	if err != nil {
@@ -241,18 +241,18 @@ func TestScenario03_DecisionSpawnsBlockingDecision(t *testing.T) {
 	loader := newMemLoader(goal)
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("planning-survey", fenced(`{"decisions":[
+	backend.ProgramResult("planning-survey", bareJSON(`{"decisions":[
 		{"temp_key":"store","title":"Storage engine","question":"Which storage engine?",
 		 "depends_on":[],"consequential":true}
 	]}`))
 	// Resolving the storage question surfaces a brand new blocking unknown.
-	backend.ProgramResult("decision-resolution", fenced(`{"outcome":"SQLite","rationale":"single node",
+	backend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"SQLite","rationale":"single node",
 		"consequences":"needs a backup story","assumptions":"one writer",
 		"new_unknowns":[{"temp_key":"backup","title":"Backup strategy",
 		 "question":"How are SQLite files backed up?","depends_on":[],"consequential":true}]}`))
-	backend.ProgramResult("decision-resolution", fenced(`{"outcome":"Litestream","rationale":"streaming replication",
+	backend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"Litestream","rationale":"streaming replication",
 		"consequences":"one more daemon","assumptions":"object storage exists","new_unknowns":[]}`))
-	backend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
 
 	surveyPC, err := planningagent.Compile(repoCtx, []planningagent.NamedArtifact{{ID: "goal", Artifact: goal}}, nil)
 	if err != nil {
@@ -336,10 +336,10 @@ func TestScenario04_NeedsHumanAndManualResume(t *testing.T) {
 	}
 
 	backend := planningagent.NewFakeBackend()
-	backend.ProgramResult("decision-resolution", fenced(`{"needs_human":
+	backend.ProgramResult("decision-resolution", bareJSON(`{"needs_human":
 		{"question":"Which cloud account should hold the backups?",
 		 "context":"Only you can authorize the billing account."}}`))
-	backend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
 
 	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
 	open := &planning.Artifact{
@@ -448,10 +448,10 @@ func TestScenario04_NeedsHumanAndManualResume(t *testing.T) {
 	// invocation: the loop keeps no state beyond the Decision artifacts it
 	// was handed.
 	resumeBackend := planningagent.NewFakeBackend()
-	resumeBackend.ProgramResult("decision-resolution", fenced(`{"outcome":"platform-backups account",
+	resumeBackend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"platform-backups account",
 		"rationale":"the human authorized it","consequences":"billing lands on the platform team",
 		"assumptions":"","new_unknowns":[]}`))
-	resumeBackend.ProgramResult("planning-readiness-review", fenced(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	resumeBackend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
 	if err := wayfinding.Loop(ctx, resumeBackend, repoCtx, goal, goalRef, decisions, loader.persist, pause.Handle); err != nil {
 		t.Fatalf("second wayfinding.Loop: %v", err)
 	}
