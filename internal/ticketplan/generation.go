@@ -3,6 +3,7 @@ package ticketplan
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -49,6 +50,12 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "You are generating a ticket plan from an approved specification.\n\n"
 	prompt += "## Repository Context\n"
 	prompt += fmt.Sprintf("Base Revision: %s\n\n", req.Context.Repository.BaseRevision)
+	if req.Context.Repository.ProjectStructure != "" {
+		prompt += fmt.Sprintf("### Project Structure\n%s\n\n", req.Context.Repository.ProjectStructure)
+	}
+	if len(req.Context.Repository.Languages) > 0 {
+		prompt += fmt.Sprintf("### Languages\n%s\n\n", strings.Join(req.Context.Repository.Languages, ", "))
+	}
 
 	if req.Context.Goal != nil {
 		prompt += "## Goal\n"

@@ -3,8 +3,10 @@ package specengine_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/specengine"
@@ -300,6 +302,119 @@ func (f *fakeLoaderForTest) LoadSpec(ctx context.Context, featureID string) (*pl
 func (f *fakeLoaderForTest) SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error {
 	f.ticketPlan = tp
 	return nil
+}
+
+func TestSpecEngineGenerateSpec_PropagatesRepositoryStructureToPrompt(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	loader := &fakeLoaderForTest{goal: goal}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("specification-generation", `{
+		"summary": "A widget builder",
+		"requirements": [{"id": "REQ-001", "description": "Widget must be buildable"}],
+		"non_goals": [],
+		"decision_refs": []
+	}`)
+	backend.ProgramResult("specification-review", `{
+		"verdict": "APPROVED",
+		"summary": "ok",
+		"findings": []
+	}`)
+
+	engine := specengine.NewSpecEngine(backend)
+	engine.Repository = agent.RepositoryContext{
+		BaseRevision:     "base-rev",
+		ProjectStructure: "cmd/\ninternal/\ngo.mod",
+		Languages:        []string{"Go"},
+	}
+
+	if err := engine.GenerateSpec(context.Background(), "feature-1", loader); err != nil {
+		t.Fatalf("GenerateSpec failed: %v", err)
+	}
+
+	found := false
+	for _, inv := range backend.Invocations() {
+		if inv.Key == "specification-generation" {
+			found = true
+			if !strings.Contains(inv.Prompt, "cmd/\ninternal/\ngo.mod") {
+				t.Errorf("specification-generation prompt missing project structure: %q", inv.Prompt)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("specification-generation was never invoked")
+	}
+}
+
+func TestSpecEngineGenerateTicketPlan_PropagatesRepositoryStructureToPrompt(t *testing.T) {
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Revision: "goal-rev",
+		State:    "approved",
+		Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}},
+	}
+
+	spec := &planning.Artifact{
+		Kind:  planning.KindSpec,
+		State: "approved",
+		Sections: []planning.Section{
+			{Heading: "Context", Body: "A widget builder"},
+			{Heading: "Requirements", Body: "REQ-001: Widget must be buildable"},
+			{Heading: "Non-Goals", Body: ""},
+		},
+	}
+	spec.Revision = planning.ComputeRevision(spec)
+	spec.ApprovedRevision = spec.Revision
+
+	loader := &fakeLoaderForTest{goal: goal, spec: spec}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("ticket-plan-generation", `{
+		"tickets": [
+			{
+				"key": "TKT-001",
+				"objective": "Implement widget builder core",
+				"requirements": ["REQ-001"],
+				"acceptance_criteria": ["Widget builds successfully"],
+				"dependencies": []
+			}
+		]
+	}`)
+	backend.ProgramResult("ticket-plan-review", `{
+		"verdict": "APPROVED",
+		"summary": "ok",
+		"findings": []
+	}`)
+
+	engine := specengine.NewSpecEngine(backend)
+	engine.Repository = agent.RepositoryContext{
+		BaseRevision:     "base-rev",
+		ProjectStructure: "cmd/\ninternal/\ngo.mod",
+		Languages:        []string{"Go"},
+	}
+
+	if err := engine.GenerateTicketPlan(context.Background(), "feature-1", loader); err != nil {
+		t.Fatalf("GenerateTicketPlan failed: %v", err)
+	}
+
+	found := false
+	for _, inv := range backend.Invocations() {
+		if inv.Key == "ticket-plan-generation" {
+			found = true
+			if !strings.Contains(inv.Prompt, "cmd/\ninternal/\ngo.mod") {
+				t.Errorf("ticket-plan-generation prompt missing project structure: %q", inv.Prompt)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("ticket-plan-generation was never invoked")
+	}
 }
 
 func TestSpecEngineGenerateTicketPlan(t *testing.T) {
