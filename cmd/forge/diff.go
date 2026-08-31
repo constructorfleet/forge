@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // gitDiffProducer implements engine.DiffProducer with the real git binary.
@@ -12,21 +15,40 @@ import (
 // resolveBaseRevision/repoFromOrigin already do for other git operations.
 type gitDiffProducer struct{}
 
-// Diff runs `git diff base...HEAD` inside workspacePath and returns its
-// output. The three-dot form diffs against the merge base rather than base
-// itself, matching CONTEXT.md "Review"'s "diff (base...HEAD)" wording.
-//
-// `git diff` only ever reflects committed work — it diffs base against
-// HEAD, not the working tree. Today's implementation Agent never commits
-// (ticket 22 owns that), so until ticket 22 lands, a real Reviewer wired up
-// ahead of it would see an empty diff here regardless of what the Agent
-// actually changed on disk. Ticket 22's commit step must run (or this
-// producer must otherwise account for uncommitted changes) before a
-// production Reviewer can see real content.
+// Diff returns the publishable change set from base's merge base with HEAD
+// through the current working tree. That preserves CONTEXT.md "Review"'s
+// base...HEAD comparison for committed work while also including the staged,
+// unstaged, and untracked files gitPublisher.Commit would publish later.
 func (gitDiffProducer) Diff(ctx context.Context, workspacePath, base string) (string, error) {
-	out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "diff", base+"...HEAD").Output()
+	mergeBase, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "merge-base", base, "HEAD").Output()
 	if err != nil {
-		return "", fmt.Errorf("forge: git diff %s...HEAD in %s: %w", base, workspacePath, err)
+		return "", fmt.Errorf("forge: git merge-base %s HEAD in %s: %w", base, workspacePath, err)
 	}
-	return string(out), nil
+	anchor := strings.TrimSpace(string(mergeBase))
+
+	var diff bytes.Buffer
+	out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "diff", anchor).Output()
+	if err != nil {
+		return "", fmt.Errorf("forge: git diff %s in %s: %w", anchor, workspacePath, err)
+	}
+	diff.Write(out)
+
+	untracked, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return "", fmt.Errorf("forge: git ls-files --others in %s: %w", workspacePath, err)
+	}
+	for _, path := range bytes.Split(bytes.TrimRight(untracked, "\x00"), []byte{0}) {
+		if len(path) == 0 {
+			continue
+		}
+		out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "diff", "--no-index", "--", "/dev/null", string(path)).CombinedOutput()
+		if err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				return "", fmt.Errorf("forge: git diff --no-index /dev/null %s in %s: %w: %s", path, workspacePath, err, out)
+			}
+		}
+		diff.Write(out)
+	}
+	return diff.String(), nil
 }

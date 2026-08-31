@@ -115,12 +115,13 @@ const emptyDiffNeedsInfoContext = "Forge refuses to open an empty pull request. 
 
 // runCommitAndPR implements ticket 22's COMMITTING and PR_CREATING stages,
 // entered once Review approves an implementation (or, with no Reviewer
-// configured, once Quality Gates pass — see runReview): commit the
-// Workspace's validated work (Publisher.Commit) with a configurable
-// message template, push the branch (Publisher.Push), create or recover a pull request
-// (PRTracker.CreatePullRequest, idempotent by head branch), persist the PR
-// id/url and commit SHA, and transition the Issue through PR_CREATING to
-// CI_PENDING.
+// configured, once Quality Gates pass — see runReview): first refuse an
+// empty diff by routing the Issue to NEEDS_INFO before publication, then
+// commit the Workspace's validated work (Publisher.Commit) with a
+// configurable message template, push the branch (Publisher.Push), create
+// or recover a pull request (PRTracker.CreatePullRequest, idempotent by
+// head branch), persist the PR id/url and commit SHA, and transition the
+// Issue through PR_CREATING to CI_PENDING.
 //
 // Both Publisher and PRTracker are optional seams, like Reviewer/Diff
 // before them (see Engine.Reviewer's doc comment): nil leaves COMMITTING a
@@ -208,8 +209,9 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 
 // guardEmptyDiff is the empty-diff pre-publication guard: before the
 // Workspace is committed or pushed, it re-derives the diff against
-// workerBase (the same DiffProducer seam runReview uses) and, if the
-// Agent's overall change set is empty, routes the Issue to NEEDS_INFO
+// workerBase (the same DiffProducer seam runReview uses; production includes
+// staged, unstaged, and untracked worktree changes) and, if the Agent's
+// overall change set is empty, routes the Issue to NEEDS_INFO
 // instead of letting runCommitAndPR publish an empty branch or PR. This
 // catches an Agent that reported StatusImplemented (and, with no Reviewer
 // configured, sailed straight through REVIEWING) without actually changing

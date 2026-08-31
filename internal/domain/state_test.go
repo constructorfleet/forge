@@ -33,6 +33,7 @@ func legalTransitions() []struct {
 		{domain.StateReviewing, domain.StateCommitting},
 		{domain.StateReviewing, domain.StateFailed},
 		{domain.StateCommitting, domain.StatePRCreating},
+		{domain.StateCommitting, domain.StateNeedsInfo},
 		{domain.StateCommitting, domain.StateFailed},
 		{domain.StatePRCreating, domain.StateCIPending},
 		{domain.StateCIPending, domain.StateCIFailed},
