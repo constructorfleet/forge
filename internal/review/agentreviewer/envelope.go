@@ -26,6 +26,13 @@ type axisFinding struct {
 type envelope struct {
 	Axis     string        `json:"axis"`
 	Findings []axisFinding `json:"findings"`
+
+	// Assurances is a list of things this axis explicitly checked and
+	// found clean/correct (issue #176), as opposed to Findings (defects).
+	// It never affects the verdict — synthesizeFindings only uses it to
+	// detect assurance-vs-finding tensions against a DIFFERENT axis's
+	// findings (see assuranceFindingTensions in synthesizer.go).
+	Assurances []string `json:"assurances"`
 }
 
 // parseEnvelope extracts and decodes the JSON findings envelope from raw,

@@ -19,6 +19,26 @@ func TestParseEnvelope_ParsesCleanJSON(t *testing.T) {
 	}
 }
 
+func TestParseEnvelope_ParsesAssurances(t *testing.T) {
+	env, err := parseEnvelope(`{"axis":"bugs","findings":[],"assurances":["error handling in Save is correct and complete"]}`)
+	if err != nil {
+		t.Fatalf("parseEnvelope() error = %v", err)
+	}
+	if len(env.Assurances) != 1 || env.Assurances[0] != "error handling in Save is correct and complete" {
+		t.Errorf("Assurances = %+v, want 1 assurance", env.Assurances)
+	}
+}
+
+func TestParseEnvelope_MissingAssurances_Empty(t *testing.T) {
+	env, err := parseEnvelope(`{"axis":"bugs","findings":[]}`)
+	if err != nil {
+		t.Fatalf("parseEnvelope() error = %v", err)
+	}
+	if len(env.Assurances) != 0 {
+		t.Errorf("Assurances = %+v, want empty when the envelope omits the field", env.Assurances)
+	}
+}
+
 func TestParseEnvelope_TolerantOfMarkdownCodeFence(t *testing.T) {
 	raw := "```json\n{\"axis\":\"bugs\",\"findings\":[]}\n```"
 	env, err := parseEnvelope(raw)
