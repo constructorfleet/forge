@@ -59,7 +59,36 @@ type AgentRequest struct {
 	// semantic navigation, the pre-existing behavior for every Agent call
 	// before this field existed.
 	Semantic SemanticDescriptor
+
+	// Mode selects how the backend Adapter frames this invocation. The zero
+	// value (ModeImplement) is the pre-existing implementation task —
+	// schema-enforced {status, summary} result envelope, implement/TDD
+	// framing — for every call before this field existed. ModeReview is a
+	// read-only analysis task whose deliverable is the agent's final message
+	// itself (e.g. a review findings envelope the caller parses), not a code
+	// change; a backend that honors it must not enforce the implement-mode
+	// result envelope on that output. A backend that does not recognize Mode
+	// simply runs its default implement-mode behavior.
+	Mode AgentMode
 }
+
+// AgentMode selects how a backend Adapter frames an Execute invocation (see
+// AgentRequest.Mode).
+type AgentMode string
+
+const (
+	// ModeImplement is the default: an implementation task whose outcome is
+	// reported through the backend's structured {status, summary} result
+	// envelope. The zero value, so every AgentRequest built before Mode
+	// existed keeps this behavior.
+	ModeImplement AgentMode = ""
+
+	// ModeReview is a read-only analysis task (e.g. one review axis): the
+	// agent's final message is the deliverable itself, returned verbatim as
+	// AgentResult.Summary for the caller to parse, with none of implement
+	// mode's result-envelope enforcement or implement/TDD prompt framing.
+	ModeReview AgentMode = "REVIEW"
+)
 
 // RepositoryContext is relatively stable information shared across all
 // Workers in an Execution, compiled once per Execution (see CONTEXT.md

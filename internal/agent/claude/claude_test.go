@@ -224,6 +224,88 @@ func TestExecute_ErrorResultLineFailsDistinctly(t *testing.T) {
 	}
 }
 
+// TestExecute_ReviewModeOmitsJSONSchema is the red test for issue #183:
+// review mode is a raw-analysis task whose deliverable is the agent's final
+// message itself (a review findings envelope), so the CLI must NOT be
+// invoked with `--json-schema` — that enforcement forces the answer into
+// {status, summary} and clobbers the envelope.
+func TestExecute_ReviewModeOmitsJSONSchema(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"axis":"bugs","findings":[],"assurances":[]}`
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeReview
+	if _, err := a.Execute(context.Background(), req); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	for i, arg := range calls[0].args {
+		if arg == "--json-schema" {
+			t.Fatalf("review-mode args must omit --json-schema, got %v", calls[0].args)
+		}
+		_ = i
+	}
+}
+
+// TestExecute_ReviewModeReturnsRawFinalTextAsSummary covers issue #183's
+// core: in review mode the agent's reconstructed final message is returned
+// verbatim as AgentResult.Summary (with Status IMPLEMENTED), so the reviewer
+// can parse the findings envelope out of it — no structured {status,
+// summary} decoding is applied.
+func TestExecute_ReviewModeReturnsRawFinalTextAsSummary(t *testing.T) {
+	var calls []recordedCall
+	envelope := `{"axis":"bugs","findings":[{"severity":"HIGH","confidence":0.9,"file":"main.go","line":42,"message":"unhandled error"}],"assurances":["error paths are logged"]}`
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":` + mustJSONString(t, envelope) + "}\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeReview
+	result, err := a.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED", result.Status)
+	}
+	if strings.TrimSpace(result.Summary) != envelope {
+		t.Fatalf("Summary = %q, want the raw findings envelope %q", result.Summary, envelope)
+	}
+}
+
+// TestExecute_ReviewModeEmptyOutputFails covers the one failure review mode
+// can detect on its own: an empty final message means the axis produced no
+// reviewable output, which must surface as FAILED (so the reviewer's
+// per-axis retry can react) rather than an empty, silently-parsed summary.
+func TestExecute_ReviewModeEmptyOutputFails(t *testing.T) {
+	var calls []recordedCall
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":""}` + "\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeReview
+	result, err := a.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusFailed {
+		t.Fatalf("Status = %q, want FAILED", result.Status)
+	}
+}
+
+// mustJSONString encodes s as a JSON string literal (with surrounding
+// quotes and escaping), for embedding inside a stream-json "result" field.
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	return string(b)
+}
+
 func TestExecute_DefaultPermissionModeIsBypassPermissions(t *testing.T) {
 	var calls []recordedCall
 	stdout := "```json\n" + `{"status":"IMPLEMENTED","summary":"done"}` + "\n```\n"
@@ -905,6 +987,58 @@ func TestBuildPrompt_InstructsTestDrivenDevelopment(t *testing.T) {
 	for _, want := range []string{"Test-Driven Development", "red", "green", "seam"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing TDD guidance %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// TestBuildPrompt_ReviewModeIsReadOnlyAnalysis covers issue #183: a review
+// invocation must NOT carry implement-mode framing — no "Implement the
+// Issue's requirements", no TDD guidance, no {status,…} result contract —
+// since those steer the agent toward writing a prose summary instead of the
+// findings envelope its rubric (carried in Policy.Notes) asks for. It must
+// instead carry read-only review rules and the Policy.Notes rubric verbatim.
+func TestBuildPrompt_ReviewModeIsReadOnlyAnalysis(t *testing.T) {
+	req := baseRequest()
+	req.Mode = agent.ModeReview
+	req.Policy.Notes = "REVIEW-RUBRIC-MARKER: emit only the findings JSON object."
+
+	prompt := buildPrompt(req)
+
+	if !strings.Contains(prompt, "REVIEW-RUBRIC-MARKER") {
+		t.Fatalf("review prompt missing Policy.Notes rubric:\n%s", prompt)
+	}
+	for _, forbidden := range []string{
+		"Implement the Issue's requirements",
+		"Test-Driven Development",
+		`"status": "IMPLEMENTED"`,
+		"Do NOT create pull requests.",
+	} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("review prompt must not contain implement-mode framing %q:\n%s", forbidden, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "REVIEWING") && !strings.Contains(prompt, "reviewing") {
+		t.Fatalf("review prompt should frame the task as a review:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Do NOT modify") {
+		t.Fatalf("review prompt should be read-only (no file modification):\n%s", prompt)
+	}
+}
+
+// TestBuildPrompt_ImplementModeUnchanged guards that the default (implement)
+// mode still carries its full framing after issue #183's review-mode split.
+func TestBuildPrompt_ImplementModeUnchanged(t *testing.T) {
+	req := baseRequest()
+
+	prompt := buildPrompt(req)
+
+	for _, want := range []string{
+		"Implement the Issue's requirements",
+		"Test-Driven Development",
+		"Report your outcome as",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("implement prompt missing %q:\n%s", want, prompt)
 		}
 	}
 }
