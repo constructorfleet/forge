@@ -18,13 +18,13 @@
 // review.VerdictApproved, with any lower-severity or below-floor findings
 // still attached to Result.Findings as advisory signal.
 //
-// Issue #159's combine is deliberately a simple concatenation of the three
-// axes' findings — no cross-axis dedup, confidence-fold, ranking, or
-// tension detection. That is the deterministic synthesizer, a separate
-// later ticket (#160). Degradation handling for one axis's malformed
-// envelope or Execute error (#161) and full audit persistence (#162) are
-// also separate, later tickets — this package deliberately does none of
-// that: an axis error still propagates as Review's error, per #158's
+// combine itself delegates to synthesizeFindings (synthesizer.go), issue
+// #160's deterministic synthesizer: cross-axis dedup, confidence-fold,
+// ranking, and tension detection over the merged set, all a pure function
+// of the three axes' outcomes. Degradation handling for one axis's
+// malformed envelope or Execute error (#161) and full audit persistence
+// (#162) are separate, later tickets — this package deliberately does none
+// of that: an axis error still propagates as Review's error, per #158's
 // original behavior.
 package agentreviewer
 
