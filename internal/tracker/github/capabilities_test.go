@@ -111,4 +111,27 @@ func TestGetReviewsDelegatesToPullRequestReviewsAndOmitsProviderID(t *testing.T)
 	if reviews[0].Author != want.Author || reviews[0].State != want.State || reviews[0].Body != want.Body {
 		t.Fatalf("review = %+v, want %+v", reviews[0], want)
 	}
+	if reviews[0].RawDetail != "APPROVED" {
+		t.Fatalf("review.RawDetail = %q, want raw provider state %q", reviews[0].RawDetail, "APPROVED")
+	}
+}
+
+func TestGetChangeRequestMergeStatusPreservesRawDetail(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/widgets/pulls/293" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"mergeable_state":"dirty","merged":false}`))
+	})
+
+	status, err := c.GetChangeRequestMergeStatus(context.Background(), tracker.ChangeRequestRef{Provider: "github", Number: 293})
+	if err != nil {
+		t.Fatalf("GetChangeRequestMergeStatus: %v", err)
+	}
+	if !status.Conflicted {
+		t.Fatal("status.Conflicted = false, want true")
+	}
+	if status.RawDetail != "dirty" {
+		t.Fatalf("status.RawDetail = %q, want raw mergeable_state %q", status.RawDetail, "dirty")
+	}
 }

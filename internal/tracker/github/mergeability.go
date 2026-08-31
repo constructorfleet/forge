@@ -34,5 +34,6 @@ func (c *Client) GetPullRequestMergeStatus(ctx context.Context, number int) (tra
 		Merged:     pr.Merged,
 		Conflicted: pr.MergeableState == "dirty",
 		Behind:     pr.MergeableState == "behind",
+		RawDetail:  pr.MergeableState,
 	}, nil
 }

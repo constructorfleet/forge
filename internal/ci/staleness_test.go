@@ -96,13 +96,15 @@ func TestWait_StalePR_RebasesAndForcePushesThenContinuesToChecks(t *testing.T) {
 				{{Name: "build", State: tracker.CheckSuccess}},
 			},
 		},
-		// stubTracker's GetPullRequestMergeStatus is also polled by
-		// pollConflict ahead of pollStale each iteration (see
-		// supervisor.go's Wait), so this Issue's single settle iteration
-		// makes two calls before the checks poll below transitions it to
-		// DONE; both must report Behind: true for pollStale to observe it.
-		behindUntil: 2,
-		mergedAfter: 4,
+		// Wait fetches merge status once per iteration and shares it across
+		// pollConflict/pollStale/evaluateMergeEligibility (see supervisor.go's
+		// Wait), so the first poll's single call must report Behind: true to
+		// drive the rebase, and the second poll's call reports both Behind:
+		// false (rebase already applied) and Merged: true (checks pass on
+		// the second poll too, so this is also the poll that must observe
+		// the PR as merged to transition to DONE).
+		behindUntil: 1,
+		mergedAfter: 2,
 	}
 
 	supervisor := ci.New(store, trk, config.Default(), "main")

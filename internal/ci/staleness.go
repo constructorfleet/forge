@@ -52,17 +52,19 @@ type ConflictBranchRestorer interface {
 }
 
 // pollStale checks pull request number's mergeability against its base
-// branch for staleness (GitHub's mergeable_state == "behind") and, when
-// stale, rebases the Issue's Workspace onto s.BaseBranch and force-pushes
-// the result so the pull request — and the checks Wait polls next —
-// reflect the target branch's current tip.
+// branch for staleness (GitHub's mergeable_state == "behind"), using the
+// merge status Wait already fetched once this poll (see
+// Supervisor.mergeStatus), and, when stale, rebases the Issue's Workspace
+// onto s.BaseBranch and force-pushes the result so the pull request — and
+// the checks Wait polls next — reflect the target branch's current tip.
 //
-// It is a no-op — handled false, no error — when s.Tracker doesn't
-// implement tracker.MergeStatusGetter, when s.Rebaser/s.Pusher are not
-// configured, or when the tracker doesn't report the pull request as
-// behind: Wait then falls back to its pre-issue-233 behavior of polling
-// checks against whatever state the PR is already in, exactly like
-// pollConflict/pollReviews do for their own optional capabilities.
+// It is a no-op — handled false, no error — when haveStatus is false
+// (s.Tracker doesn't implement tracker.MergeStatusGetter), when
+// s.Rebaser/s.Pusher are not configured, or when the tracker doesn't report
+// the pull request as behind: Wait then falls back to its pre-issue-233
+// behavior of polling checks against whatever state the PR is already in,
+// exactly like pollConflict/pollReviews do for their own optional
+// capabilities.
 //
 // A conflict-free rebase+push is not itself a terminal outcome for the
 // Issue: Wait keeps polling (handled false) so the very next step in this
@@ -70,17 +72,8 @@ type ConflictBranchRestorer interface {
 // conflict is routed to NEEDS_INFO instead, exactly like pollConflict's
 // unresolvable merge conflict — Forge attempts no automatic conflict
 // resolution.
-func (s *Supervisor) pollStale(ctx context.Context, executionID, issueID string, number int) (handled bool, state domain.IssueState, err error) {
-	getter, ok := s.Tracker.(tracker.MergeStatusGetter)
-	if !ok || s.Rebaser == nil || s.Pusher == nil {
-		return false, "", nil
-	}
-
-	status, err := getter.GetPullRequestMergeStatus(ctx, number)
-	if err != nil {
-		return true, "", fmt.Errorf("ci: poll merge status for issue %s: %w", issueID, err)
-	}
-	if !status.Behind {
+func (s *Supervisor) pollStale(ctx context.Context, executionID, issueID string, number int, status tracker.PullRequestMergeStatus, haveStatus bool) (handled bool, state domain.IssueState, err error) {
+	if !haveStatus || s.Rebaser == nil || s.Pusher == nil || !status.Behind {
 		return false, "", nil
 	}
 
