@@ -280,7 +280,13 @@ func interruptProcess(pid int) error {
 	if pid <= 0 {
 		return nil
 	}
-	return syscall.Kill(pid, syscall.SIGINT)
+	// A worker whose process is already gone (ESRCH) is exactly the state
+	// cancellation drives toward, so treat it as success rather than failing
+	// the whole cancel on a zombie Execution.
+	if err := syscall.Kill(pid, syscall.SIGINT); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 func waitForProcessExit(ctx context.Context, pid int) error {
