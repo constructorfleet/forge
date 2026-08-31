@@ -67,9 +67,21 @@ type AgentRequest struct {
 	// read-only analysis task whose deliverable is the agent's final message
 	// itself (e.g. a review findings envelope the caller parses), not a code
 	// change; a backend that honors it must not enforce the implement-mode
-	// result envelope on that output. A backend that does not recognize Mode
-	// simply runs its default implement-mode behavior.
+	// result envelope on that output. ModeStructured is a structured
+	// invocation: the backend uses Prompt verbatim, enforces Schema, and
+	// returns the schema-conforming result as AgentResult.Summary. A backend
+	// that does not recognize Mode simply runs its default implement-mode
+	// behavior.
 	Mode AgentMode
+
+	// Prompt is a verbatim prompt for a structured invocation (ModeStructured
+	// only). Empty for every other Mode, preserving existing behavior.
+	Prompt string
+
+	// Schema is a per-call JSON schema string the backend must enforce on its
+	// result for a structured invocation (ModeStructured only). Empty for
+	// every other Mode, preserving existing behavior.
+	Schema string
 }
 
 // AgentMode selects how a backend Adapter frames an Execute invocation (see
@@ -88,6 +100,12 @@ const (
 	// AgentResult.Summary for the caller to parse, with none of implement
 	// mode's result-envelope enforcement or implement/TDD prompt framing.
 	ModeReview AgentMode = "REVIEW"
+
+	// ModeStructured is a structured invocation: the backend uses
+	// AgentRequest.Prompt verbatim and enforces AgentRequest.Schema, then
+	// returns the schema-conforming result as AgentResult.Summary — the same
+	// deliverable-as-final-message convention ModeReview uses.
+	ModeStructured AgentMode = "STRUCTURED"
 )
 
 // RepositoryContext is relatively stable information shared across all
