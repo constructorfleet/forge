@@ -324,6 +324,116 @@ func TestLoad_InvalidTrackerType(t *testing.T) {
 	}
 }
 
+func TestDefault_ComposesGithubForEveryCapability(t *testing.T) {
+	cfg := Default()
+
+	if cfg.Provider != "github" {
+		t.Errorf("Provider = %q, want github", cfg.Provider)
+	}
+	if cfg.Tracker.Type != "github" {
+		t.Errorf("Tracker.Type = %q, want github", cfg.Tracker.Type)
+	}
+	if cfg.SCM.Type != "github" {
+		t.Errorf("SCM.Type = %q, want github", cfg.SCM.Type)
+	}
+	if cfg.CI.Type != "github" {
+		t.Errorf("CI.Type = %q, want github", cfg.CI.Type)
+	}
+}
+
+func TestLoad_TopLevelProviderComposesAllThreeCapabilities(t *testing.T) {
+	path := writeTemp(t, "provider: github\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Type != "github" {
+		t.Errorf("Tracker.Type = %q, want github", cfg.Tracker.Type)
+	}
+	if cfg.SCM.Type != "github" {
+		t.Errorf("SCM.Type = %q, want github", cfg.SCM.Type)
+	}
+	if cfg.CI.Type != "github" {
+		t.Errorf("CI.Type = %q, want github", cfg.CI.Type)
+	}
+}
+
+func TestLoad_ExplicitCapabilityBlockOverridesTopLevelProvider(t *testing.T) {
+	// tracker.type is set explicitly in the same file as the top-level
+	// provider sugar; the explicit block must win for tracker while scm/ci
+	// still fall back to composing from provider.
+	path := writeTemp(t, "provider: github\ntracker:\n  type: github\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Type != "github" {
+		t.Errorf("Tracker.Type = %q, want github (explicit block)", cfg.Tracker.Type)
+	}
+	if cfg.SCM.Type != "github" {
+		t.Errorf("SCM.Type = %q, want github (composed from provider)", cfg.SCM.Type)
+	}
+}
+
+func TestLoad_TrackerIndependentOfSCMAndCI(t *testing.T) {
+	// Setting tracker.type explicitly, with no top-level provider set,
+	// leaves scm.type/ci.type composed from the "github" default —
+	// tracker's own type never cascades to them.
+	path := writeTemp(t, "tracker:\n  type: github\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SCM.Type != "github" {
+		t.Errorf("SCM.Type = %q, want default github", cfg.SCM.Type)
+	}
+	if cfg.CI.Type != "github" {
+		t.Errorf("CI.Type = %q, want default github", cfg.CI.Type)
+	}
+}
+
+func TestLoad_InvalidSCMType(t *testing.T) {
+	path := writeTemp(t, "scm:\n  type: gitlab\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "scm.type") {
+		t.Errorf("Load() error = %v, want it to identify scm.type", err)
+	}
+}
+
+func TestLoad_CIProviderMustMatchSCMProvider(t *testing.T) {
+	// ci.type diverges from scm.type (which stays at the default,
+	// "github") without being a recognized external-status observer —
+	// the frozen composition rule (issue #295) rejects this at load time.
+	path := writeTemp(t, "ci:\n  type: gitlab\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error for incoherent ci/scm composition")
+	}
+	if !strings.Contains(err.Error(), "ci.type") || !strings.Contains(err.Error(), "must match scm.type") {
+		t.Errorf("Load() error = %v, want it to explain ci.type must match scm.type", err)
+	}
+}
+
+func TestLoad_CIMatchingSCMProviderIsCoherent(t *testing.T) {
+	path := writeTemp(t, "provider: github\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v, want a coherent all-github composition to validate", err)
+	}
+	if cfg.CI.Type != cfg.SCM.Type {
+		t.Errorf("CI.Type = %q, SCM.Type = %q, want them equal", cfg.CI.Type, cfg.SCM.Type)
+	}
+}
+
 func TestLoad_InvalidAgentPermissionMode(t *testing.T) {
 	path := writeTemp(t, "agent:\n  permission_mode: yolo\n")
 

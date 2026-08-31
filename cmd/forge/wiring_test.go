@@ -157,6 +157,120 @@ func TestBuildTrackerUsesConfiguredIssueProvider(t *testing.T) {
 	}
 }
 
+func TestBuildTracker_UnknownTypeErrors(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "linear"
+
+	if _, err := buildTracker(cfg, root); err == nil {
+		t.Fatal("buildTracker: want error for unknown tracker type, got nil")
+	}
+}
+
+func TestBuildSCM_ComposesTheConfiguredProvider(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+
+	scm, err := buildSCM(cfg, root)
+	if err != nil {
+		t.Fatalf("buildSCM: %v", err)
+	}
+	if scm == nil {
+		t.Fatal("buildSCM: got nil client")
+	}
+}
+
+func TestBuildSCM_UnknownTypeErrors(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.SCM.Type = "gitlab"
+
+	if _, err := buildSCM(cfg, root); err == nil {
+		t.Fatal("buildSCM: want error for unknown scm type, got nil")
+	}
+}
+
+func TestBuildCI_ComposesTheConfiguredProvider(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+
+	ciCap, err := buildCI(cfg, root)
+	if err != nil {
+		t.Fatalf("buildCI: %v", err)
+	}
+	if ciCap == nil {
+		t.Fatal("buildCI: got nil client")
+	}
+}
+
+func TestBuildCI_UnknownTypeErrors(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.CI.Type = "gitlab"
+
+	if _, err := buildCI(cfg, root); err == nil {
+		t.Fatal("buildCI: want error for unknown ci type, got nil")
+	}
+}
+
+// TestComposition_ValidGithubConfigurationWiresEndToEnd is the wiring-seam
+// composition test issue #295's testing decisions call for: a valid
+// all-github composition (the zero-config default) must build every
+// capability and wire a full Engine without error, proving the composed
+// Tracker/SCM/CI capabilities reach Engine's existing narrow consumer
+// seams unchanged.
+func TestComposition_ValidGithubConfigurationWiresEndToEnd(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	store, err := openStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	cfg := config.Default()
+	cfg.Agent.Provider = "fake"
+
+	eng, err := buildEngine(store, cfg, root)
+	if err != nil {
+		t.Fatalf("buildEngine: %v, want a coherent all-github composition to wire end-to-end", err)
+	}
+	if eng.PRTracker == nil {
+		t.Error("eng.PRTracker not wired from the composed SCM capability")
+	}
+	if eng.CIWaiter == nil {
+		t.Error("eng.CIWaiter not wired from the composed CI capability")
+	}
+}
+
+// TestComposition_IncoherentConfigurationRejectedBeforeWiring pins that an
+// incoherent ci/scm composition never reaches buildEngine in the first
+// place: loadConfig (config.Load) rejects it at startup (issue #295's
+// "fails at wiring, not mid-run"), so a caller following the normal
+// loadConfig -> buildEngine sequence cannot construct an Engine from it.
+func TestComposition_IncoherentConfigurationRejectedBeforeWiring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".forge.yaml")
+	if err := os.WriteFile(path, []byte("ci:\n  type: gitlab\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := loadConfig(path); err == nil {
+		t.Fatal("loadConfig: want error for incoherent ci/scm composition, got nil")
+	}
+}
+
 func TestBuildAgent_SelectsByProvider(t *testing.T) {
 	cases := []struct {
 		provider string

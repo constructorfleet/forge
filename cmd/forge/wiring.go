@@ -164,8 +164,18 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// GitHub remote.
 	if cfg.PullRequests.Enabled {
 		eng.Publisher = gitPublisher{locks: locks}
-		// trk implements tracker.Tracker in full, a superset of engine.PRCreator.
-		eng.PRTracker = trk
+		// PR_CREATING is SCM-domain work (tracker.SCM's "Change Request"
+		// vocabulary — see internal/tracker's doc comments), so it is
+		// wired from the SCM capability, composed independently of
+		// the Tracker capability above per cfg.SCM.Type — even though both
+		// currently resolve to the same *github.Client implementation.
+		scm, err := buildSCM(cfg, repoRoot)
+		if err != nil {
+			return nil, err
+		}
+		// scm implements tracker.SCM plus the legacy pull-request-shaped
+		// methods engine.PRCreator still depends on (see buildGitHubClient).
+		eng.PRTracker = scm
 	}
 	// trk also implements statusreflect.Tracker (AddLabel/RemoveLabel/
 	// AddComment) in full; wired unconditionally like NeedsInfoTracker/
@@ -190,7 +200,14 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	eng.PlanningLease = planengine.New(store)
 	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{}}
 	if cfg.PullRequests.WatchCI {
-		sup := ci.New(store, trk, cfg, eng.BaseBranch)
+		// The CI Supervisor's checks/merge-requirements seam is CI-domain
+		// work, composed independently of Tracker/SCM per cfg.CI.Type — see
+		// the SCM capability above and buildCI's doc comment.
+		ciCap, err := buildCI(cfg, repoRoot)
+		if err != nil {
+			return nil, err
+		}
+		sup := ci.New(store, ciCap, cfg, eng.BaseBranch)
 		sup.StatusTracker = trk
 		// trk implements tracker.Tracker in full, a superset of
 		// ci.NeedsInfoTracker: Wait routes an unresolvable merge conflict or
@@ -295,7 +312,13 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 	sch := scheduler.New(trk, scheduler.Adapt(eng), resolver, base, cfg.Execution.MaxParallel)
 	sch.OnComplete = resolver.onComplete
 	if cfg.PullRequests.WatchCI {
-		sup := ci.New(store, trk, cfg, baseBranchName(cfg.Git.Base))
+		// See buildEngine's identical wiring for why the CI capability is
+		// built independently of trk (the Tracker capability) here.
+		ciCap, err := buildCI(cfg, repoRoot)
+		if err != nil {
+			return nil, err
+		}
+		sup := ci.New(store, ciCap, cfg, baseBranchName(cfg.Git.Base))
 		sup.StatusTracker = trk
 		sup.NeedsInfoTracker = trk
 		// See buildEngine's identical wiring for why wsMgr/gitPublisher
@@ -534,12 +557,60 @@ func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string
 	return b.workspaces.Integrate(ctx, issueID, sources)
 }
 
-// buildTracker constructs the GitHub tracker.Tracker adapter for repoRoot,
-// resolving the target repository from its "origin" remote. Factored out of
-// buildEngine so `forge resume` (which needs the full tracker.Tracker for
-// GetComments, not just engine.IssueFetcher) can build the same adapter
-// without constructing a whole Engine.
+// buildTracker constructs the Tracker capability for repoRoot, resolving
+// the target repository from its "origin" remote and selecting an
+// implementation by cfg.Tracker.Type. Factored out of buildEngine so
+// `forge resume` (which needs the full tracker.Tracker for GetComments, not
+// just engine.IssueFetcher) can build the same adapter without constructing
+// a whole Engine. Only "github" is implemented today; cfg.Tracker.Type is
+// otherwise rejected by config.Load's validation before wiring ever runs
+// (see config.validate), so the default case here is unreachable in
+// practice and exists only as a defensive backstop, matching buildAgent's
+// provider switch.
 func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
+	return resolveCapability("tracker", cfg.Tracker.Type, cfg, repoRoot)
+}
+
+// buildSCM constructs the SCM capability for repoRoot, composed
+// independently of buildTracker per cfg.SCM.Type (see config.Config.
+// Provider's doc comment on capability composition). Only "github" is
+// implemented today, mirroring buildTracker's defensive default case.
+func buildSCM(cfg config.Config, repoRoot string) (*github.Client, error) {
+	return resolveCapability("scm", cfg.SCM.Type, cfg, repoRoot)
+}
+
+// buildCI constructs the CI capability for repoRoot, composed independently
+// of buildTracker/buildSCM per cfg.CI.Type. config.Load's frozen
+// composition rule (config.validate) already guarantees cfg.CI.Type equals
+// cfg.SCM.Type (or names a recognized external-status observer) by the
+// time wiring runs, so this switch only needs to know how to construct
+// each recognized type, not re-check coherence. Only "github" is
+// implemented today.
+func buildCI(cfg config.Config, repoRoot string) (*github.Client, error) {
+	return resolveCapability("ci", cfg.CI.Type, cfg, repoRoot)
+}
+
+// resolveCapability constructs the client for one capability (tracker/scm/
+// ci), sharing buildTracker/buildSCM/buildCI's identical
+// "github" -> buildGitHubClient, else error resolution — only the field
+// read and the capability label differ between them.
+func resolveCapability(capability, providerType string, cfg config.Config, repoRoot string) (*github.Client, error) {
+	switch providerType {
+	case "github":
+		return buildGitHubClient(cfg, repoRoot)
+	default:
+		return nil, fmt.Errorf("forge: unknown %s provider type %q", capability, providerType)
+	}
+}
+
+// buildGitHubClient constructs the github.Client shared by buildTracker,
+// buildSCM, and buildCI's "github" cases: github.Client satisfies all three
+// capability interfaces (tracker.Tracker, tracker.SCM, tracker.CI) plus the
+// legacy pull-request/check-shaped methods Engine and the CI Supervisor's
+// existing narrow consumer seams still depend on, so a composition that
+// resolves every capability to "github" wires the same wiring these seams
+// already exercised before the capability split.
+func buildGitHubClient(cfg config.Config, repoRoot string) (*github.Client, error) {
 	owner, repo, err := repoFromOrigin(repoRoot)
 	if err != nil {
 		return nil, err
@@ -549,10 +620,9 @@ func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
 	trk.DependencyOverrides = cfg.Dependencies.Overrides
 	// Reachability is only exercised by CheckExternal (ticket 27); wiring
 	// it unconditionally here, rather than only for `forge execute`, keeps
-	// buildTracker's one Client construction path fully usable by any
-	// future caller that needs external-dependency satisfaction (e.g. an
-	// eventual `forge resume` extension) without threading it through
-	// separately.
+	// this one Client construction path fully usable by any future caller
+	// that needs external-dependency satisfaction (e.g. an eventual
+	// `forge resume` extension) without threading it through separately.
 	trk.Reachability = gitReachabilityChecker{repoRoot: repoRoot}
 	return trk, nil
 }
