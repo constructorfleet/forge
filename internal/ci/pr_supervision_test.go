@@ -10,6 +10,7 @@ import (
 	"github.com/Teagan42/forge/internal/ci"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -164,6 +165,9 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	}
 	if len(needsInfo.comments) != 1 {
 		t.Fatalf("comments = %d, want 1", len(needsInfo.comments))
+	}
+	if !strings.Contains(needsInfo.comments[0], needsinfo.CommentMarker("exec-conflict", "30")) {
+		t.Fatalf("comment body missing needs-info marker: %s", needsInfo.comments[0])
 	}
 
 	checkpoint, err := store.GetNeedsInfoCheckpoint(context.Background(), "exec-conflict", "30")
