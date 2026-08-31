@@ -63,13 +63,66 @@ const TDDGuidance = "## Development Approach\n\n" +
 	"- Work in vertical slices: one test, one minimal implementation, " +
 	"repeat. Refactoring happens after the loop, not during it.\n"
 
+// ModeResult applies the shared result semantics for the non-implement
+// Modes — the single place every backend (the CLI trio via ExecuteCLI,
+// openai, and internal/agent/claude) decides what a ModeReview/ModeStructured
+// invocation returns. For those modes the agent's reconstructed final message
+// (finalText) IS the deliverable — a review findings envelope, or a
+// caller-schema-conforming result — returned verbatim as Summary; an empty
+// final message is the one failure this framing detects on its own, surfaced
+// as FAILED so a per-axis / per-call retry can react. handled is false for
+// ModeImplement, where the caller runs its own {status, summary} parsing.
+// Callers must apply this only after their transport-level guards
+// (ctx/timeout/subprocess errors) have passed.
+func ModeResult(backendName string, mode agent.AgentMode, finalText, stdout, stderr string, exitCode int) (agent.AgentResult, bool) {
+	if mode != agent.ModeReview && mode != agent.ModeStructured {
+		return agent.AgentResult{}, false
+	}
+	if strings.TrimSpace(finalText) == "" {
+		label := "review"
+		if mode == agent.ModeStructured {
+			label = "structured"
+		}
+		return agent.AgentResult{
+			Status:  agent.StatusFailed,
+			Summary: DiagnosticSummary(fmt.Sprintf("%s adapter: %s produced no output (exit code %d)", backendName, label, exitCode), stdout, stderr),
+		}, true
+	}
+	return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, true
+}
+
+// reviewRules is implement-mode Rules' read-only counterpart for
+// agent.ModeReview (mirrors internal/agent/claude's reviewRules): the agent
+// inspects the change and follows the rubric's output contract instead of
+// implementing anything.
+const reviewRules = "## Rules\n\n" +
+	"- You are REVIEWING a change, not implementing one. Do NOT modify, create, or delete any files in this Workspace.\n" +
+	"- Do NOT create pull requests or manage issue-tracker metadata.\n" +
+	"- Do NOT decide workflow state; Forge's orchestrator owns all workflow mechanics.\n" +
+	"- Produce your review by following the rubric in the Workflow Policy above, including its output contract, exactly: your final message must be that output and nothing else.\n"
+
 // BuildPrompt renders req into the prompt handed to a backend, identified
 // by backendName only for readability in headers/comments — the content
 // itself is backend-independent. It draws on whatever the normalized Issue
 // and Repository/Policy context currently carry (see
 // internal/agent.AgentRequest), and is shared by every CLI/HTTP Agent
 // Adapter so the result contract and rules stay identical across backends.
+//
+// Mode selects the framing, matching internal/agent/claude: ModeStructured
+// returns req.Prompt verbatim (the caller owns the whole prompt and schema);
+// ModeReview renders a read-only review task whose output contract comes from
+// the rubric in req.Policy.Notes, omitting the implement-mode rules, TDD
+// guidance, and {status, summary} result contract that would otherwise
+// clobber the findings envelope the reviewer parses. ModeImplement (the zero
+// value) is the default implementation framing.
 func BuildPrompt(backendName string, req agent.AgentRequest) string {
+	switch req.Mode {
+	case agent.ModeStructured:
+		return req.Prompt
+	case agent.ModeReview:
+		return BuildReviewPrompt(req)
+	}
+
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Forge Task: Issue %s\n\n", req.Issue.ID)
@@ -147,6 +200,48 @@ func BuildPrompt(backendName string, req agent.AgentRequest) string {
 	}
 
 	b.WriteString(ResultContract)
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+// BuildReviewPrompt renders an agent.ModeReview invocation — the single
+// shared review-prompt builder used by every backend (the CLI trio and
+// openai via BuildPrompt's dispatch, and internal/agent/claude directly).
+// A read-only review task that omits every implement-mode element — the
+// "implement the requirements" rules, TDD guidance, and {status, summary}
+// result contract — because those steer the agent toward a prose summary and
+// clobber the findings envelope the reviewer parses out of the final message.
+// The concrete review context (rubric, Issue, diff, gate results) arrives via
+// req.Policy.Notes, exactly as the implement path renders Workflow Policy;
+// the rubric there carries the output contract.
+func BuildReviewPrompt(req agent.AgentRequest) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "# Forge Review: Issue %s\n\n", req.Issue.ID)
+
+	b.WriteString("You are REVIEWING the changes in this Workspace for one review axis. ")
+	b.WriteString("Inspect the change and produce a review report; do not modify anything.\n\n")
+
+	b.WriteString("## Issue\n\n")
+	fmt.Fprintf(&b, "- ID: %s\n", req.Issue.ID)
+	if req.Issue.Title != "" {
+		fmt.Fprintf(&b, "- Title: %s\n", req.Issue.Title)
+	}
+	b.WriteString("\n")
+	if req.Issue.Body != "" {
+		b.WriteString("### Description\n\n")
+		b.WriteString(req.Issue.Body)
+		b.WriteString("\n\n")
+	}
+
+	if req.Policy.Notes != "" {
+		b.WriteString("## Workflow Policy\n\n")
+		b.WriteString(req.Policy.Notes)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(reviewRules)
 	b.WriteString("\n")
 
 	return b.String()

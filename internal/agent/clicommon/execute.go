@@ -154,24 +154,35 @@ func ExecuteCLI(ctx context.Context, cfg CLIConfig, req agent.AgentRequest) (age
 		}, nil
 	}
 
-	structured, ok := ParseStructuredResult(resultText)
-	res := Resolve(cfg.BackendName, structured, ok, exitCode, stdout, stderr)
-
-	// Non-streaming fallback: one coarse assistant message over the full
-	// stdout, preserving the pre-#257 behavior for adapters without a
-	// StreamParser. The streaming path relies on the per-line emits above,
-	// with emitFallback covering a run that produced no recognizable event.
-	if parser == nil {
-		if req.Transcript != nil && stdout != "" {
-			req.Transcript.Emit(agent.TranscriptEvent{
-				Type: agent.TranscriptEventMessage,
-				Role: "assistant",
-				Text: Truncate(stdout, MaxDiagnosticLen),
-			})
+	// The transcript is persisted the same way regardless of Mode: the
+	// streaming path already emitted per-turn events, the coarse path emits
+	// one message over stdout, and emitFallback covers a run that produced
+	// no recognizable event. Mode only changes how the *result* is resolved.
+	emitTranscript := func() {
+		if parser == nil {
+			if req.Transcript != nil && stdout != "" {
+				req.Transcript.Emit(agent.TranscriptEvent{
+					Type: agent.TranscriptEventMessage,
+					Role: "assistant",
+					Text: Truncate(stdout, MaxDiagnosticLen),
+				})
+			}
+			return
 		}
-	} else {
 		emitFallback()
 	}
 
+	// ModeReview and ModeStructured return the agent's reconstructed final
+	// message verbatim as Summary (see ModeResult) rather than the
+	// {status, summary} envelope. The ctx/err guards above already handled
+	// every transport failure before this point.
+	if modeRes, handled := ModeResult(cfg.BackendName, req.Mode, resultText, stdout, stderr, exitCode); handled {
+		emitTranscript()
+		return modeRes, nil
+	}
+
+	structured, ok := ParseStructuredResult(resultText)
+	res := Resolve(cfg.BackendName, structured, ok, exitCode, stdout, stderr)
+	emitTranscript()
 	return res, nil
 }

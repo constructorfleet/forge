@@ -140,5 +140,13 @@ func (a *ChatCompletionsAdapter) Execute(ctx context.Context, req agent.AgentReq
 		usage = &agent.TokenUsage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}
 	}
 
+	// ModeReview/ModeStructured return the model's message verbatim as
+	// Summary via the shared clicommon.ModeResult, instead of the
+	// {status, summary} parse buildResult applies for ModeImplement.
+	if modeRes, handled := clicommon.ModeResult("openai-chat-completions", req.Mode, text, string(body), "", status); handled {
+		modeRes.Usage = usage
+		return modeRes, nil
+	}
+
 	return buildResult("openai-chat-completions", text, usage), nil
 }

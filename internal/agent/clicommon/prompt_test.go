@@ -49,3 +49,24 @@ func TestBuildPrompt_InstructsTestDrivenDevelopment(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPrompt_ModeStructuredReturnsPromptVerbatim(t *testing.T) {
+	got := BuildPrompt("codex", agent.AgentRequest{Mode: agent.ModeStructured, Prompt: "just-this"})
+	if got != "just-this" {
+		t.Fatalf("BuildPrompt = %q, want the verbatim req.Prompt", got)
+	}
+}
+
+func TestBuildPrompt_ModeReviewOmitsImplementContract(t *testing.T) {
+	req := agent.AgentRequest{
+		Mode:   agent.ModeReview,
+		Policy: agent.WorkflowPolicy{Notes: "RUBRIC: emit a findings envelope"},
+	}
+	got := BuildPrompt("codex", req)
+	if strings.Contains(got, "Required output format") || strings.Contains(got, "Test-Driven Development") {
+		t.Fatalf("review prompt must omit the implement-mode result contract / TDD guidance:\n%s", got)
+	}
+	if !strings.Contains(got, "REVIEWING") || !strings.Contains(got, "RUBRIC: emit a findings envelope") {
+		t.Fatalf("review prompt must carry review framing + the rubric from Policy.Notes:\n%s", got)
+	}
+}

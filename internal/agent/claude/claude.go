@@ -375,36 +375,14 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (outRes a
 	// this mode can detect on its own, surfaced as FAILED so the reviewer's
 	// per-axis retry can react. The ctx/timeout/subprocess/CLI-error guards
 	// above already handled every other failure before this point.
-	if req.Mode == agent.ModeReview {
-		if strings.TrimSpace(finalText) == "" {
-			return agent.AgentResult{
-				Status: agent.StatusFailed,
-				Summary: diagnosticSummary(
-					fmt.Sprintf("claude adapter: review produced no output (exit code %d)", exitCode),
-					finalText, stderr,
-				),
-			}, nil
-		}
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
-	}
-
-	// Structured mode (issue 200) does not go through the {status, summary}
-	// result schema either: the caller supplied its own per-call schema
-	// (req.Schema) and expects the schema-conforming result back verbatim as
-	// Summary, exactly as review mode returns its findings envelope. Status
-	// is IMPLEMENTED whenever there is output; an empty final message is the
-	// one failure this mode can detect on its own.
-	if req.Mode == agent.ModeStructured {
-		if strings.TrimSpace(finalText) == "" {
-			return agent.AgentResult{
-				Status: agent.StatusFailed,
-				Summary: diagnosticSummary(
-					fmt.Sprintf("claude adapter: structured call produced no output (exit code %d)", exitCode),
-					finalText, stderr,
-				),
-			}, nil
-		}
-		return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, nil
+	// ModeReview and ModeStructured return the reconstructed final message
+	// verbatim as Summary via the shared clicommon.ModeResult — the one place
+	// every backend applies these modes' result semantics (a findings
+	// envelope, or a caller-schema-conforming result; empty output -> FAILED).
+	// finalText doubles as the diagnostic body, matching claude's earlier
+	// per-mode wording.
+	if modeRes, handled := clicommon.ModeResult("claude", req.Mode, finalText, finalText, stderr, exitCode); handled {
+		return modeRes, nil
 	}
 
 	// parseSchemaResult decodes the `--json-schema`-conforming result
