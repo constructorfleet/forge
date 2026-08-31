@@ -354,17 +354,19 @@ func TestExecute_PRCreationError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 	}
 }
 
-// TestExecute_EmptyDiff_GuardedBeforePRCreation is this ticket's main
+// TestExecute_EmptyDiff_RoutesToNeedsInfoBeforeCommit is this ticket's main
 // integration test for the empty-diff pre-PR guard: the Agent reports
 // StatusImplemented and Review approves, but the diff against the worker
-// base is empty (e.g. the Agent's changes net out to nothing). The Issue is
-// still committed/pushed (Publisher.Commit's own no-op-on-nothing-to-commit
-// behavior covers idempotent retries), but runCommitAndPR must stop right
-// before creating a pull request: the Issue lands in FAILED with a
-// diagnostic Event, and PRTracker.CreatePullRequest is never called.
-func TestExecute_EmptyDiff_GuardedBeforePRCreation(t *testing.T) {
+// base is empty (e.g. a legitimate no-code deliverable or the Agent's
+// changes net out to nothing). Forge must not create a no-op commit, push an
+// empty branch, open a PR, or hard-fail the Issue; it asks for human
+// confirmation via NEEDS_INFO instead.
+func TestExecute_EmptyDiff_RoutesToNeedsInfoBeforeCommit(t *testing.T) {
 	te := approvedTestEngine(t, "45", domain.Issue{ID: "45", Title: "no-op change"})
 	te.eng.Diff = &stubDiff{diff: ""}
+	trk := newFakeTracker()
+	trk.issues["45"] = domain.Issue{ID: "45", Title: "no-op change"}
+	te.eng.NeedsInfoTracker = trk
 	pub := &fakePublisher{commitSHA: "sha-45"}
 	prTracker := newFakePRTracker()
 	te.eng.Publisher = pub
@@ -375,14 +377,17 @@ func TestExecute_EmptyDiff_GuardedBeforePRCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if result.Issue.State != domain.StateFailed {
-		t.Fatalf("final state = %s, want FAILED", result.Issue.State)
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+	if len(pub.commitCalls) != 0 {
+		t.Errorf("got %d commit calls, want 0: the empty-diff guard must trip before commit", len(pub.commitCalls))
+	}
+	if pub.pushCallCount() != 0 {
+		t.Errorf("got %d push calls, want 0: the empty-diff guard must trip before push", pub.pushCallCount())
 	}
 	if prTracker.callCount() != 0 {
 		t.Errorf("got %d CreatePullRequest calls, want 0: the empty-diff guard must trip before PR creation", prTracker.callCount())
-	}
-	if pub.pushCallCount() != 1 {
-		t.Errorf("got %d push calls, want 1: the guard runs after commit/push, not before", pub.pushCallCount())
 	}
 
 	events, err := te.store.EventsByExecution(context.Background(), result.ExecutionID)
@@ -397,6 +402,14 @@ func TestExecute_EmptyDiff_GuardedBeforePRCreation(t *testing.T) {
 	}
 	if !sawGuard {
 		t.Error("no pr.empty_diff_guard event found")
+	}
+
+	checkpoint, err := te.store.GetNeedsInfoCheckpoint(context.Background(), result.ExecutionID, "45")
+	if err != nil {
+		t.Fatalf("GetNeedsInfoCheckpoint: %v", err)
+	}
+	if !strings.Contains(checkpoint.Question, "no code diff") {
+		t.Errorf("checkpoint.Question = %q, want it to mention no code diff", checkpoint.Question)
 	}
 }
 

@@ -105,6 +105,7 @@ func buildTicketPlanGenerationPrompt(req ticketPlanGenerationRequest) string {
 	prompt += "- No self-dependencies or cycles\n"
 	prompt += "- Every requirement from the spec must be covered by at least one ticket\n"
 	prompt += "- Every ticket must reference at least one requirement\n"
+	prompt += "- Do not create executable tickets for verification-only outcomes, tracker-only deliverables, or any outcome whose expected completion cannot produce a git diff; fold verification into the acceptance criteria of the relevant code-changing ticket or leave tracker/manual work out of the executable plan.\n"
 	prompt += "- If estimate is provided, size must be S, M, L, or XL\n\n"
 	prompt += "Return your response as a JSON object with this shape:\n"
 	prompt += "{\n"

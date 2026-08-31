@@ -116,6 +116,7 @@ func buildTicketPlanReviewPrompt(req ticketPlanReviewRequest) string {
 	prompt += "6. **Acceptance Criteria** - Are acceptance criteria specific, measurable, and verifiable? Not vague.\n"
 	prompt += "7. **Requirement Traceability** - Does each ticket reference valid REQ-NNN IDs from the spec?\n"
 	prompt += "8. **Implementation Context** - Where files, directories, symbols, existing implementations, or analogous examples can reasonably be identified from the spec and repository context, does the ticket name them so the implementer does not need to rediscover the architecture or basic approach from scratch?\n\n"
+	prompt += "Flag executable tickets whose only deliverable is verification-only, tracker-only, or otherwise cannot produce a git diff; those outcomes belong in acceptance criteria for code-changing tickets or outside the executable plan.\n\n"
 	prompt += "Return your response as a JSON object with this shape:\n"
 	prompt += "{\n"
 	prompt += `  "verdict": "APPROVED" | "CHANGES_REQUIRED",` + "\n"
