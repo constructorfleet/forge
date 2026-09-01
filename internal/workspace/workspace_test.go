@@ -574,6 +574,102 @@ func TestConflictCandidate_RebasesInDisposableWorkspaceAndCleansUp(t *testing.T)
 	}
 }
 
+// TestRebaseConflictCandidate_FetchesStaleLocalBase reproduces issue 349: a
+// sibling pull request merges and advances origin/main while root's local
+// main ref stays put. RebaseConflictCandidate must fetch origin's main
+// before it rebases, so the candidate converges onto the real remote tip
+// instead of the stale local one — proven here by checking that the
+// candidate's merge-base with the bare origin's main advanced past the
+// original base.
+func TestRebaseConflictCandidate_FetchesStaleLocalBase(t *testing.T) {
+	root, originPath, base := gittest.NewTempRepoWithOrigin(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	commitFile(t, ws.Path, "worker.txt", "worker\n", "worker commit")
+	originalHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+
+	// Simulate a sibling pull request merging directly on the remote,
+	// without ever touching root's local main ref.
+	sibling := t.TempDir()
+	runGit(t, sibling, "clone", "-q", originPath, ".")
+	runGit(t, sibling, "config", "user.email", "test@example.com")
+	runGit(t, sibling, "config", "user.name", "Test")
+	commitFile(t, sibling, "sibling.txt", "sibling\n", "sibling merge")
+	runGit(t, sibling, "push", "-q", "origin", "main")
+	remoteHead := strings.TrimSpace(runGit(t, sibling, "rev-parse", "HEAD"))
+
+	localMain := strings.TrimSpace(runGit(t, root, "rev-parse", "main"))
+	if localMain != base {
+		t.Fatalf("root local main = %s, want unchanged %s (nothing fetched it yet)", localMain, base)
+	}
+
+	candidate, err := mgr.CreateConflictCandidate(context.Background(), "exec1", "issue-42", originalHead)
+	if err != nil {
+		t.Fatalf("CreateConflictCandidate: %v", err)
+	}
+
+	conflicts, err := mgr.RebaseConflictCandidate(context.Background(), candidate, "main")
+	if err != nil {
+		t.Fatalf("RebaseConflictCandidate: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none", conflicts)
+	}
+
+	mergeBase := strings.TrimSpace(runGit(t, candidate.Path, "merge-base", "HEAD", remoteHead))
+	if mergeBase != remoteHead {
+		t.Fatalf("candidate merge-base with remote main = %s, want it to have converged on %s (the fetched remote tip), not the stale local base %s", mergeBase, remoteHead, base)
+	}
+}
+
+// TestRebaseConflictCandidate_GenuineConflictAfterFetchIsReported confirms
+// that fetching the up-to-date base (issue 349's fix) does not swallow a
+// real content conflict: when the candidate's own edit collides with the
+// fetched remote change, RebaseConflictCandidate must still abort the
+// rebase and report the conflicting paths, so the caller routes the pull
+// request to the existing agent-repair path instead of treating it as
+// resolved.
+func TestRebaseConflictCandidate_GenuineConflictAfterFetchIsReported(t *testing.T) {
+	root, originPath, base := gittest.NewTempRepoWithOrigin(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	commitFile(t, ws.Path, "README.md", "worker edit\n", "worker edit")
+	originalHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+
+	sibling := t.TempDir()
+	runGit(t, sibling, "clone", "-q", originPath, ".")
+	runGit(t, sibling, "config", "user.email", "test@example.com")
+	runGit(t, sibling, "config", "user.name", "Test")
+	commitFile(t, sibling, "README.md", "sibling conflicting edit\n", "sibling merge")
+	runGit(t, sibling, "push", "-q", "origin", "main")
+
+	candidate, err := mgr.CreateConflictCandidate(context.Background(), "exec1", "issue-42", originalHead)
+	if err != nil {
+		t.Fatalf("CreateConflictCandidate: %v", err)
+	}
+
+	conflicts, err := mgr.RebaseConflictCandidate(context.Background(), candidate, "main")
+	if err != nil {
+		t.Fatalf("RebaseConflictCandidate: %v", err)
+	}
+	if len(conflicts) != 1 || conflicts[0] != "README.md" {
+		t.Fatalf("conflicts = %v, want [README.md]", conflicts)
+	}
+
+	head := strings.TrimSpace(runGit(t, candidate.Path, "rev-parse", "HEAD"))
+	if head != originalHead {
+		t.Fatalf("candidate HEAD after aborted rebase = %s, want unchanged %s", head, originalHead)
+	}
+}
+
 func TestBranchName_MatchesCreate(t *testing.T) {
 	root, base := newTempRepo(t)
 	mgr := newManager(t, root)
