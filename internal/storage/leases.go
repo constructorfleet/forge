@@ -46,6 +46,14 @@ type ExecutionLease struct {
 	ClaimedAt   time.Time
 }
 
+// Lapsed reports whether the worker's heartbeat has lapsed past this
+// lease's expiry as of now — the controller-side check that detects a lost
+// worker (ADR 0020). now equal to ExpiresAt counts as lapsed: the lease is
+// only valid strictly before its expiry.
+func (l ExecutionLease) Lapsed(now time.Time) bool {
+	return !now.Before(l.ExpiresAt)
+}
+
 // ClaimExecutionLease records a remote execution's lease on issueID within
 // executionID, with an initial heartbeat and expiresAt. Returns
 // ErrExecutionLeaseHeld (unwrappable to *ExecutionLeaseConflictError) if a
