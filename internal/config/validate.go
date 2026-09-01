@@ -86,6 +86,10 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("execution.max_parallel", fmt.Sprint(cfg.Execution.MaxParallel), "must be >= 1"))
 	}
 
+	if cfg.Execution.Backend != BackendLocal {
+		errs = append(errs, fieldErr("execution.backend", cfg.Execution.Backend, "unsupported execution backend; supported: local"))
+	}
+
 	if cfg.Retry.Gate < 0 {
 		errs = append(errs, fieldErr("retry.gate", fmt.Sprint(cfg.Retry.Gate), "must be >= 0"))
 	}

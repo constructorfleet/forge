@@ -104,10 +104,16 @@ func (b *workspaceCreatorBackend) Prepare(ctx context.Context, req execution.Wor
 }
 
 // backend returns the ExecutionBackend the Engine prepares new environments
-// from, built from the Engine's current WorkspaceCreator/Gates/Agent (read
-// at call time, so tests that assign te.eng.Gates after construction still
-// take effect).
+// from: e.Backend when cmd/forge has wired one from Config.Execution.Backend
+// (issue #304), else a workspaceCreatorBackend built from the Engine's
+// current WorkspaceCreator/Gates/Agent (read at call time, so tests that
+// assign te.eng.Gates after construction still take effect). The fallback
+// keeps every existing caller of New — which sets no Backend — compiling
+// and behaving unchanged.
 func (e *Engine) backend() execution.ExecutionBackend {
+	if e.Backend != nil {
+		return e.Backend
+	}
 	return &workspaceCreatorBackend{workspaces: e.Workspaces, command: e.Gates, ag: e.Agent}
 }
 

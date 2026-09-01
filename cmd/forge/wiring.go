@@ -21,6 +21,8 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/execution"
+	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -105,7 +107,13 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		return nil, err
 	}
 
+	backend, err := buildExecutionBackend(cfg, wsMgr, ag)
+	if err != nil {
+		return nil, err
+	}
+
 	eng := engine.New(store, trk, wsMgr, ag, cfg, repoRoot)
+	eng.Backend = backend
 	// eng.Semantic (issue #126) is wired unconditionally, like
 	// Publisher/PRTracker below: the SemanticProvider seam degrades to
 	// fully inert on its own whenever cfg.LSP.Enabled is false (the
@@ -733,6 +741,25 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 		return &openai.ChatCompletionsAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
+	}
+}
+
+// buildExecutionBackend selects the execution.ExecutionBackend Engine
+// prepares each Worker's environment from, per cfg.Execution.Backend (issue
+// #304, constructorfleet/forge#285: execution-location configuration). Empty
+// and config.BackendLocal both select localhost.Backend, the in-process
+// backend built from wsMgr/ag — the same WorkspaceCreator and Agent
+// buildEngine wires everywhere else, so a Worker's environment and Engine's
+// own Workspaces/Agent fields always agree on which Workspace and Agent they
+// mean. config.Load's validation already rejects any other value before
+// wiring ever runs (see config.validate); the default case here is a
+// defensive backstop, matching buildAgent's provider switch.
+func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent.Agent) (execution.ExecutionBackend, error) {
+	switch cfg.Execution.Backend {
+	case config.BackendLocal, "":
+		return localhost.NewBackend(wsMgr, ag), nil
+	default:
+		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
 	}
 }
 

@@ -46,6 +46,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Execution.MaxParallel != 4 {
 		t.Errorf("Execution.MaxParallel = %d, want 4", cfg.Execution.MaxParallel)
 	}
+	if cfg.Execution.Backend != BackendLocal {
+		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendLocal)
+	}
 	wantRetry := domain.RetryLimits{Gate: 3, Review: 2, CI: 3}
 	if cfg.Retry != wantRetry {
 		t.Errorf("Retry = %+v, want %+v", cfg.Retry, wantRetry)
@@ -524,6 +527,45 @@ func TestLoad_InvalidMaxParallel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "execution.max_parallel") {
 		t.Errorf("Load() error = %v, want it to identify execution.max_parallel", err)
+	}
+}
+
+func TestLoad_BackendAbsentDefaultsToLocal(t *testing.T) {
+	path := writeTemp(t, "version: 1\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Execution.Backend != BackendLocal {
+		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendLocal)
+	}
+}
+
+func TestLoad_BackendExplicitLocal(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: local\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Execution.Backend != BackendLocal {
+		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendLocal)
+	}
+}
+
+func TestLoad_UnsupportedBackendRejected(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: container\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "execution.backend") {
+		t.Errorf("Load() error = %v, want it to identify execution.backend", err)
+	}
+	if !strings.Contains(err.Error(), "container") {
+		t.Errorf("Load() error = %v, want it to include the offending value", err)
 	}
 }
 

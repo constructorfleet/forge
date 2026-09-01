@@ -15,10 +15,12 @@ import (
 	"github.com/Teagan42/forge/internal/agent/opencode"
 	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker/github"
+	"github.com/Teagan42/forge/internal/workspace"
 )
 
 // runGit and newTempRepo delegate to internal/gittest, the shared fixture
@@ -223,6 +225,45 @@ func TestBuildCI_UnknownTypeErrors(t *testing.T) {
 	}
 }
 
+func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
+	root, _ := newTempRepo(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	ag := agent.NewFakeAgent()
+
+	cases := []struct {
+		backend  string
+		wantType any
+		wantErr  bool
+	}{
+		{config.BackendLocal, (*localhost.Backend)(nil), false},
+		{"", (*localhost.Backend)(nil), false},
+		{"container", nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.backend, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Execution.Backend = tc.backend
+
+			backend, err := buildExecutionBackend(cfg, wsMgr, ag)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("buildExecutionBackend: want error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildExecutionBackend: %v", err)
+			}
+			if reflect.TypeOf(backend) != reflect.TypeOf(tc.wantType) {
+				t.Fatalf("buildExecutionBackend(%q) = %T, want %T", tc.backend, backend, tc.wantType)
+			}
+		})
+	}
+}
+
 // TestComposition_ValidGithubConfigurationWiresEndToEnd is the wiring-seam
 // composition test issue #295's testing decisions call for: a valid
 // all-github composition (the zero-config default) must build every
@@ -252,6 +293,9 @@ func TestComposition_ValidGithubConfigurationWiresEndToEnd(t *testing.T) {
 	}
 	if eng.CIWaiter == nil {
 		t.Error("eng.CIWaiter not wired from the composed CI capability")
+	}
+	if _, ok := eng.Backend.(*localhost.Backend); !ok {
+		t.Errorf("eng.Backend = %T, want *localhost.Backend (the default config.BackendLocal selection)", eng.Backend)
 	}
 }
 
