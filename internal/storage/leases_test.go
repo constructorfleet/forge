@@ -199,6 +199,27 @@ func TestExecutionPlacementByIssueNotFound(t *testing.T) {
 	}
 }
 
+func TestExecutionLeaseLapsed(t *testing.T) {
+	expiresAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	lease := storage.ExecutionLease{ExecutionID: "exec-1", IssueID: "issue-1", ExpiresAt: expiresAt}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{"heartbeat-present", expiresAt.Add(-time.Minute), false},
+		{"heartbeat-lapsed", expiresAt.Add(time.Minute), true},
+		{"heartbeat-lapsed-at-exact-expiry", expiresAt, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lease.Lapsed(tt.now); got != tt.want {
+				t.Fatalf("Lapsed(%v) = %v, want %v", tt.now, got, tt.want)
+			}
+		})
+	}
+}
 func TestRecordExecutionPlacementReplacesEarlierRecord(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
