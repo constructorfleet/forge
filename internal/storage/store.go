@@ -613,6 +613,10 @@ type Store interface {
 	// within executionID. Releasing a missing lease is a no-op.
 	ReleaseExecutionLease(ctx context.Context, executionID, issueID string) error
 
+	// ListActiveExecutionLeases reloads every currently held ExecutionLease,
+	// ordered by claimed_at then execution_id/issue_id for stable output.
+	ListActiveExecutionLeases(ctx context.Context) ([]ExecutionLease, error)
+
 	// RecordExecutionPlacement persists the remote-execution substrate
 	// facts for one Issue execution — backend, worker, Workspace, and
 	// workspace-lifecycle state — replacing any earlier record for the same

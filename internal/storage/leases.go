@@ -129,6 +129,37 @@ func (s *SQLiteStore) HeartbeatExecutionLease(ctx context.Context, executionID, 
 	return nil
 }
 
+// ListActiveExecutionLeases reloads every currently held ExecutionLease,
+// ordered by claimed_at then execution_id/issue_id for stable output — the
+// reconciliation loop (a later ticket under #287) polls this list to find
+// leases whose heartbeat may have lapsed.
+func (s *SQLiteStore) ListActiveExecutionLeases(ctx context.Context) ([]ExecutionLease, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT execution_id, issue_id, heartbeat_at, expires_at, claimed_at
+		FROM execution_leases
+		ORDER BY claimed_at, execution_id, issue_id`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list active execution leases: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var leases []ExecutionLease
+	for rows.Next() {
+		var lease ExecutionLease
+		if err := rows.Scan(&lease.ExecutionID, &lease.IssueID, &lease.HeartbeatAt, &lease.ExpiresAt, &lease.ClaimedAt); err != nil {
+			return nil, fmt.Errorf("storage: list active execution leases: %w", err)
+		}
+		lease.HeartbeatAt = lease.HeartbeatAt.UTC()
+		lease.ExpiresAt = lease.ExpiresAt.UTC()
+		lease.ClaimedAt = lease.ClaimedAt.UTC()
+		leases = append(leases, lease)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: list active execution leases: %w", err)
+	}
+	return leases, nil
+}
+
 // ReleaseExecutionLease removes the active execution lease for issueID
 // within executionID. Releasing a missing lease is a no-op.
 func (s *SQLiteStore) ReleaseExecutionLease(ctx context.Context, executionID, issueID string) error {

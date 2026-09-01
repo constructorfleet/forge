@@ -252,3 +252,72 @@ func TestRecordExecutionPlacementReplacesEarlierRecord(t *testing.T) {
 		t.Fatalf("expected replaced placement %+v, got %+v", second, loaded)
 	}
 }
+
+func TestListActiveExecutionLeasesEmpty(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	leases, err := store.ListActiveExecutionLeases(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveExecutionLeases: %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("expected no leases, got %+v", leases)
+	}
+}
+
+func TestListActiveExecutionLeasesReturnsEveryHeldLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateImplementing)
+	if err := store.CreateIssue(ctx, domain.Issue{
+		ID: "issue-2", ExecutionID: "exec-1", State: domain.StateImplementing, Scope: domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 3, Review: 3, CI: 3}),
+	}); err != nil {
+		t.Fatalf("CreateIssue issue-2: %v", err)
+	}
+
+	firstExpiry := time.Now().Add(time.Minute)
+	secondExpiry := time.Now().Add(2 * time.Minute)
+	if err := store.ClaimExecutionLease(ctx, "exec-1", "issue-1", firstExpiry); err != nil {
+		t.Fatalf("ClaimExecutionLease issue-1: %v", err)
+	}
+	if err := store.ClaimExecutionLease(ctx, "exec-1", "issue-2", secondExpiry); err != nil {
+		t.Fatalf("ClaimExecutionLease issue-2: %v", err)
+	}
+
+	leases, err := store.ListActiveExecutionLeases(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveExecutionLeases: %v", err)
+	}
+	if len(leases) != 2 {
+		t.Fatalf("expected 2 leases, got %+v", leases)
+	}
+	if leases[0].IssueID != "issue-1" || leases[1].IssueID != "issue-2" {
+		t.Fatalf("expected leases ordered by claimed_at then issue_id, got %+v", leases)
+	}
+	if !leases[0].ExpiresAt.Equal(firstExpiry.UTC()) {
+		t.Fatalf("expected first lease expiry %v, got %v", firstExpiry.UTC(), leases[0].ExpiresAt)
+	}
+}
+
+func TestListActiveExecutionLeasesExcludesReleasedLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateImplementing)
+
+	if err := store.ClaimExecutionLease(ctx, "exec-1", "issue-1", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("ClaimExecutionLease: %v", err)
+	}
+	if err := store.ReleaseExecutionLease(ctx, "exec-1", "issue-1"); err != nil {
+		t.Fatalf("ReleaseExecutionLease: %v", err)
+	}
+
+	leases, err := store.ListActiveExecutionLeases(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveExecutionLeases: %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("expected no leases after release, got %+v", leases)
+	}
+}
