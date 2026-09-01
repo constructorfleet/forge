@@ -16,8 +16,32 @@ independent Issues up to `execution.max_parallel` and holding dependency-blocked
 until their prerequisites are satisfied. It prints each Issue's final state and exits
 non-zero if any errored. The PR it opens closes the Issue (`Closes #<n>`).
 
-Build the binary first: `go install ./cmd/forge` (installs to `$(go env GOPATH)/bin`), or
-`go build -o forge ./cmd/forge`.
+## Rebuild the binary before each run
+
+The dogfood loop edits Forge's own source, then runs the installed `forge` binary. Rebuild
+the binary before you run `forge execute` or `forge resume`. If you do not rebuild, the
+binary can silently ignore your source fixes.
+
+Run this command before each `forge execute` or `forge resume`:
+
+```
+make install
+```
+
+`make install` runs `go install -ldflags ... ./cmd/forge` and embeds the current commit SHA
+and build time in the binary. To check the installed binary's provenance, run:
+
+```
+forge version
+```
+
+`forge version` prints the embedded commit SHA and build time. Compare the printed commit
+against `git rev-parse HEAD` in the repository root. If they do not match, rebuild before you
+continue.
+
+`forge execute` and `forge resume` also warn on `stderr` when the binary's embedded commit
+does not match the repository's current `HEAD`, so a stale binary is visible without an extra
+step. Rebuild whenever you see this warning.
 
 ## Prerequisites
 

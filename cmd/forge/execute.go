@@ -34,6 +34,9 @@ func runExecute(args []string) int {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
 	}
+	if msg, stale := staleBinaryWarning(repoRoot, buildCommit); stale {
+		fmt.Fprintln(os.Stderr, msg)
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
