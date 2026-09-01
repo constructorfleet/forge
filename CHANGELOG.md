@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/constructorfleet/forge/compare/forge-v0.21.0...forge-v0.22.0) (2026-09-01)
+
+
+### Features
+
+* Container backend · 2: in-container Execute + Agent + RepoContext, credential boundary ([#388](https://github.com/constructorfleet/forge/issues/388)) ([c7e5472](https://github.com/constructorfleet/forge/commit/c7e5472a8be1b6a2b24ede694c7d45f96e93b54d)), closes [#335](https://github.com/constructorfleet/forge/issues/335)
+
 ## [0.21.0](https://github.com/constructorfleet/forge/compare/forge-v0.20.0...forge-v0.21.0) (2026-09-01)
 
 
