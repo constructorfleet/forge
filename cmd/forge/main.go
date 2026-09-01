@@ -37,6 +37,7 @@ Commands:
   approve <feature-id> tickets  Approve a Ticket Plan at its current revision
   materialize <feature-id> Turn an approved Ticket Plan into an executable Issue DAG
   internal-mcp --workspace <path>  Start the semantic-navigation MCP server (spawned by Agent backends, not run interactively)
+  version                  Print the build's embedded commit SHA and build time
   help                     Show this help text
 
 Run 'forge <command> --help' for command-specific flags.
@@ -78,6 +79,8 @@ func run(args []string) int {
 		return runMaterialize(rest)
 	case "internal-mcp":
 		return runInternalMCP(rest)
+	case "version":
+		return runVersion(rest)
 	case "approve":
 		if len(rest) >= 2 && rest[1] == "tickets" {
 			return runApproveTickets(rest)

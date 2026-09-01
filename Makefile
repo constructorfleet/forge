@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check vet build test check
+.PHONY: fmt fmt-check vet build install test check
 
 fmt:
 	gofmt -w .
@@ -20,9 +20,15 @@ fmt-check:
 vet:
 	go vet ./...
 
+LDFLAGS := -X main.buildCommit=$(shell git rev-parse HEAD 2>/dev/null || echo unknown) \
+           -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
 build:
 	go build ./...
-	go build -o /dev/null ./cmd/forge
+	go build -ldflags "$(LDFLAGS)" -o /dev/null ./cmd/forge
+
+install:
+	go install -ldflags "$(LDFLAGS)" ./cmd/forge
 
 test:
 	go test ./...
