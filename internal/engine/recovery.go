@@ -155,7 +155,7 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -187,7 +187,7 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -212,7 +212,7 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, passed, gateResults, failedGate, err := e.runQualityGates(ctx, exec.ID, issue.ID, ws.Path, issue)
+	issue, passed, gateResults, failedGate, err := e.runQualityGates(ctx, exec.ID, issue.ID, e.wrapWorkspace(exec.ID, issue.ID, ws), issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
