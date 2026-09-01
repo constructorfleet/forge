@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -79,9 +80,20 @@ func (e *environment) Execute(ctx context.Context, cmd execution.Command) (execu
 
 	result := execution.Result{Name: cmd.Name, Command: cmd.Command, StartedAt: time.Now()}
 
-	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd.Command)
+	var execCmd *exec.Cmd
+	if len(cmd.Args) > 0 {
+		execCmd = exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
+	} else {
+		execCmd = exec.CommandContext(ctx, "sh", "-c", cmd.Command)
+	}
 	execCmd.Dir = dir
 	execCmd.WaitDelay = waitDelay
+	if cmd.Stdin != "" {
+		execCmd.Stdin = strings.NewReader(cmd.Stdin)
+	}
+	if cmd.Env != nil {
+		execCmd.Env = cmd.Env
+	}
 	var stdout, stderr bytes.Buffer
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr

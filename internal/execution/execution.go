@@ -33,12 +33,31 @@ type Command struct {
 	// Name labels the command for reporting (e.g. a gate's name).
 	Name string
 
-	// Command is the shell command line to run.
+	// Command is the shell command line to run, via a shell (e.g. `sh -c`).
+	// Ignored when Args is non-empty.
 	Command string
+
+	// Args, when non-empty, is the full argv (executable plus its
+	// arguments) to run directly, with no shell interpretation. Prefer
+	// this over Command whenever an argument's content is not
+	// shell-safe to embed literally (e.g. an Agent invocation's prompt or
+	// a JSON schema).
+	Args []string
 
 	// WorkDir is the directory the command runs in, relative to the
 	// Workspace root. Empty means the Workspace root itself.
 	WorkDir string
+
+	// Stdin, when non-empty, is written to the command's standard input
+	// before it runs (e.g. an Agent invocation's prompt). Empty means no
+	// standard input.
+	Stdin string
+
+	// Env, when non-nil, replaces the command's environment with exactly
+	// these "KEY=VALUE" entries (e.g. an Agent invocation's sanitized auth
+	// variables). Nil means the command runs with the executor's own
+	// default environment.
+	Env []string
 }
 
 // Result is the outcome of running a Command.

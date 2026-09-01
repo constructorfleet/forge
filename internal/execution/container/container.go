@@ -10,10 +10,6 @@ import (
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
-// errExecuteNotImplemented is environment.Execute's outcome in this ticket.
-// A later ticket adds command execution inside the container.
-var errExecuteNotImplemented = errors.New("container: Execute is not implemented yet")
-
 // Backend is the Container ExecutionBackend: it prepares a host git-worktree
 // Workspace via a *workspace.Manager, then launches an isolated container
 // from image, through a ContainerRuntime, with that Workspace bind-mounted.
@@ -22,13 +18,15 @@ type Backend struct {
 	runtime    ContainerRuntime
 	image      string
 	resources  Resources
+	newAgent   AgentFactory
 }
 
-// NewBackend returns a Backend that prepares Workspaces via workspaces and
+// NewBackend returns a Backend that prepares Workspaces via workspaces,
 // launches every environment's container from image, with resources,
-// through runtime.
-func NewBackend(workspaces *workspace.Manager, runtime ContainerRuntime, image string, resources Resources) *Backend {
-	return &Backend{workspaces: workspaces, runtime: runtime, image: image, resources: resources}
+// through runtime, and gives every prepared environment the Agent newAgent
+// builds for it. newAgent may be nil, in which case Agent() returns nil.
+func NewBackend(workspaces *workspace.Manager, runtime ContainerRuntime, image string, resources Resources, newAgent AgentFactory) *Backend {
+	return &Backend{workspaces: workspaces, runtime: runtime, image: image, resources: resources, newAgent: newAgent}
 }
 
 // Prepare creates (or, per workspace.Manager.Create, idempotently reuses)
@@ -59,6 +57,7 @@ func (b *Backend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (
 		workspaces:  b.workspaces,
 		runtime:     b.runtime,
 		handle:      handle,
+		newAgent:    b.newAgent,
 	}, nil
 }
 
@@ -72,6 +71,7 @@ type environment struct {
 	workspaces  *workspace.Manager
 	runtime     ContainerRuntime
 	handle      ContainerHandle
+	newAgent    AgentFactory
 }
 
 // Workspace returns the Workspace this environment prepared.
@@ -79,16 +79,22 @@ func (e *environment) Workspace() domain.Workspace {
 	return e.workspace
 }
 
-// Execute is not implemented in this ticket. A later ticket runs cmd inside
-// the container, through the ContainerRuntime's Exec.
-func (e *environment) Execute(_ context.Context, _ execution.Command) (execution.Result, error) {
-	return execution.Result{}, errExecuteNotImplemented
+// Execute runs cmd inside the environment's container, against the
+// mounted Workspace, through the ContainerRuntime's Exec. This is the seam
+// Quality Gates and Git plumbing that must touch the Workspace (stage,
+// commit) run through, so those operations happen in-container rather than
+// on the host.
+func (e *environment) Execute(ctx context.Context, cmd execution.Command) (execution.Result, error) {
+	return e.runtime.Exec(ctx, e.handle, cmd)
 }
 
-// Agent is not implemented in this ticket. A later ticket returns an Agent
-// that runs inside the container.
+// Agent returns the Agent the Backend's AgentFactory builds for this
+// environment, or nil if the Backend has no AgentFactory.
 func (e *environment) Agent() agent.Agent {
-	return nil
+	if e.newAgent == nil {
+		return nil
+	}
+	return e.newAgent(e)
 }
 
 // Cleanup stops and removes the environment's container, then removes the

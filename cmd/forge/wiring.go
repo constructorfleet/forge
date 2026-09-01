@@ -787,7 +787,7 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 			return nil, fmt.Errorf("forge: container runtime preflight: %w", err)
 		}
 		resources := container.Resources{CPU: cfg.Execution.Container.CPU, Memory: cfg.Execution.Container.Memory}
-		return container.NewBackend(wsMgr, runtime, cfg.Execution.Container.Image, resources), nil
+		return container.NewBackend(wsMgr, runtime, cfg.Execution.Container.Image, resources, nil), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
 	}

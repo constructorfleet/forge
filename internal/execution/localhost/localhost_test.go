@@ -121,6 +121,52 @@ func TestEnvironment_ExecuteReportsNonZeroExitCode(t *testing.T) {
 	}
 }
 
+func TestEnvironment_ExecuteRunsArgsDirectlyWithoutAShell(t *testing.T) {
+	backend, _, base := newTestBackend(t)
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	result, err := env.Execute(context.Background(), execution.Command{
+		Name: "echo", Args: []string{"echo", "$HOME; not-a-var"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "$HOME; not-a-var" {
+		t.Errorf("Stdout = %q, want the literal argument unexpanded by any shell", got)
+	}
+}
+
+func TestEnvironment_ExecuteForwardsStdinAndEnv(t *testing.T) {
+	backend, _, base := newTestBackend(t)
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	result, err := env.Execute(context.Background(), execution.Command{
+		Name:    "echo-stdin-and-env",
+		Command: `cat; echo "VAR=$VAR"`,
+		Stdin:   "from stdin",
+		Env:     []string{"VAR=from-env"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(result.Stdout, "from stdin") {
+		t.Errorf("Stdout = %q, want it to contain the forwarded stdin", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, "VAR=from-env") {
+		t.Errorf("Stdout = %q, want it to contain the forwarded env var", result.Stdout)
+	}
+}
+
 func TestEnvironment_AgentReturnsBackendAgent(t *testing.T) {
 	root, base := gittest.NewTempRepo(t)
 	mgr, err := workspace.NewManager(root)
