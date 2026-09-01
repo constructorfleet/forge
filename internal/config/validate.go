@@ -86,8 +86,15 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("execution.max_parallel", fmt.Sprint(cfg.Execution.MaxParallel), "must be >= 1"))
 	}
 
-	if cfg.Execution.Backend != BackendLocal {
-		errs = append(errs, fieldErr("execution.backend", cfg.Execution.Backend, "unsupported execution backend; supported: local"))
+	switch cfg.Execution.Backend {
+	case BackendLocal:
+		// no further constraints
+	case BackendContainer:
+		if strings.TrimSpace(cfg.Execution.Container.Image) == "" {
+			errs = append(errs, fieldErr("execution.container.image", cfg.Execution.Container.Image, "must not be empty when execution.backend is container"))
+		}
+	default:
+		errs = append(errs, fieldErr("execution.backend", cfg.Execution.Backend, "unsupported execution backend; supported: local, container"))
 	}
 
 	if cfg.Retry.Gate < 0 {
