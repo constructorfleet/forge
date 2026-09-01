@@ -5,11 +5,17 @@ package remote
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/execution"
 )
+
+// ErrWorkerUnreachable is returned by a WorkerClient constructor when the
+// single statically-configured worker cannot be reached, so callers can
+// fail wiring's preflight before any work is dispatched (issue #343).
+var ErrWorkerUnreachable = errors.New("remote: worker unreachable")
 
 // WorkerHandle identifies one Workspace a WorkerClient prepared. It is
 // opaque to the Remote backend; only the WorkerClient implementation gives
