@@ -16,13 +16,18 @@ const testImage = "forge/agent:latest"
 
 func newTestBackend(t *testing.T) (*Backend, *FakeRuntime, string, string) {
 	t.Helper()
+	runtime := NewFakeRuntime()
+	return newTestBackendWithRuntime(t, runtime, nil)
+}
+
+func newTestBackendWithRuntime(t *testing.T, runtime *FakeRuntime, newAgent AgentFactory) (*Backend, *FakeRuntime, string, string) {
+	t.Helper()
 	root, base := gittest.NewTempRepo(t)
 	mgr, err := workspace.NewManager(root)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	runtime := NewFakeRuntime()
-	return NewBackend(mgr, runtime, testImage), runtime, root, base
+	return NewBackend(mgr, runtime, testImage, newAgent), runtime, root, base
 }
 
 func TestBackend_PrepareCreatesWorkspaceMatchingManager(t *testing.T) {
@@ -120,7 +125,7 @@ func TestEnvironment_WorkspaceSharesHostGitObjectStore(t *testing.T) {
 	}
 }
 
-func TestEnvironment_ExecuteIsNotImplementedThisTicket(t *testing.T) {
+func TestEnvironment_ExecuteRunsCommandInContainerAgainstTheMountedWorkspace(t *testing.T) {
 	backend, _, _, base := newTestBackend(t)
 	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
 		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
@@ -129,8 +134,63 @@ func TestEnvironment_ExecuteIsNotImplementedThisTicket(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	if _, err := env.Execute(context.Background(), execution.Command{Name: "noop", Command: "true"}); err == nil {
-		t.Error("Execute() error = nil, want error (command execution ships in a later ticket)")
+	result, err := env.Execute(context.Background(), execution.Command{Name: "pwd", Command: "pwd"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 (stderr: %s)", result.ExitCode, result.Stderr)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != env.Workspace().Path {
+		t.Errorf("Execute ran in %q, want %q (the mounted Workspace)", got, env.Workspace().Path)
+	}
+}
+
+func TestEnvironment_ExecuteReportsNonZeroExitCode(t *testing.T) {
+	backend, _, _, base := newTestBackend(t)
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	result, err := env.Execute(context.Background(), execution.Command{Name: "fail", Command: "exit 3"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.ExitCode != 3 {
+		t.Errorf("ExitCode = %d, want 3", result.ExitCode)
+	}
+}
+
+func TestEnvironment_GitStageAndCommitRunInContainerAndLandInHostObjectStore(t *testing.T) {
+	backend, _, root, base := newTestBackend(t)
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(env.Workspace().Path, "feature.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+
+	if _, err := env.Execute(context.Background(), execution.Command{Name: "git-add", Command: "git add -A"}); err != nil {
+		t.Fatalf("Execute(git add): %v", err)
+	}
+	if _, err := env.Execute(context.Background(), execution.Command{Name: "git-commit", Command: "git commit -m 'in-container commit'"}); err != nil {
+		t.Fatalf("Execute(git commit): %v", err)
+	}
+
+	// The commit ran entirely through Execute (in-container, per the fake
+	// runtime's simulation); check it landed in the host's shared object
+	// store by reading it back from the host repository root, not from the
+	// worktree.
+	log := gittest.RunGit(t, root, "log", "--all", "--oneline")
+	if !strings.Contains(log, "in-container commit") {
+		t.Errorf("host repository log = %q, want it to contain the in-container commit", log)
 	}
 }
 
