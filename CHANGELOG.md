@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/constructorfleet/forge/compare/forge-v0.26.0...forge-v0.27.0) (2026-09-01)
+
+
+### Features
+
+* Conflict resolution always goes to NEEDS_INFO ([#412](https://github.com/constructorfleet/forge/issues/412)) ([42aa75e](https://github.com/constructorfleet/forge/commit/42aa75e268f3278c29b27967ad390e07ef5b621b))
+
 ## [0.26.0](https://github.com/constructorfleet/forge/compare/forge-v0.25.0...forge-v0.26.0) (2026-09-01)
 
 
