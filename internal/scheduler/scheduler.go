@@ -400,8 +400,15 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 
 		outcome, execErr := s.Executor.Execute(ctx, issueID, base)
 		if execErr == nil && outcome.State == domain.StateCIPending && s.CIWatcher != nil {
-			recordResult(issueID, outcome, nil, false)
+			// Count the CI watch as in-flight before the interim result is
+			// recorded. recordResult and beginAsyncWork each take the lock
+			// separately, so the reverse order leaves a window where results
+			// holds this Issue but asyncWork is still 0. In that window the
+			// no-progress check reads inFlight == 0 and wrongly declares a
+			// dependent Issue's prerequisite unsatisfiable, although the
+			// prerequisite is under active CI watch.
 			beginAsyncWork()
+			recordResult(issueID, outcome, nil, false)
 			wg.Add(1)
 			go func(outcome ExecuteOutcome) {
 				defer wg.Done()
@@ -526,33 +533,63 @@ func (s *Scheduler) Run(ctx context.Context, issueIDs []string) (map[string]Resu
 
 		mu.Lock()
 		inFlight := len(dispatched) - len(results) + asyncWork
+		var undispatched []string
 		if !dispatchedThisRound && inFlight == 0 {
-			// No-progress: nothing new was dispatched and nothing is
-			// running, so no future signal can ever arrive (a completing
-			// Worker, freeing a semaphore slot) to change that. Every
-			// still-undispatched Issue is permanently blocked — most
-			// commonly because its prerequisite finished in a state
-			// DependencyResolver will never consider satisfied.
-			var stallErrs []error
 			for _, id := range issueIDs {
-				if dispatched[id] {
-					continue
+				if !dispatched[id] {
+					undispatched = append(undispatched, id)
 				}
-				dep := blockedOn[id]
-				stallErr := s.stallError(ctx, id, dep)
-				dispatched[id] = true
-				results[id] = Result{IssueID: id, Err: stallErr}
-				stallErrs = append(stallErrs, stallErr)
 			}
-			out := make(map[string]Result, len(results))
-			for k, v := range results {
-				out[k] = v
-			}
-			joined := errors.Join(append([]error{firstErr}, stallErrs...)...)
-			mu.Unlock()
-			return out, joined
 		}
 		mu.Unlock()
+
+		if !dispatchedThisRound && inFlight == 0 {
+			// No new dispatch this round and nothing in flight. This looks
+			// like a permanent stall, but a Worker can finish between this
+			// round's Dependency checks (which marked every ready Issue
+			// blocked) and this point, so an Issue skipped as blocked above
+			// may now be dispatchable. asyncWork reaching 0 happens-after
+			// that Worker recorded its result and ran OnComplete, both under
+			// mu, so any new Dependency satisfaction is visible now. Re-check
+			// each undispatched Issue before the run is declared stalled.
+			progress := false
+			for _, id := range undispatched {
+				dep, depErr := s.firstUnsatisfied(ctx, id, dag.DependsOn(id))
+				if depErr != nil || dep == "" {
+					progress = true
+					break
+				}
+			}
+			if !progress {
+				// No-progress confirmed: no future signal can arrive (a
+				// completing Worker, freeing a semaphore slot) to change
+				// this. Every still-undispatched Issue is permanently
+				// blocked — most commonly because its prerequisite finished
+				// in a state DependencyResolver will never consider
+				// satisfied.
+				mu.Lock()
+				var stallErrs []error
+				for _, id := range issueIDs {
+					if dispatched[id] {
+						continue
+					}
+					dep := blockedOn[id]
+					stallErr := s.stallError(ctx, id, dep)
+					dispatched[id] = true
+					results[id] = Result{IssueID: id, Err: stallErr}
+					stallErrs = append(stallErrs, stallErr)
+				}
+				out := make(map[string]Result, len(results))
+				for k, v := range results {
+					out[k] = v
+				}
+				joined := errors.Join(append([]error{firstErr}, stallErrs...)...)
+				mu.Unlock()
+				return out, joined
+			}
+			// Progress is still possible; fall through to re-loop and
+			// dispatch the now-unblocked Issue on the next round.
+		}
 
 		if !dispatchedThisRound || capacityExhausted {
 			// Nothing newly dispatched (either nothing was ready, or
