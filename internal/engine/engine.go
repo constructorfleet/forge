@@ -473,13 +473,6 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		return ExecuteResult{}, fmt.Errorf("engine: create issue %s: %w", issueID, err)
 	}
 
-	// Repository Context is compiled exactly once per Execution (CONTEXT.md
-	// "Repository Context") and handed to every Worker unchanged.
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
-	if err != nil {
-		return ExecuteResult{}, fmt.Errorf("engine: compile repository context: %w", err)
-	}
-
 	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateReady)
 	if err != nil {
 		return ExecuteResult{}, err
@@ -532,6 +525,15 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		return ExecuteResult{}, fmt.Errorf("engine: prepare environment for issue %s: %w", issueID, err)
 	}
 	ws := env.Workspace()
+	// Repository Context is compiled exactly once per Execution (CONTEXT.md
+	// "Repository Context") and handed to every Worker unchanged. It is
+	// compiled from the environment's Workspace (constructorfleet/forge#302)
+	// rather than a raw read of RepoRoot, so on a non-local ExecutionBackend
+	// it reflects what the Agent actually sees.
+	repoCtx, err := repocontext.Compile(e.Config, ws.Path, workerBase)
+	if err != nil {
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, fmt.Errorf("engine: compile repository context: %w", err))
+	}
 	// Prepare is called immediately after the environment is obtained, once
 	// per Issue: the resulting Session is reused across every Agent call in
 	// this Issue's repair loop (see executeAgent's augmentSemantic call).
@@ -557,7 +559,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	// same one runRepairLoop's repair iterations make (see invokeAgent),
 	// just with no prior diagnostic to report.
 	var implemented bool
-	issue, implemented, err = e.invokeAgent(ctx, execution.ID, issueID, ws.Path, repoCtx, issue, nil)
+	issue, implemented, err = e.invokeAgent(ctx, execution.ID, issueID, env, repoCtx, issue, nil)
 	if err != nil {
 		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 	}
@@ -615,7 +617,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return domain.Issue{}, err
 	}
 
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
+	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
@@ -632,7 +634,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	}
 
 	issue, retried, err := e.repair(
-		ctx, executionID, issueID, ws.Path, repoCtx, issue,
+		ctx, executionID, issueID, env, repoCtx, issue,
 		issue.RetryBudget.CIExhausted(),
 		func() (domain.Issue, error) {
 			return e.transition(ctx, executionID, issueID, domain.StateFailed)
@@ -699,7 +701,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 
 		if !gatesPassed {
 			feedback := []agent.Feedback{gate.BuildFeedback(*failedGate)}
-			issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+			issue, retried, err := e.repair(ctx, executionID, issueID, env, repoCtx, issue,
 				issue.RetryBudget.GateExhausted(),
 				func() (domain.Issue, error) {
 					return e.transition(ctx, executionID, issueID, domain.StateFailed)
@@ -753,7 +755,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			return domain.Issue{}, err
 		}
 
-		issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+		issue, retried, err := e.repair(ctx, executionID, issueID, env, repoCtx, issue,
 			issue.RetryBudget.ReviewExhausted(),
 			func() (domain.Issue, error) {
 				// Issue #161: a standing CHANGES_REQUIRED once the review
@@ -803,7 +805,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 // ever added — see ticket 31/restart recovery), and delegates to
 // invokeAgent, returning its (issue, implemented, error) directly:
 // implemented is exactly this function's retried.
-func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, exhausted bool, onExhausted func() (domain.Issue, error), record func(*domain.Issue) error, feedback []agent.Feedback, what string) (_ domain.Issue, retried bool, _ error) {
+func (e *Engine) repair(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, exhausted bool, onExhausted func() (domain.Issue, error), record func(*domain.Issue) error, feedback []agent.Feedback, what string) (_ domain.Issue, retried bool, _ error) {
 	if exhausted {
 		issue, err := onExhausted()
 		return issue, false, err
@@ -816,7 +818,7 @@ func (e *Engine) repair(ctx context.Context, executionID, issueID, workspacePath
 		return domain.Issue{}, false, fmt.Errorf("engine: persist retry budget for issue %s: %w", issueID, err)
 	}
 
-	return e.invokeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback)
+	return e.invokeAgent(ctx, executionID, issueID, env, repoCtx, issue, feedback)
 }
 
 func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID string) (agent.Feedback, error) {
@@ -867,15 +869,20 @@ func buildCIFeedback(run storage.CIRun) agent.Feedback {
 // bool is explicit ("did the Agent report StatusImplemented", mirroring
 // runQualityGates' passed bool) rather than left for callers to re-derive
 // by comparing the returned Issue's State.
-func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
-	return e.executeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback, true)
+func (e *Engine) invokeAgent(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
+	return e.executeAgent(ctx, executionID, issueID, env, repoCtx, issue, feedback, true)
 }
 
-func (e *Engine) continueAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
-	return e.executeAgent(ctx, executionID, issueID, workspacePath, repoCtx, issue, feedback, false)
+func (e *Engine) continueAgent(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, implemented bool, _ error) {
+	return e.executeAgent(ctx, executionID, issueID, env, repoCtx, issue, feedback, false)
 }
 
-func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback, transitionToImplementing bool) (_ domain.Issue, implemented bool, _ error) {
+// executeAgent invokes the Agent through env.Agent() — in the Workspace
+// env wraps (constructorfleet/forge#302) — rather than through Engine's
+// own Agent field, so the Agent that runs is always the one bound to the
+// active ExecutionEnvironment.
+func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback, transitionToImplementing bool) (_ domain.Issue, implemented bool, _ error) {
+	workspacePath := env.Workspace().Path
 	var err error
 	if transitionToImplementing {
 		issue, err = e.transition(ctx, executionID, issueID, domain.StateImplementing)
@@ -919,7 +926,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID, workspa
 	}
 	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now)
 
-	result, err := e.Agent.Execute(ctx, req)
+	result, err := env.Agent().Execute(ctx, req)
 	finished := e.Now()
 	run := storage.AgentRun{
 		ExecutionID:  executionID,

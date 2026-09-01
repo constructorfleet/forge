@@ -8,6 +8,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
 	"github.com/Teagan42/forge/internal/review"
@@ -144,18 +145,18 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, implemented, err := e.invokeAgent(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue, nil)
+	issue, implemented, err := e.invokeAgent(ctx, exec.ID, issue.ID, env, repoCtx, issue, nil)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	if !implemented {
 		return issue, nil
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
@@ -177,18 +178,18 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, implemented, err := e.continueAgent(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue, nil)
+	issue, implemented, err := e.continueAgent(ctx, exec.ID, issue.ID, env, repoCtx, issue, nil)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	if !implemented {
 		return issue, nil
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
@@ -210,17 +211,17 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	issue, passed, gateResults, failedGate, err := e.runQualityGates(ctx, exec.ID, issue.ID, env, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	if !passed {
-		issue, err := e.resumeAfterFailedGate(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue, failedGate)
+		issue, err := e.resumeAfterFailedGate(ctx, exec.ID, issue.ID, env, repoCtx, issue, failedGate)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -234,7 +235,7 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 		return domain.Issue{}, err
 	}
 	if verdict == review.VerdictChangesRequired {
-		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue,
+		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, env, repoCtx, issue,
 			issue.RetryBudget.ReviewExhausted(),
 			func() (domain.Issue, error) {
 				return e.escalateReviewToNeedsInfo(ctx, exec.ID, issue.ID,
@@ -259,11 +260,11 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 	return issue, nil
 }
 
-func (e *Engine) resumeAfterFailedGate(ctx context.Context, executionID, issueID, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, failedGate *gate.Result) (domain.Issue, error) {
+func (e *Engine) resumeAfterFailedGate(ctx context.Context, executionID, issueID string, env execution.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, failedGate *gate.Result) (domain.Issue, error) {
 	if failedGate == nil {
 		return issue, nil
 	}
-	issue, retried, err := e.repair(ctx, executionID, issueID, workspacePath, repoCtx, issue,
+	issue, retried, err := e.repair(ctx, executionID, issueID, env, repoCtx, issue,
 		issue.RetryBudget.GateExhausted(),
 		func() (domain.Issue, error) {
 			return e.transition(ctx, executionID, issueID, domain.StateFailed)
@@ -283,7 +284,8 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	repoCtx, err := repocontext.Compile(e.Config, e.RepoRoot, workerBase)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
@@ -292,7 +294,7 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 		return domain.Issue{}, err
 	}
 	if verdict == review.VerdictChangesRequired {
-		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, ws.Path, repoCtx, issue,
+		issue, retried, err := e.repair(ctx, exec.ID, issue.ID, env, repoCtx, issue,
 			issue.RetryBudget.ReviewExhausted(),
 			func() (domain.Issue, error) {
 				return e.escalateReviewToNeedsInfo(ctx, exec.ID, issue.ID,
