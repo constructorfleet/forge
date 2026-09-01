@@ -337,8 +337,12 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issue.ID, err)
 	}
+	base, err := e.prBase(ctx, executionID, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
 	pr, err := e.PRTracker.CreatePullRequest(ctx, tracker.PullRequestRequest{
-		Base:  e.BaseBranch,
+		Base:  base,
 		Head:  env.Workspace().Branch,
 		Title: prTitle(issue),
 		Body:  prBody(issue, summary),

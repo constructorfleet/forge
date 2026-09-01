@@ -266,6 +266,135 @@ func TestExecute_CommitAndPR_UsesWorkspaceFromEnvironment(t *testing.T) {
 	}
 }
 
+// seedPrerequisiteWorkspace records issueID as a completed Managed Issue of
+// exec with a Workspace on branch, so a stacked dependent's prerequisite
+// branch is resolvable via Store.WorkspaceByIssue exactly as it would be for
+// a real multi-Issue run (ticket 331).
+func seedPrerequisiteWorkspace(t *testing.T, te testEngine, exec domain.Execution, issueID, branch string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := te.store.CreateIssue(ctx, domain.Issue{
+		ID:          issueID,
+		ExecutionID: exec.ID,
+		State:       domain.StatePending,
+		Scope:       domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 3, Review: 3, CI: 3}),
+	}); err != nil {
+		t.Fatalf("CreateIssue(%s): %v", issueID, err)
+	}
+	if err := te.store.RecordWorkspace(ctx, exec.ID, domain.Workspace{
+		IssueID: issueID,
+		Branch:  branch,
+	}); err != nil {
+		t.Fatalf("RecordWorkspace(%s): %v", issueID, err)
+	}
+}
+
+// TestExecute_CommitAndPR_SingleParentTargetsPrerequisiteBranch covers
+// ticket 331 (constructorfleet/forge#288, stacked-branch maintenance 2/4): a
+// single-parent stacked child's pull request targets its prerequisite's
+// branch, not the base branch, so review shows only the child's own diff.
+func TestExecute_CommitAndPR_SingleParentTargetsPrerequisiteBranch(t *testing.T) {
+	issue := domain.Issue{
+		ID:    "51",
+		Title: "Add widget support",
+		Dependencies: []domain.Dependency{
+			{IssueID: "51", DependsOnID: "50"},
+		},
+	}
+	te := approvedTestEngine(t, "51", issue)
+	pub := &fakePublisher{commitSHA: "abc123"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+
+	ctx := context.Background()
+	exec, err := te.eng.StartExecution(ctx, te.base)
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	seedPrerequisiteWorkspace(t, te, exec, "50", "forge/exec/50")
+
+	if _, err := te.eng.ExecuteInExecution(ctx, exec, "51", te.base); err != nil {
+		t.Fatalf("ExecuteInExecution: %v", err)
+	}
+
+	req := prTracker.lastRequest()
+	if req.Base != "forge/exec/50" {
+		t.Errorf("PR Base = %q, want %q (prerequisite's branch)", req.Base, "forge/exec/50")
+	}
+}
+
+// TestExecute_CommitAndPR_MultiParentTargetsBaseBranch covers ticket 331's
+// "no regression" acceptance criterion: a dependent with more than one
+// Dependency keeps targeting the base branch rather than stacking on any
+// single prerequisite.
+func TestExecute_CommitAndPR_MultiParentTargetsBaseBranch(t *testing.T) {
+	issue := domain.Issue{
+		ID:    "53",
+		Title: "Add widget support",
+		Dependencies: []domain.Dependency{
+			{IssueID: "53", DependsOnID: "50"},
+			{IssueID: "53", DependsOnID: "52"},
+		},
+	}
+	te := approvedTestEngine(t, "53", issue)
+	pub := &fakePublisher{commitSHA: "abc123"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+
+	ctx := context.Background()
+	exec, err := te.eng.StartExecution(ctx, te.base)
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	seedPrerequisiteWorkspace(t, te, exec, "50", "forge/exec/50")
+	seedPrerequisiteWorkspace(t, te, exec, "52", "forge/exec/52")
+
+	if _, err := te.eng.ExecuteInExecution(ctx, exec, "53", te.base); err != nil {
+		t.Fatalf("ExecuteInExecution: %v", err)
+	}
+
+	req := prTracker.lastRequest()
+	if req.Base != "main" {
+		t.Errorf("PR Base = %q, want %q (multi-parent keeps base-branch targeting)", req.Base, "main")
+	}
+}
+
+// TestExecute_CommitAndPR_UnresolvedDependencyBranchFallsBackToBase covers
+// ticket 331's single-parent case where the sole Dependency has no recorded
+// Workspace (e.g. an External Dependency, satisfied by merge rather than a
+// Forge-managed branch): the pull request falls back to the base branch
+// rather than erroring.
+func TestExecute_CommitAndPR_UnresolvedDependencyBranchFallsBackToBase(t *testing.T) {
+	issue := domain.Issue{
+		ID:    "55",
+		Title: "Add widget support",
+		Dependencies: []domain.Dependency{
+			{IssueID: "55", DependsOnID: "54"},
+		},
+	}
+	te := approvedTestEngine(t, "55", issue)
+	pub := &fakePublisher{commitSHA: "abc123"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+
+	ctx := context.Background()
+	if _, err := te.eng.Execute(ctx, "55", te.base); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	req := prTracker.lastRequest()
+	if req.Base != "main" {
+		t.Errorf("PR Base = %q, want %q (no recorded prerequisite branch)", req.Base, "main")
+	}
+}
+
 func TestExecute_CommitAndPR_UsesConfiguredCommitMessageTemplate(t *testing.T) {
 	te := approvedTestEngine(t, "40b", domain.Issue{ID: "40b", Title: "Add widget support"})
 	pub := &fakePublisher{commitSHA: "abc123"}
