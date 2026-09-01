@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/execution"
+	"github.com/Teagan42/forge/internal/prbase"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -218,6 +218,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		IssueID:     issueID,
 		Number:      pr.Number,
 		URL:         pr.URL,
+		BaseBranch:  base,
 		CommitSHA:   sha,
 		CreatedAt:   e.Now(),
 	}); err != nil {
@@ -242,17 +243,11 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 // example, an External Dependency, which has no Forge-managed branch), it
 // falls back to e.BaseBranch too.
 func (e *Engine) prBase(ctx context.Context, executionID string, issue domain.Issue) (string, error) {
-	if len(issue.Dependencies) != 1 {
-		return e.BaseBranch, nil
-	}
-	ws, err := e.Store.WorkspaceByIssue(ctx, executionID, issue.Dependencies[0].DependsOnID)
+	base, err := prbase.Resolve(ctx, e.Store, executionID, issue, e.BaseBranch)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return e.BaseBranch, nil
-		}
-		return "", fmt.Errorf("engine: resolve prerequisite branch for issue %s: %w", issue.ID, err)
+		return "", fmt.Errorf("engine: %w", err)
 	}
-	return ws.Branch, nil
+	return base, nil
 }
 
 // guardEmptyDiff is the empty-diff pre-publication guard: before the

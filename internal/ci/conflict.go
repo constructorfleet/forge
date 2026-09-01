@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/prbase"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -52,11 +53,15 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 		if pr.CommitSHA == "" {
 			return s.routeUnresolvedConflict(ctx, executionID, issueID, "automatic conflict replay refused: recorded pull request head SHA is empty")
 		}
+		baseBranch, err := s.conflictResolutionBaseBranch(ctx, executionID, issueID, pr)
+		if err != nil {
+			return true, "", err
+		}
 		result, err := s.ConflictResolver.ResolveMergeConflict(ctx, ConflictResolutionRequest{
 			ExecutionID:        executionID,
 			IssueID:            issueID,
 			PullRequestNumber:  pr.Number,
-			BaseBranch:         s.BaseBranch,
+			BaseBranch:         baseBranch,
 			PullRequestHeadSHA: pr.CommitSHA,
 		})
 		if err != nil {
@@ -82,6 +87,30 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 	}
 
 	return s.routeUnresolvedConflict(ctx, executionID, issueID, "pull request cannot be merged into its base branch due to a conflict")
+}
+
+func (s *Supervisor) conflictResolutionBaseBranch(ctx context.Context, executionID, issueID string, pr storage.PullRequest) (string, error) {
+	if getter, ok := s.Tracker.(tracker.PullRequestTargetBranchGetter); ok {
+		base, err := getter.GetPullRequestTargetBranch(ctx, pr.Number)
+		if err != nil {
+			return "", fmt.Errorf("ci: resolve current pull request target for issue %s: %w", issueID, err)
+		}
+		if base != "" {
+			return base, nil
+		}
+	}
+	if pr.BaseBranch != "" {
+		return pr.BaseBranch, nil
+	}
+	issue, err := s.Store.GetIssue(ctx, executionID, issueID)
+	if err != nil {
+		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
+	}
+	base, err := prbase.Resolve(ctx, s.Store, executionID, issue, s.BaseBranch)
+	if err != nil {
+		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
+	}
+	return base, nil
 }
 
 func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, issueID, details string) (handled bool, state domain.IssueState, err error) {

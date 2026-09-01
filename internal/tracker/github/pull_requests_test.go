@@ -115,3 +115,20 @@ func TestCreatePullRequest_RecoversExistingPRAfterValidationRace(t *testing.T) {
 		t.Fatalf("pull request = %+v", pr)
 	}
 }
+
+func TestGetPullRequestTargetBranch(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/acme/widgets/pulls/23" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"base":{"ref":"main"}}`))
+	})
+
+	base, err := c.GetPullRequestTargetBranch(context.Background(), 23)
+	if err != nil {
+		t.Fatalf("GetPullRequestTargetBranch: %v", err)
+	}
+	if base != "main" {
+		t.Fatalf("target branch = %q, want main", base)
+	}
+}
