@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
+
+	"github.com/Teagan42/forge/internal/engine"
 )
 
 // runExecute implements `forge execute <issue-number> [<issue-number> ...]`
@@ -63,6 +66,12 @@ func runExecute(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
+	}
+
+	if lostRecoveryEnabled(cfg) {
+		lostCtx, stopLostRecovery := context.WithCancel(ctx)
+		defer stopLostRecovery()
+		go engine.RunLostRecoveryLoop(lostCtx, store, time.Now, lostRecoveryPollInterval, reportLostRecoveryTick)
 	}
 
 	results, err := sch.Run(ctx, issueIDs)

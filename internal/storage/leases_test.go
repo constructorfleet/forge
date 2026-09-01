@@ -35,6 +35,60 @@ func TestClaimExecutionLease(t *testing.T) {
 	}
 }
 
+func TestListActiveExecutionLeases(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateImplementing)
+	issueTwo := domain.Issue{
+		ID: "issue-2", ExecutionID: "exec-1", State: domain.StateImplementing, Scope: domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 3, Review: 3, CI: 3}),
+	}
+	if err := store.CreateIssue(ctx, issueTwo); err != nil {
+		t.Fatalf("CreateIssue issue-2: %v", err)
+	}
+
+	leaseOneExpiry := time.Now().Add(time.Minute)
+	leaseTwoExpiry := time.Now().Add(2 * time.Minute)
+	if err := store.ClaimExecutionLease(ctx, "exec-1", "issue-1", leaseOneExpiry); err != nil {
+		t.Fatalf("ClaimExecutionLease issue-1: %v", err)
+	}
+	if err := store.ClaimExecutionLease(ctx, "exec-1", "issue-2", leaseTwoExpiry); err != nil {
+		t.Fatalf("ClaimExecutionLease issue-2: %v", err)
+	}
+
+	leases, err := store.ListActiveExecutionLeases(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveExecutionLeases: %v", err)
+	}
+	if len(leases) != 2 {
+		t.Fatalf("expected 2 active leases, got %d: %+v", len(leases), leases)
+	}
+
+	byIssue := make(map[string]storage.ExecutionLease, len(leases))
+	for _, lease := range leases {
+		byIssue[lease.IssueID] = lease
+	}
+	if lease, ok := byIssue["issue-1"]; !ok || !lease.ExpiresAt.Equal(leaseOneExpiry.UTC()) {
+		t.Fatalf("issue-1 lease missing or wrong expiry: %+v", byIssue["issue-1"])
+	}
+	if lease, ok := byIssue["issue-2"]; !ok || !lease.ExpiresAt.Equal(leaseTwoExpiry.UTC()) {
+		t.Fatalf("issue-2 lease missing or wrong expiry: %+v", byIssue["issue-2"])
+	}
+}
+
+func TestListActiveExecutionLeases_NoneActive_EmptySlice(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	leases, err := store.ListActiveExecutionLeases(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveExecutionLeases: %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("expected no active leases, got %+v", leases)
+	}
+}
+
 func TestClaimExecutionLeaseConflict(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

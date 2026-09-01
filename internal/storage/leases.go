@@ -129,25 +129,27 @@ func (s *SQLiteStore) HeartbeatExecutionLease(ctx context.Context, executionID, 
 	return nil
 }
 
-// ListActiveExecutionLeases reloads every currently held ExecutionLease,
-// ordered by claimed_at then execution_id/issue_id for stable output — the
-// reconciliation loop (a later ticket under #287) polls this list to find
-// leases whose heartbeat may have lapsed.
+// ListActiveExecutionLeases reloads every active execution lease across all
+// Executions and Issues, so a periodic loss-detection loop (issue #400) can
+// check each one for a lapsed heartbeat without knowing individual
+// Execution/Issue IDs in advance. Returns an empty slice, never nil, when no
+// lease is held.
 func (s *SQLiteStore) ListActiveExecutionLeases(ctx context.Context) ([]ExecutionLease, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT execution_id, issue_id, heartbeat_at, expires_at, claimed_at
 		FROM execution_leases
-		ORDER BY claimed_at, execution_id, issue_id`)
+		ORDER BY claimed_at, execution_id, issue_id`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list active execution leases: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var leases []ExecutionLease
+	leases := make([]ExecutionLease, 0)
 	for rows.Next() {
 		var lease ExecutionLease
 		if err := rows.Scan(&lease.ExecutionID, &lease.IssueID, &lease.HeartbeatAt, &lease.ExpiresAt, &lease.ClaimedAt); err != nil {
-			return nil, fmt.Errorf("storage: list active execution leases: %w", err)
+			return nil, fmt.Errorf("storage: scan active execution lease: %w", err)
 		}
 		lease.HeartbeatAt = lease.HeartbeatAt.UTC()
 		lease.ExpiresAt = lease.ExpiresAt.UTC()

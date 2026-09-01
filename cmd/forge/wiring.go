@@ -809,6 +809,41 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 	}
 }
 
+// lostRecoveryPollInterval is how often `forge execute` checks in-flight
+// remote executions for a lapsed heartbeat, via engine.RunLostRecoveryLoop
+// (issue #400). It mirrors scheduler.defaultPollInterval's role as a
+// periodic fallback: independent of any single WorkerClient call, so a
+// vanished Worker is still caught even while no request is in flight to it.
+const lostRecoveryPollInterval = 10 * time.Second
+
+// lostRecoveryEnabled reports whether `forge execute` should run the
+// background loss-detection loop for this Run. An ExecutionLease is only
+// ever claimed under the Remote ExecutionBackend (issue #343), so the loop
+// is a no-op busywork cost under every other backend and is skipped
+// entirely.
+func lostRecoveryEnabled(cfg config.Config) bool {
+	return cfg.Execution.Backend == config.BackendRemote
+}
+
+// reportLostRecoveryTick is engine.RunLostRecoveryLoop's onTick callback for
+// `forge execute`: it prints one line per Issue the tick found lost, to
+// stderr alongside every other diagnostic runExecute emits, and one line
+// for a listing failure. It never stops the loop — RunLostRecoveryLoop
+// keeps ticking regardless of what onTick does.
+func reportLostRecoveryTick(entries []engine.LostRecoveryEntry, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge execute: lost-execution recovery: %v\n", err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.Err != nil {
+			fmt.Fprintf(os.Stderr, "forge execute: issue %s worker lost, retry budget exhausted: %v\n", entry.IssueID, entry.Err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "forge execute: issue %s worker lost, retrying\n", entry.IssueID)
+	}
+}
+
 // buildRemoteRecoverFunc adapts engine.RecoverLostExecution to
 // remote.RecoverFunc, so the Remote backend can tell a vanished worker
 // (heartbeat lapse) from a worker-reported failure without the Engine
