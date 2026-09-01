@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/constructorfleet/forge/compare/forge-v0.19.4...forge-v0.20.0) (2026-09-01)
+
+
+### Features
+
+* Remote backend · 1: WorkerClient seam + fake worker + Remote backend happy path ([#382](https://github.com/constructorfleet/forge/issues/382)) ([c63fff6](https://github.com/constructorfleet/forge/commit/c63fff6165891d01343c7119cb95dd8de34d7935)), closes [#339](https://github.com/constructorfleet/forge/issues/339)
+
 ## [0.19.4](https://github.com/constructorfleet/forge/compare/forge-v0.19.3...forge-v0.19.4) (2026-09-01)
 
 
