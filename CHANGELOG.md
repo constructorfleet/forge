@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/constructorfleet/forge/compare/forge-v0.19.3...forge-v0.19.4) (2026-09-01)
+
+
+### Bug Fixes
+
+* docs/adr: fix duplicate ADR number 0012 (two files share the same number) ([#379](https://github.com/constructorfleet/forge/issues/379)) ([621b549](https://github.com/constructorfleet/forge/commit/621b549ad6558b11fccc92a9c16417c0d7911330)), closes [#361](https://github.com/constructorfleet/forge/issues/361)
+
 ## [0.19.3](https://github.com/constructorfleet/forge/compare/forge-v0.19.2...forge-v0.19.3) (2026-09-01)
 
 
