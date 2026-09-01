@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/repolock"
 )
 
@@ -20,11 +21,13 @@ type gitPublisher struct {
 	locks *repolock.Locker
 }
 
-// Commit stages every change in workspacePath and, if that leaves anything
-// staged, commits it with message. A Workspace with nothing to commit
-// (e.g. a retried run resuming after a prior successful commit) is not an
-// error: Commit is then a no-op and simply returns the current HEAD SHA.
-func (p gitPublisher) Commit(ctx context.Context, workspacePath, message string) (string, error) {
+// Commit stages every change in env's Workspace and, if that leaves
+// anything staged, commits it with message. A Workspace with nothing to
+// commit (e.g. a retried run resuming after a prior successful commit) is
+// not an error: Commit is then a no-op and simply returns the current HEAD
+// SHA.
+func (p gitPublisher) Commit(ctx context.Context, env execution.ExecutionEnvironment, message string) (string, error) {
+	workspacePath := env.Workspace().Path
 	if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "add", "-A").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("forge: git add -A in %s: %w: %s", workspacePath, err, out)
 	}
@@ -66,7 +69,8 @@ func hasStagedChanges(ctx context.Context, workspacePath string) (bool, error) {
 // what a subsequent PR needs). Pushing a branch whose remote tip already
 // matches the local branch succeeds as a no-op, so no separate existence
 // check is needed for idempotency.
-func (p gitPublisher) Push(ctx context.Context, workspacePath, branch string) error {
+func (p gitPublisher) Push(ctx context.Context, env execution.ExecutionEnvironment, branch string) error {
+	workspacePath := env.Workspace().Path
 	push := func() error {
 		if out, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "push", "-u", "origin", branch).CombinedOutput(); err != nil {
 			return fmt.Errorf("forge: git push -u origin %s in %s: %w: %s", branch, workspacePath, err, out)

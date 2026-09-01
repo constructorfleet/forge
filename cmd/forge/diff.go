@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/Teagan42/forge/internal/execution"
 )
 
 // gitDiffProducer implements engine.DiffProducer with the real git binary.
@@ -19,7 +21,8 @@ type gitDiffProducer struct{}
 // through the current working tree. That preserves CONTEXT.md "Review"'s
 // base...HEAD comparison for committed work while also including the staged,
 // unstaged, and untracked files gitPublisher.Commit would publish later.
-func (gitDiffProducer) Diff(ctx context.Context, workspacePath, base string) (string, error) {
+func (gitDiffProducer) Diff(ctx context.Context, env execution.ExecutionEnvironment, base string) (string, error) {
+	workspacePath := env.Workspace().Path
 	mergeBase, err := exec.CommandContext(ctx, "git", "-C", workspacePath, "merge-base", base, "HEAD").Output()
 	if err != nil {
 		return "", fmt.Errorf("forge: git merge-base %s HEAD in %s: %w", base, workspacePath, err)

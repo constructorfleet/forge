@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gittest"
 )
 
@@ -19,7 +21,7 @@ func TestGitDiffProducer_ReturnsDiffBetweenBaseAndHead(t *testing.T) {
 	gittest.RunGit(t, root, "add", "new.txt")
 	gittest.RunGit(t, root, "commit", "-q", "-m", "add new.txt")
 
-	diff, err := gitDiffProducer{}.Diff(context.Background(), root, base)
+	diff, err := gitDiffProducer{}.Diff(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), base)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
@@ -38,7 +40,7 @@ func TestGitDiffProducer_IncludesUncommittedWorktreeChanges(t *testing.T) {
 		t.Fatalf("write feature.txt: %v", err)
 	}
 
-	diff, err := gitDiffProducer{}.Diff(context.Background(), root, base)
+	diff, err := gitDiffProducer{}.Diff(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), base)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestGitDiffProducer_IncludesUncommittedWorktreeChanges(t *testing.T) {
 func TestGitDiffProducer_ReturnsErrorForInvalidBase(t *testing.T) {
 	root, _ := gittest.NewTempRepo(t)
 
-	if _, err := (gitDiffProducer{}).Diff(context.Background(), root, "not-a-real-revision"); err == nil {
+	if _, err := (gitDiffProducer{}).Diff(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), "not-a-real-revision"); err == nil {
 		t.Fatal("Diff: want error for an invalid base revision, got nil")
 	}
 }

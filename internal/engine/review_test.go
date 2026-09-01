@@ -9,6 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gate/gatetest"
 	"github.com/Teagan42/forge/internal/review"
 )
@@ -23,8 +24,8 @@ type stubDiff struct {
 	calls []struct{ workspacePath, base string }
 }
 
-func (s *stubDiff) Diff(_ context.Context, workspacePath, base string) (string, error) {
-	s.calls = append(s.calls, struct{ workspacePath, base string }{workspacePath, base})
+func (s *stubDiff) Diff(_ context.Context, env execution.ExecutionEnvironment, base string) (string, error) {
+	s.calls = append(s.calls, struct{ workspacePath, base string }{env.Workspace().Path, base})
 	if s.err != nil {
 		return "", s.err
 	}

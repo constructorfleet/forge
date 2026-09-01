@@ -9,6 +9,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -17,19 +18,22 @@ import (
 // approves it (CONTEXT.md "COMMITTING"). Engine stays git-free (see this
 // package's doc comment): a Publisher seam lets cmd/forge implement this
 // with git while tests inject a fake, exactly as DiffProducer/
-// WorkspaceCreator do for their own git-backed operations.
+// WorkspaceCreator do for their own git-backed operations. Commit and Push
+// take the environment rather than a bare path (ticket 303,
+// constructorfleet/forge#285) so a future non-local backend can relocate
+// the Workspace they operate on.
 type Publisher interface {
-	// Commit inspects the Workspace for uncommitted changes and, if any
+	// Commit inspects env's Workspace for uncommitted changes and, if any
 	// exist, commits them with message. It returns the resulting HEAD
 	// commit SHA. A Workspace with nothing to commit (e.g. a retried run
 	// resuming after a prior successful commit) is not an error — Commit
 	// is then a no-op and simply returns the current HEAD SHA.
-	Commit(ctx context.Context, workspacePath, message string) (sha string, err error)
+	Commit(ctx context.Context, env execution.ExecutionEnvironment, message string) (sha string, err error)
 
-	// Push pushes branch to the Workspace's remote, creating it there if
+	// Push pushes branch to env's Workspace's remote, creating it there if
 	// it does not already exist. Idempotent: pushing a branch whose remote
 	// tip already matches the local branch is not an error.
-	Push(ctx context.Context, workspacePath, branch string) error
+	Push(ctx context.Context, env execution.ExecutionEnvironment, branch string) error
 }
 
 // PRCreator is the subset of tracker.Tracker the PR_CREATING stage needs:
@@ -128,12 +132,13 @@ const emptyDiffNeedsInfoContext = "Forge refuses to open an empty pull request. 
 // resting state — this ticket's predecessor behavior — so existing callers
 // of New keep compiling and behaving unchanged until cmd/forge wires
 // production implementations.
-func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, workerBase string, ws domain.Workspace, issue domain.Issue) (domain.Issue, error) {
+func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, workerBase string, env execution.ExecutionEnvironment, issue domain.Issue) (domain.Issue, error) {
 	if e.Publisher == nil || e.PRTracker == nil {
 		return issue, nil
 	}
+	ws := env.Workspace()
 
-	issue, guarded, err := e.guardEmptyDiff(ctx, executionID, issueID, workerBase, ws.Path, issue)
+	issue, guarded, err := e.guardEmptyDiff(ctx, executionID, issueID, workerBase, env, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -146,7 +151,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return domain.Issue{}, err
 	}
 	message := e.commitMessage(issue, summary)
-	sha, err := e.Publisher.Commit(ctx, ws.Path, message)
+	sha, err := e.Publisher.Commit(ctx, env, message)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issueID, err)
 	}
@@ -156,7 +161,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return domain.Issue{}, err
 	}
 
-	if err := e.Publisher.Push(ctx, ws.Path, ws.Branch); err != nil {
+	if err := e.Publisher.Push(ctx, env, ws.Branch); err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: push branch %s for issue %s: %w", ws.Branch, issueID, err)
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "branch.pushed", map[string]string{
@@ -222,12 +227,12 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 // been driven to NEEDS_INFO and runCommitAndPR must stop (no commit, push,
 // PR_CREATING transition, or CreatePullRequest call); false means the diff
 // is non-empty and runCommitAndPR should proceed as normal.
-func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, workerBase, workspacePath string, issue domain.Issue) (_ domain.Issue, guarded bool, _ error) {
+func (e *Engine) guardEmptyDiff(ctx context.Context, executionID, issueID, workerBase string, env execution.ExecutionEnvironment, issue domain.Issue) (_ domain.Issue, guarded bool, _ error) {
 	if e.Diff == nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: Publisher is set but Diff (DiffProducer) is nil for issue %s", issueID)
 	}
 
-	diff, err := e.Diff.Diff(ctx, workspacePath, workerBase)
+	diff, err := e.Diff.Diff(ctx, env, workerBase)
 	if err != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: produce diff for issue %s: %w", issueID, err)
 	}

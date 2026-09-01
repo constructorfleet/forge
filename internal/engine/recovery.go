@@ -155,12 +155,13 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, env, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -187,12 +188,13 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, env, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -212,7 +214,8 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, passed, gateResults, failedGate, err := e.runQualityGates(ctx, exec.ID, issue.ID, e.wrapWorkspace(exec.ID, issue.ID, ws), issue)
+	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
+	issue, passed, gateResults, failedGate, err := e.runQualityGates(ctx, exec.ID, issue.ID, env, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -226,7 +229,7 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 		}
 		return issue, nil
 	}
-	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, ws.Path, repoCtx, issue, gateResults)
+	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, env, repoCtx, issue, gateResults)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -245,7 +248,7 @@ func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution
 		return e.resumeFromImplementing(ctx, exec, issue, workerBase)
 	}
 	if issue.State == domain.StateCommitting {
-		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
+		issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, env, issue)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -284,7 +287,7 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, ws.Path, repoCtx, issue, nil)
+	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue, nil)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -310,7 +313,7 @@ func (e *Engine) resumeFromCommitting(ctx context.Context, exec domain.Execution
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, ws, issue)
+	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, e.wrapWorkspace(exec.ID, issue.ID, ws), issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -332,7 +335,7 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	sha, err := e.Publisher.Commit(ctx, ws.Path, e.commitMessage(issue, summary))
+	sha, err := e.Publisher.Commit(ctx, e.wrapWorkspace(executionID, issue.ID, ws), e.commitMessage(issue, summary))
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issue.ID, err)
 	}
