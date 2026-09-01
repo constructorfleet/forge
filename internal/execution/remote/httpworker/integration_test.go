@@ -59,6 +59,11 @@ func TestRemoteBackend_EndToEndOverRealTransport(t *testing.T) {
 	}
 	backend := remote.NewBackend(client, recover)
 
+	// Baseline of origin's refs before any worker work. The worker holds a
+	// read-only clone of origin and must never push; the snapshot below must
+	// stay unchanged until the controller publishes.
+	originRefsBefore := gittest.RunGit(t, originPath, "for-each-ref", "--format=%(objectname) %(refname)")
+
 	ctx := context.Background()
 	env, err := backend.Prepare(ctx, execution.WorkspaceRequest{
 		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
@@ -114,6 +119,25 @@ func TestRemoteBackend_EndToEndOverRealTransport(t *testing.T) {
 	gotRoot := strings.TrimSpace(gittest.RunGit(t, root, "rev-parse", "refs/heads/"+branch))
 	if gotRoot != sha {
 		t.Errorf("canonical repo's %s = %q, want %q", branch, gotRoot, sha)
+	}
+
+	// Read-only / never-pushed proof (issue #360, acceptance criterion 3).
+	// The worker's change reached the canonical repository through the
+	// controller's Commit above, but it must not have reached origin: only
+	// the controller publishes. origin's refs are unchanged since the
+	// baseline and do not carry the worker's commit yet.
+	originRefsBeforePush := gittest.RunGit(t, originPath, "for-each-ref", "--format=%(objectname) %(refname)")
+	if originRefsBeforePush != originRefsBefore {
+		t.Errorf("origin changed before the controller published; the worker must never push.\n before: %q\n after:  %q", originRefsBefore, originRefsBeforePush)
+	}
+	if strings.Contains(originRefsBeforePush, sha) {
+		t.Errorf("origin carries the worker commit %s before the controller pushed; the worker must never push", sha)
+	}
+	// The worker built on exactly the controller-pinned base it fetched
+	// read-only: base is an ancestor of the worker's commit, so merge-base
+	// of the two is base itself.
+	if mb := strings.TrimSpace(gittest.RunGit(t, root, "merge-base", base, sha)); mb != base {
+		t.Errorf("worker commit %s is not built on the pinned base %s (merge-base=%s); Prepare must fetch the correct commit read-only", sha, base, mb)
 	}
 
 	if err := publisher.Push(ctx, env, branch); err != nil {
