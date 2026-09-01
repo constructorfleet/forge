@@ -231,6 +231,10 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		publisher := gitPublisher{locks: locks}
 		sup.Rebaser = wsMgr
 		sup.Pusher = publisher
+		// gitPublisher also implements ci.BranchResetter, so Wait can put a
+		// restacked dependent branch back on its last published commit when
+		// the force-push of that branch fails (docs/adr/0018).
+		sup.Resetter = publisher
 		sup.ConflictRestorer = publisher
 		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, nil, gate.ExecCommandRunner{}, cfg)
 		eng.CIWaiter = sup
@@ -334,6 +338,9 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		publisher := gitPublisher{locks: repolock.New(repoRoot)}
 		sup.Rebaser = wsMgr
 		sup.Pusher = publisher
+		// See buildEngine's identical wiring for why gitPublisher also
+		// satisfies ci.BranchResetter (docs/adr/0018).
+		sup.Resetter = publisher
 		sup.ConflictRestorer = publisher
 		sup.ConflictResolver = ci.NewWorkspaceConflictResolver(store, wsMgr, publisher, nil, gate.ExecCommandRunner{}, cfg)
 		sch.CIWatcher = sup
