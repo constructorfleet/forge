@@ -41,3 +41,34 @@ func NewTempRepo(t testing.TB) (root, initialSHA string) {
 	sha := strings.TrimSpace(RunGit(t, root, "rev-parse", "HEAD"))
 	return root, sha
 }
+
+// NewTempRepoWithOrigin creates a bare repository ("origin") and a clone of
+// it ("root") whose default branch is "main". root has an "origin" remote
+// pointing at the bare repository, so tests can advance the bare repo
+// directly (simulating a sibling change that merges on the remote) and
+// exercise code that must fetch before it trusts root's local main ref.
+func NewTempRepoWithOrigin(t testing.TB) (root, originPath, initialSHA string) {
+	t.Helper()
+	originPath = t.TempDir()
+	RunGit(t, originPath, "init", "-q", "--bare", "-b", "main")
+
+	seed := t.TempDir()
+	RunGit(t, seed, "init", "-q", "-b", "main")
+	RunGit(t, seed, "config", "user.email", "test@example.com")
+	RunGit(t, seed, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	RunGit(t, seed, "add", "README.md")
+	RunGit(t, seed, "commit", "-q", "-m", "initial")
+	RunGit(t, seed, "remote", "add", "origin", originPath)
+	RunGit(t, seed, "push", "-q", "origin", "main")
+
+	root = t.TempDir()
+	RunGit(t, root, "clone", "-q", originPath, ".")
+	RunGit(t, root, "config", "user.email", "test@example.com")
+	RunGit(t, root, "config", "user.name", "Test")
+
+	sha := strings.TrimSpace(RunGit(t, root, "rev-parse", "HEAD"))
+	return root, originPath, sha
+}

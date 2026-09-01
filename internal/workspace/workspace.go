@@ -512,7 +512,14 @@ func (m *Manager) CreateConflictCandidate(ctx context.Context, executionID, issu
 }
 
 // RebaseConflictCandidate rebases the disposable candidate onto baseBranch.
-// Any unresolved Git conflict is aborted and reported as paths.
+// When the candidate's repository has an "origin" remote, it fetches
+// baseBranch first and rebases onto the fetched remote-tracking ref
+// (origin/baseBranch) rather than the possibly stale local branch — a
+// sibling pull request merging first advances origin's tip without ever
+// updating the controller's local branch, and rebasing onto the stale
+// local ref is a no-op that leaves the pull request conflicted forever
+// (issue 349). Any unresolved Git conflict is aborted and reported as
+// paths.
 func (m *Manager) RebaseConflictCandidate(ctx context.Context, candidate domain.ConflictCandidate, baseBranch string) ([]string, error) {
 	var conflicts []string
 	err := m.withGitMetadataLock(ctx, func() error {
@@ -524,7 +531,11 @@ func (m *Manager) RebaseConflictCandidate(ctx context.Context, candidate domain.
 		} else if !ok {
 			return fmt.Errorf("workspace: rebase conflict candidate onto %s: %w", baseBranch, ErrNotFound)
 		}
-		if _, rebaseErr := m.runGit(ctx, candidate.Path, "rebase", "--", baseBranch); rebaseErr != nil {
+		rebaseTarget, err := m.fetchedBaseRef(ctx, candidate.Path, baseBranch)
+		if err != nil {
+			return err
+		}
+		if _, rebaseErr := m.runGit(ctx, candidate.Path, "rebase", "--", rebaseTarget); rebaseErr != nil {
 			paths, err := m.conflictedPaths(ctx, candidate.Path)
 			if err != nil {
 				return err
@@ -542,6 +553,21 @@ func (m *Manager) RebaseConflictCandidate(ctx context.Context, candidate domain.
 		return nil, err
 	}
 	return conflicts, nil
+}
+
+// fetchedBaseRef fetches baseBranch from path's "origin" remote and returns
+// the up-to-date remote-tracking ref ("origin/baseBranch") to rebase onto.
+// When path has no "origin" remote configured, it returns baseBranch
+// unchanged, so callers without a remote (for example a local-only repo)
+// keep rebasing onto the literal ref they passed.
+func (m *Manager) fetchedBaseRef(ctx context.Context, path, baseBranch string) (string, error) {
+	if _, _, err := m.runner.Run(ctx, path, "remote", "get-url", "origin"); err != nil {
+		return baseBranch, nil
+	}
+	if _, err := m.runGit(ctx, path, "fetch", "origin", "--", baseBranch); err != nil {
+		return "", fmt.Errorf("workspace: fetch origin %s: %w", baseBranch, err)
+	}
+	return "origin/" + baseBranch, nil
 }
 
 // ConflictCandidateHead returns the current HEAD SHA for candidate.
