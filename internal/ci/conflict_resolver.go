@@ -115,7 +115,9 @@ func (r *WorkspaceConflictResolver) ResolveMergeConflict(ctx context.Context, re
 		}, nil
 	}
 
-	results := gate.NewRunner(r.gates).Run(ctx, candidate.Path, r.config.Quality.Gates, gate.Options{
+	runner := gate.NewRunner(r.gates)
+	runner.Now = r.now
+	results := runner.Run(ctx, candidate.Path, r.config.Quality.Gates, gate.Options{
 		MaxOutputBytes: r.config.Quality.MaxOutputBytes,
 	})
 	for i := range results {

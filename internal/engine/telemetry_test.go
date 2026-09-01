@@ -66,6 +66,9 @@ func TestLoadStatus_TelemetrySummaryAndStructuredEvents(t *testing.T) {
 		time.Date(2026, 8, 28, 12, 0, 6, 0, time.UTC),
 		time.Date(2026, 8, 28, 12, 0, 7, 0, time.UTC),
 		time.Date(2026, 8, 28, 12, 0, 8, 0, time.UTC),
+		time.Date(2026, 8, 28, 12, 0, 9, 0, time.UTC),
+		time.Date(2026, 8, 28, 12, 0, 10, 0, time.UTC),
+		time.Date(2026, 8, 28, 12, 0, 11, 0, time.UTC),
 	)
 	te.fake.ProgramResult("33", agent.AgentResult{
 		Status:  agent.StatusImplemented,

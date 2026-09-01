@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/ci"
 	"github.com/Teagan42/forge/internal/config"
@@ -190,5 +191,66 @@ func TestWorkspaceConflictResolver_RebaseAndPassingGatesPushesCandidateWithRecor
 	}
 	if attempt.OriginalSHA != "abc123" || attempt.CandidateSHA != "def456" || attempt.Branch != "forge/exec-conflict-push/35" || attempt.PRNumber != 23 {
 		t.Fatalf("attempt = %+v, want original abc123 candidate def456 branch forge/exec-conflict-push/35 PR 23", attempt)
+	}
+}
+
+// TestWorkspaceConflictResolver_GateRunTimestampsUseInjectedClock proves the
+// Gate Runner started for conflict-repair candidates uses the resolver's
+// injected clock, not the wall clock, so a GateRun's recorded timing stays
+// deterministic under a test's fixed clock the same way every other
+// timestamp in this resolver already does (constructorfleet/forge#327).
+func TestWorkspaceConflictResolver_GateRunTimestampsUseInjectedClock(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-conflict-clock", "36")
+	seedWorkspace(t, store, "exec-conflict-clock", "36", "/tmp/ws-36", "forge/exec-conflict-clock/36")
+
+	cfg := config.Default()
+	cfg.Quality.Gates = []config.QualityGate{{Name: "test", Command: "go test ./..."}}
+	gates := gatetest.NewFakeCommandRunner()
+
+	candidates := &stubConflictCandidates{
+		candidate: ci.ConflictCandidate{Path: "/tmp/candidate-36", Branch: "forge/conflict-resolution/exec-conflict-clock/36", HeadSHA: "def456"},
+	}
+	pusher := &stubConflictBranchPusher{}
+
+	base := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	now := func() time.Time {
+		t := base.Add(time.Duration(calls) * time.Second)
+		calls++
+		return t
+	}
+	resolver := ci.NewWorkspaceConflictResolver(store, candidates, pusher, now, gates, cfg)
+
+	_, err := resolver.ResolveMergeConflict(context.Background(), ci.ConflictResolutionRequest{
+		ExecutionID:        "exec-conflict-clock",
+		IssueID:            "36",
+		BaseBranch:         "main",
+		PullRequestHeadSHA: "abc123",
+	})
+	if err != nil {
+		t.Fatalf("ResolveMergeConflict: %v", err)
+	}
+
+	gateRuns, err := store.GateRunsByIssue(context.Background(), "exec-conflict-clock", "36")
+	if err != nil {
+		t.Fatalf("GateRunsByIssue: %v", err)
+	}
+	if len(gateRuns) != 1 {
+		t.Fatalf("got %d GateRuns, want 1", len(gateRuns))
+	}
+	run := gateRuns[0]
+
+	inWindow := func(ts time.Time) bool {
+		return !ts.Before(base) && ts.Before(base.Add(time.Duration(calls)*time.Second)) && ts.Sub(base)%time.Second == 0
+	}
+	if !inWindow(run.StartedAt) {
+		t.Fatalf("GateRun.StartedAt = %v, want a value from the injected clock", run.StartedAt)
+	}
+	if !inWindow(run.FinishedAt) {
+		t.Fatalf("GateRun.FinishedAt = %v, want a value from the injected clock", run.FinishedAt)
+	}
+	if !run.FinishedAt.After(run.StartedAt) {
+		t.Fatalf("GateRun.FinishedAt = %v, want strictly after StartedAt %v", run.FinishedAt, run.StartedAt)
 	}
 }
