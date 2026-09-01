@@ -24,6 +24,7 @@ import (
 	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
+	"github.com/Teagan42/forge/internal/execution/remote"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -774,8 +775,11 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 // mean. config.BackendContainer selects the Container backend (issue #336);
 // buildContainerRuntime's preflight failure surfaces here, so an
 // unavailable container runtime is a wiring-time error, not a mid-run one.
-// config.Load's validation already rejects any other value before wiring
-// ever runs (see config.validate); the default case here is a defensive
+// config.BackendRemote selects the Remote backend (issue #343), targeting
+// the single statically-configured worker named by cfg.Execution.Worker;
+// buildWorkerClient's preflight failure surfaces here the same way. config.
+// Load's validation already rejects any other value before wiring ever
+// runs (see config.validate); the default case here is a defensive
 // backstop, matching buildAgent's provider switch.
 func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent.Agent) (execution.ExecutionBackend, error) {
 	switch cfg.Execution.Backend {
@@ -788,6 +792,12 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 		}
 		resources := container.Resources{CPU: cfg.Execution.Container.CPU, Memory: cfg.Execution.Container.Memory}
 		return container.NewBackend(wsMgr, runtime, cfg.Execution.Container.Image, resources, nil), nil
+	case config.BackendRemote:
+		worker, err := buildWorkerClient(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("forge: remote worker preflight: %w", err)
+		}
+		return remote.NewBackend(worker), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
 	}
@@ -801,6 +811,17 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 // failing mid-run against a nil runtime.
 func buildContainerRuntime(_ config.Config) (container.ContainerRuntime, error) {
 	return nil, container.ErrRuntimeUnavailable
+}
+
+// buildWorkerClient constructs the remote.WorkerClient the Remote backend
+// drives, against the single statically-configured worker named by
+// cfg.Execution.Worker.Endpoint. No concrete worker transport exists in
+// Forge yet — a later Remote backend ticket adds one (issue #345) — so
+// selecting backend: remote always fails this preflight today, with
+// remote.ErrWorkerUnreachable, rather than reaching Prepare and failing
+// mid-run against a nil worker.
+func buildWorkerClient(_ config.Config) (remote.WorkerClient, error) {
+	return nil, remote.ErrWorkerUnreachable
 }
 
 // buildPlanningBackend selects the planning Backend `forge plan` runs

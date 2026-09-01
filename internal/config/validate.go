@@ -93,8 +93,12 @@ func validate(cfg Config) error {
 		if strings.TrimSpace(cfg.Execution.Container.Image) == "" {
 			errs = append(errs, fieldErr("execution.container.image", cfg.Execution.Container.Image, "must not be empty when execution.backend is container"))
 		}
+	case BackendRemote:
+		if strings.TrimSpace(cfg.Execution.Worker.Endpoint) == "" {
+			errs = append(errs, fieldErr("execution.worker.endpoint", cfg.Execution.Worker.Endpoint, "must not be empty when execution.backend is remote"))
+		}
 	default:
-		errs = append(errs, fieldErr("execution.backend", cfg.Execution.Backend, "unsupported execution backend; supported: local, container"))
+		errs = append(errs, fieldErr("execution.backend", cfg.Execution.Backend, "unsupported execution backend; supported: local, container, remote"))
 	}
 
 	if cfg.Retry.Gate < 0 {

@@ -17,6 +17,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
+	"github.com/Teagan42/forge/internal/execution/remote"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/storage"
@@ -284,6 +285,30 @@ func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *
 	_, err = buildExecutionBackend(cfg, wsMgr, ag)
 	if !errors.Is(err, container.ErrRuntimeUnavailable) {
 		t.Fatalf("buildExecutionBackend: want container.ErrRuntimeUnavailable, got %v", err)
+	}
+}
+
+// TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker pins
+// the ticket-343 acceptance criterion that selecting backend: remote with
+// an unreachable worker fails at wiring, with a clear error, rather than
+// reaching Prepare and failing mid-run — today, before any concrete worker
+// transport exists (issue #345), that means every remote selection fails
+// this way.
+func TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker(t *testing.T) {
+	root, _ := newTempRepo(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	ag := agent.NewFakeAgent()
+
+	cfg := config.Default()
+	cfg.Execution.Backend = config.BackendRemote
+	cfg.Execution.Worker.Endpoint = "https://worker.example.com:9090"
+
+	_, err = buildExecutionBackend(cfg, wsMgr, ag)
+	if !errors.Is(err, remote.ErrWorkerUnreachable) {
+		t.Fatalf("buildExecutionBackend: want remote.ErrWorkerUnreachable, got %v", err)
 	}
 }
 

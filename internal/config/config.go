@@ -60,14 +60,17 @@ type ExecutionConfig struct {
 
 	// Backend selects where a Worker's ExecutionEnvironment is prepared.
 	// Empty defaults to BackendLocal, so an existing .forge.yaml with no
-	// `execution.backend` key keeps running exactly as before. Remote is
-	// reserved for a later spec; an unrecognized value is rejected by
-	// validate before anything is wired.
+	// `execution.backend` key keeps running exactly as before. An
+	// unrecognized value is rejected by validate before anything is wired.
 	Backend string `yaml:"backend"`
 
 	// Container configures the Container backend. It is read only when
 	// Backend is BackendContainer.
 	Container ContainerConfig `yaml:"container"`
+
+	// Worker configures the Remote backend's single statically-configured
+	// worker. It is read only when Backend is BackendRemote.
+	Worker WorkerConfig `yaml:"worker"`
 }
 
 // Backend selects the ExecutionBackend a Worker's ExecutionEnvironment is
@@ -82,7 +85,22 @@ const (
 	// Workspace bind-mounted into an isolated container built from
 	// ExecutionConfig.Container.
 	BackendContainer = "container"
+
+	// BackendRemote selects the Remote backend: a Workspace prepared and
+	// driven on the single statically-configured worker named by
+	// ExecutionConfig.Worker. This slice targets one worker; there is no
+	// registry, capability matching, or placement choice.
+	BackendRemote = "remote"
 )
+
+// WorkerConfig gives the Remote backend the single statically-configured
+// worker to target, when ExecutionConfig.Backend is BackendRemote.
+type WorkerConfig struct {
+	// Endpoint is the worker's address (e.g.
+	// "https://worker.example.com:9090"). Required when Backend is
+	// BackendRemote.
+	Endpoint string `yaml:"endpoint"`
+}
 
 // ContainerConfig gives the Container backend the image to run and coarse
 // resource limits, when ExecutionConfig.Backend is BackendContainer. Forge
