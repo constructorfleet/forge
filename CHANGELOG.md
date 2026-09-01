@@ -5,6 +5,7 @@
 
 ### Bug Fixes
 
+* Review: feed the parent spec into the reviewer prompt (sub-issues lose cross-ticket intent) ([#376](https://github.com/constructorfleet/forge/issues/376)) ([0ed1814](https://github.com/constructorfleet/forge/commit/0ed1814e58ce59d4d94771d2bfff80d463356db5)), closes [#319](https://github.com/constructorfleet/forge/issues/319)
 * Stale forge binary silently ignores source fixes in the dogfood loop (add version stamp + rebuild step) ([#373](https://github.com/constructorfleet/forge/issues/373)) ([86e031c](https://github.com/constructorfleet/forge/commit/86e031ce01b460ffaf620a7cddaa2ebe022c0a53)), closes [#321](https://github.com/constructorfleet/forge/issues/321)
 
 ## [0.19.2](https://github.com/constructorfleet/forge/compare/forge-v0.19.1...forge-v0.19.2) (2026-09-01)
