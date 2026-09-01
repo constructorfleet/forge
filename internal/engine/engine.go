@@ -1566,7 +1566,21 @@ func (e *Engine) appendEvent(ctx context.Context, executionID, issueID, eventTyp
 // to CANCELLED, which domain.ValidateTransition permits from any
 // non-terminal state — an infra failure before the Agent ever ran is better
 // described as an aborted run than a failed one.
+//
+// origErr wrapping execution.ErrLost (issue #344) is a third, narrower
+// case: a backend already confirmed the worker was lost and performed its
+// own LOST recovery (expired the lease, marked the Workspace
+// non-authoritative, advanced the Issue's retry budget) before returning
+// here. failOut then does nothing further — no Cleanup against a worker
+// that is presumably unreachable, and no FAILED/CANCELLED transition — so
+// the Issue is left exactly where recovery put it: in its existing
+// IssueState, to be retried, per ADR 0020's "the Issue stays in its
+// existing states across the LOST and retry path."
 func (e *Engine) failOut(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, origErr error) error {
+	if errors.Is(origErr, execbackend.ErrLost) {
+		return origErr
+	}
+
 	errs := []error{origErr}
 
 	cancelled := errors.Is(origErr, context.Canceled)

@@ -234,6 +234,7 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 		t.Fatalf("workspace.NewManager: %v", err)
 	}
 	ag := agent.NewFakeAgent()
+	store := openPlanningStore(t)
 
 	cases := []struct {
 		backend  string
@@ -248,7 +249,7 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 			cfg := config.Default()
 			cfg.Execution.Backend = tc.backend
 
-			backend, err := buildExecutionBackend(cfg, wsMgr, ag)
+			backend, err := buildExecutionBackend(cfg, wsMgr, ag, store)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("buildExecutionBackend: want error, got nil")
@@ -277,12 +278,13 @@ func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *
 		t.Fatalf("workspace.NewManager: %v", err)
 	}
 	ag := agent.NewFakeAgent()
+	store := openPlanningStore(t)
 
 	cfg := config.Default()
 	cfg.Execution.Backend = config.BackendContainer
 	cfg.Execution.Container.Image = "forge/agent:latest"
 
-	_, err = buildExecutionBackend(cfg, wsMgr, ag)
+	_, err = buildExecutionBackend(cfg, wsMgr, ag, store)
 	if !errors.Is(err, container.ErrRuntimeUnavailable) {
 		t.Fatalf("buildExecutionBackend: want container.ErrRuntimeUnavailable, got %v", err)
 	}
@@ -301,12 +303,13 @@ func TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker(t *test
 		t.Fatalf("workspace.NewManager: %v", err)
 	}
 	ag := agent.NewFakeAgent()
+	store := openPlanningStore(t)
 
 	cfg := config.Default()
 	cfg.Execution.Backend = config.BackendRemote
 	cfg.Execution.Worker.Endpoint = "https://worker.example.com:9090"
 
-	_, err = buildExecutionBackend(cfg, wsMgr, ag)
+	_, err = buildExecutionBackend(cfg, wsMgr, ag, store)
 	if !errors.Is(err, remote.ErrWorkerUnreachable) {
 		t.Fatalf("buildExecutionBackend: want remote.ErrWorkerUnreachable, got %v", err)
 	}
