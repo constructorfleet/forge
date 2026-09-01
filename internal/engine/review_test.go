@@ -32,6 +32,44 @@ func (s *stubDiff) Diff(_ context.Context, env execution.ExecutionEnvironment, b
 	return s.diff, nil
 }
 
+// TestExecute_WiresParentFetcherToTheTracker is issue #319's engine-wiring
+// acceptance criterion: runReview passes the Tracker's GetIssue through as
+// review.Request.ParentFetcher so a Reviewer can resolve a parent/spec
+// Issue referenced from the Issue under review's body.
+func TestExecute_WiresParentFetcherToTheTracker(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"296": {ID: "296", Body: "## Parent — Spec: constructorfleet/forge#284"},
+		"284": {ID: "284", Title: "Provider split", Body: "US10: compose the merge verdict."},
+	})
+	te.fake.ProgramResult("296", agent.AgentResult{Status: agent.StatusImplemented})
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramResult("296", review.Result{Verdict: review.VerdictApproved})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff --git a/foo b/foo"}
+
+	ctx := context.Background()
+	if _, err := te.eng.Execute(ctx, "296", te.base); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	invocations := reviewer.Invocations()
+	if len(invocations) != 1 {
+		t.Fatalf("Invocations() len = %d, want 1", len(invocations))
+	}
+	fetcher := invocations[0].ParentFetcher
+	if fetcher == nil {
+		t.Fatal("Request.ParentFetcher is nil, want the Tracker's GetIssue wired through")
+	}
+	parent, err := fetcher(ctx, "284")
+	if err != nil {
+		t.Fatalf("ParentFetcher(284): %v", err)
+	}
+	if parent.Title != "Provider split" {
+		t.Errorf("ParentFetcher(284).Title = %q, want %q", parent.Title, "Provider split")
+	}
+}
+
 // TestExecute_ReviewApproved_AdvancesToCommitting is ticket 20's first
 // integration test: gates pass, Review returns APPROVED, and the Issue
 // advances to COMMITTING.
