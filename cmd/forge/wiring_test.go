@@ -399,6 +399,40 @@ func TestBuildExecutionBackend_RemoteClaimsLeaseThroughWiredStore(t *testing.T) 
 	}
 }
 
+func TestBuildExecuteRuntime_WiresLostExecutionControllerForRemoteBackend(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	store := openPlanningStore(t)
+
+	workerRoot, _ := newTempRepo(t)
+	runGit(t, workerRoot, "remote", "add", "origin", root)
+	srv, err := httpworker.NewServer(workerRoot, "origin", agent.NewFakeAgent())
+	if err != nil {
+		t.Fatalf("httpworker.NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	cfg := config.Default()
+	cfg.Agent.Provider = "fake"
+	cfg.Execution.Backend = config.BackendRemote
+	cfg.Execution.Worker.Endpoint = ts.URL
+	cfg.PullRequests.Enabled = false
+	cfg.Workflow.Review = false
+
+	runtime, err := buildExecuteRuntime(store, cfg, root, []string{"408"})
+	if err != nil {
+		t.Fatalf("buildExecuteRuntime: %v", err)
+	}
+	if runtime.Scheduler == nil {
+		t.Fatal("buildExecuteRuntime Scheduler is nil")
+	}
+	if runtime.LostExecutionController == nil {
+		t.Fatal("buildExecuteRuntime LostExecutionController is nil for remote backend")
+	}
+}
+
 // TestComposition_ValidGithubConfigurationWiresEndToEnd is the wiring-seam
 // composition test issue #295's testing decisions call for: a valid
 // all-github composition (the zero-config default) must build every

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
@@ -42,4 +44,39 @@ func newProgrammedFakeAgent(t *testing.T, issueID string) *agent.FakeAgent {
 	fake := agent.NewFakeAgent()
 	fake.ProgramResult(issueID, agent.AgentResult{Status: agent.StatusImplemented, Summary: "done"})
 	return fake
+}
+
+type recordingLostController struct {
+	started  chan struct{}
+	stopped  chan struct{}
+	interval time.Duration
+	err      error
+}
+
+func (r *recordingLostController) Run(ctx context.Context, interval time.Duration, _ func(error)) error {
+	r.interval = interval
+	close(r.started)
+	<-ctx.Done()
+	r.err = ctx.Err()
+	close(r.stopped)
+	return r.err
+}
+
+func TestStartLostExecutionControllerRunsUntilStopped(t *testing.T) {
+	controller := &recordingLostController{
+		started: make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+
+	stop := startLostExecutionController(context.Background(), controller, nil)
+	<-controller.started
+	if controller.interval != lostRecoveryPollInterval {
+		t.Fatalf("Run interval = %v, want %v", controller.interval, lostRecoveryPollInterval)
+	}
+
+	stop()
+	<-controller.stopped
+	if !errors.Is(controller.err, context.Canceled) {
+		t.Fatalf("Run stopped with %v, want context.Canceled", controller.err)
+	}
 }
