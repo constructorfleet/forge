@@ -78,7 +78,7 @@ func TestLoadStatus_TelemetrySummaryAndStructuredEvents(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 0, "ok", "")
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	reviewer := review.NewFakeReviewer()
 	reviewer.ProgramResult("33", review.Result{Verdict: review.VerdictApproved, Summary: "ship it"})

@@ -131,7 +131,7 @@ func TestExecute_SemanticProvider_SessionReusedAcrossRepairLoop(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
 	runner := &flakyRunner{failUntil: 1}
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	sess := &fakeSemanticSession{}
 	provider := &fakeSemanticProvider{session: sess}

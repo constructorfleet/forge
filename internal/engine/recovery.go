@@ -141,11 +141,10 @@ func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, iss
 }
 
 func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
-	ws, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
@@ -157,7 +156,7 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, env.Workspace().Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -174,11 +173,10 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 }
 
 func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
-	ws, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
@@ -190,7 +188,7 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 	if !implemented {
 		return issue, nil
 	}
-	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, ws.Path, env, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, exec.ID, issue.ID, workerBase, env.Workspace().Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -207,11 +205,10 @@ func (e *Engine) resumeFromImplementing(ctx context.Context, exec domain.Executi
 }
 
 func (e *Engine) resumeFromValidating(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
-	ws, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
@@ -280,16 +277,15 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 	if e.Reviewer == nil {
 		return issue, nil
 	}
-	ws, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	env := e.wrapWorkspace(exec.ID, issue.ID, ws)
 	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, e.wrapWorkspace(exec.ID, issue.ID, ws), repoCtx, issue, nil)
+	issue, verdict, findings, err := e.runReview(ctx, exec.ID, issue.ID, workerBase, env, repoCtx, issue, nil)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -311,11 +307,11 @@ func (e *Engine) resumeFromReviewing(ctx context.Context, exec domain.Execution,
 }
 
 func (e *Engine) resumeFromCommitting(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
-	ws, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, e.wrapWorkspace(exec.ID, issue.ID, ws), issue)
+	issue, err = e.runCommitAndPR(ctx, exec.ID, issue.ID, workerBase, env, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -326,7 +322,7 @@ func (e *Engine) resumeFromCommitting(ctx context.Context, exec domain.Execution
 }
 
 func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, issue domain.Issue, workerBase string) (domain.Issue, error) {
-	ws, err := e.ensureWorkspace(ctx, executionID, issue.ID, workerBase)
+	env, err := e.ensureWorkspace(ctx, executionID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -337,13 +333,13 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	sha, err := e.Publisher.Commit(ctx, e.wrapWorkspace(executionID, issue.ID, ws), e.commitMessage(issue, summary))
+	sha, err := e.Publisher.Commit(ctx, env, e.commitMessage(issue, summary))
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issue.ID, err)
 	}
 	pr, err := e.PRTracker.CreatePullRequest(ctx, tracker.PullRequestRequest{
 		Base:  e.BaseBranch,
-		Head:  ws.Branch,
+		Head:  env.Workspace().Branch,
 		Title: prTitle(issue),
 		Body:  prBody(issue, summary),
 	})
@@ -437,30 +433,42 @@ func (e *Engine) ensureRecoverableWorker(ctx context.Context, executionID, issue
 	return e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID())
 }
 
-func (e *Engine) ensureWorkspace(ctx context.Context, executionID, issueID, workerBase string) (domain.Workspace, error) {
-	ws, err := e.Workspaces.Validate(ctx, executionID, issueID)
-	if err == nil {
-		if recErr := e.Store.RecordWorkspace(ctx, executionID, ws); recErr != nil {
-			return domain.Workspace{}, fmt.Errorf("engine: persist workspace for issue %s: %w", issueID, recErr)
+// ensureWorkspace returns a ready ExecutionEnvironment for a resumed Issue.
+// It validates the persisted Workspace first: an unhealthy one is cleaned
+// up so the backend below builds a fresh one in its place. The environment
+// is the Engine's only path to a Workspace (ticket 305,
+// constructorfleet/forge#285) — even a Workspace Validate finds healthy is
+// re-prepared through the backend, since workspace.Manager.Create reuses an
+// already-registered worktree instead of recreating it, so this never
+// bypasses the environment seam with a direct WorkspaceCreator.Create call.
+func (e *Engine) ensureWorkspace(ctx context.Context, executionID, issueID, workerBase string) (execution.ExecutionEnvironment, error) {
+	_, validateErr := e.Workspaces.Validate(ctx, executionID, issueID)
+	recovered := validateErr != nil
+	if recovered {
+		if cleanupErr := e.Workspaces.Cleanup(ctx, executionID, issueID); cleanupErr != nil {
+			return nil, fmt.Errorf("engine: cleanup unhealthy workspace for issue %s: %w", issueID, cleanupErr)
 		}
-		return ws, nil
-	}
-	if cleanupErr := e.Workspaces.Cleanup(ctx, executionID, issueID); cleanupErr != nil {
-		return domain.Workspace{}, fmt.Errorf("engine: cleanup unhealthy workspace for issue %s: %w", issueID, cleanupErr)
 	}
 
-	ws, createErr := e.Workspaces.Create(ctx, executionID, issueID, workerBase)
-	if createErr != nil {
-		return domain.Workspace{}, fmt.Errorf("engine: create workspace for issue %s: %w", issueID, createErr)
+	env, err := e.backend().Prepare(ctx, execution.WorkspaceRequest{
+		ExecutionID: executionID,
+		IssueID:     issueID,
+		Base:        workerBase,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: prepare workspace for issue %s: %w", issueID, err)
 	}
-	if recErr := e.Store.RecordWorkspace(ctx, executionID, ws); recErr != nil {
-		return domain.Workspace{}, fmt.Errorf("engine: persist workspace for issue %s: %w", issueID, recErr)
+	ws := env.Workspace()
+	if err := e.Store.RecordWorkspace(ctx, executionID, ws); err != nil {
+		return nil, fmt.Errorf("engine: persist workspace for issue %s: %w", issueID, err)
 	}
-	if appErr := e.appendEvent(ctx, executionID, issueID, "workspace.recovered", map[string]string{
-		"path":   ws.Path,
-		"branch": ws.Branch,
-	}); appErr != nil {
-		return domain.Workspace{}, appErr
+	if recovered {
+		if err := e.appendEvent(ctx, executionID, issueID, "workspace.recovered", map[string]string{
+			"path":   ws.Path,
+			"branch": ws.Branch,
+		}); err != nil {
+			return nil, err
+		}
 	}
-	return ws, nil
+	return env, nil
 }
