@@ -1359,6 +1359,7 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 		GateResults:       gateResults,
 		WorkspacePath:     workspacePath,
 		TranscriptSinkFor: transcriptCoord.sinkFor,
+		ParentFetcher:     e.Tracker.GetIssue,
 	})
 	if err != nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: reviewer execute issue %s: %w", issueID, err)

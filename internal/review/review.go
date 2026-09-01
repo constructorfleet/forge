@@ -65,6 +65,15 @@ type Request struct {
 	// no per-axis concept of "subagent" may call it once with an empty
 	// string.
 	TranscriptSinkFor func(subagent string) agent.TranscriptSink
+
+	// ParentFetcher, if non-nil, fetches an Issue by ID so a Reviewer can
+	// resolve a parent/spec Issue referenced from the Issue under review's
+	// body (issue #319: a sub-issue's body is often only a bare pointer to
+	// its parent, e.g. "## Parent — Spec: owner/repo#284", so the parent
+	// spec's content — cross-ticket intent — is otherwise invisible to the
+	// Reviewer). Optional: nil disables parent-spec injection, matching
+	// every Reviewer's behavior before this field existed.
+	ParentFetcher func(ctx context.Context, id string) (domain.Issue, error)
 }
 
 // Verdict is a Reviewer's outcome for one Review.

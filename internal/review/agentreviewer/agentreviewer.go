@@ -228,6 +228,11 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 
 	axesList := r.effectiveAxes()
 
+	// Resolved once per Review call, not per axis: all three axes share the
+	// same parent-spec content (issue #319), and resolveParentSpec's fetch
+	// would otherwise triple-fire per Review.
+	parentSpec := resolveParentSpec(ctx, req)
+
 	outcomes := make([]axisOutcome, len(axesList))
 	usages := make([]*agent.TokenUsage, len(axesList))
 	axisErrs := make([]error, len(axesList))
@@ -238,7 +243,7 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 	for i, ax := range axesList {
 		go func(i int, ax axis) {
 			defer wg.Done()
-			env, usage, err := r.runAxisWithRetry(ctx, req, ax)
+			env, usage, err := r.runAxisWithRetry(ctx, req, ax, parentSpec)
 			if err != nil {
 				unrecoverable[i] = true
 				axisErrs[i] = err
@@ -311,10 +316,10 @@ func toRawFindings(env envelope) []review.AxisRawFinding {
 // only to its own index of the caller's slices, so no additional
 // synchronization is needed beyond the sync.WaitGroup Review already waits
 // on.
-func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
+func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax axis, parentSpec string) (envelope, *agent.TokenUsage, error) {
 	var lastErr error
 	for attempt := 1; attempt <= axisMaxAttempts; attempt++ {
-		env, usage, err := r.runAxis(ctx, req, ax)
+		env, usage, err := r.runAxis(ctx, req, ax, parentSpec)
 		if err == nil {
 			return env, usage, nil
 		}
@@ -326,12 +331,12 @@ func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax 
 // runAxis runs one axis as a single fresh Agent.Execute call and parses its
 // JSON findings envelope, returning the AgentResult's token usage alongside
 // it (issue #162) for Result.Envelopes.
-func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis) (envelope, *agent.TokenUsage, error) {
+func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis, parentSpec string) (envelope, *agent.TokenUsage, error) {
 	agentReq := agent.AgentRequest{
 		Mode:          agent.ModeReview,
 		Issue:         req.Issue,
 		Repository:    req.Repository,
-		Policy:        agent.WorkflowPolicy{Notes: buildPolicyNotes(req, ax.rubric)},
+		Policy:        agent.WorkflowPolicy{Notes: buildPolicyNotes(req, ax.rubric, parentSpec)},
 		WorkspacePath: req.WorkspacePath,
 	}
 	// TranscriptSinkFor, when the engine supplies it, gives this axis its

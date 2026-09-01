@@ -237,6 +237,81 @@ func TestReview_AllThreeAxesClean_Approved(t *testing.T) {
 	}
 }
 
+// TestReview_InjectsParentSpecIntoEveryAxisPrompt is issue #319's core
+// acceptance criterion: a sub-issue whose body references a parent spec has
+// that parent's body included in each axis's review prompt.
+func TestReview_InjectsParentSpecIntoEveryAxisPrompt(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	var fetchedIDs []string
+	_, err := reviewer.Review(context.Background(), review.Request{
+		Diff: "diff --git a/foo.go b/foo.go\n+bug here",
+		Issue: domain.Issue{
+			ID:    "296",
+			Title: "Provider split · 4",
+			Body:  "## Parent — Spec: constructorfleet/forge#284\n\nImplement the SCM slice.",
+		},
+		ParentFetcher: func(_ context.Context, id string) (domain.Issue, error) {
+			fetchedIDs = append(fetchedIDs, id)
+			return domain.Issue{
+				ID:    "284",
+				Title: "Provider split",
+				Body:  "US10: compose the merge verdict from each capability's slice.",
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	invocations := fake.Invocations()
+	if len(invocations) != 3 {
+		t.Fatalf("invocations = %d, want 3", len(invocations))
+	}
+	for _, inv := range invocations {
+		if !strings.Contains(inv.Policy.Notes, "## Parent spec") {
+			t.Errorf("Policy.Notes missing \"## Parent spec\" heading: %q", inv.Policy.Notes)
+		}
+		if !strings.Contains(inv.Policy.Notes, "US10: compose the merge verdict") {
+			t.Errorf("Policy.Notes missing parent spec content: %q", inv.Policy.Notes)
+		}
+	}
+	if len(fetchedIDs) != 1 {
+		t.Errorf("ParentFetcher called %d times, want 1 (resolved once, not per axis)", len(fetchedIDs))
+	}
+}
+
+// TestReview_OmitsParentSpecWhenBodyReferencesNoParent is issue #319's
+// backward-compatibility acceptance criterion: existing review behavior is
+// unchanged when the Issue body references no parent.
+func TestReview_OmitsParentSpecWhenBodyReferencesNoParent(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	called := false
+	_, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "diff --git a/foo.go b/foo.go\n+bug here",
+		Issue: newIssue(),
+		ParentFetcher: func(_ context.Context, id string) (domain.Issue, error) {
+			called = true
+			return domain.Issue{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	if called {
+		t.Error("ParentFetcher was called despite the Issue body referencing no parent")
+	}
+	for _, inv := range fake.Invocations() {
+		if strings.Contains(inv.Policy.Notes, "## Parent spec") {
+			t.Errorf("Policy.Notes contains \"## Parent spec\" with no parent reference: %q", inv.Policy.Notes)
+		}
+	}
+}
+
 func TestReview_RunsAllThreeAxesConcurrently_ThreeInvocationsAgainstWorkspace(t *testing.T) {
 	fake := newAxisRoutingAgent()
 	reviewer := agentreviewer.New(fake, 0.7)
