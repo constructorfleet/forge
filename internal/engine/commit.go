@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -188,8 +189,12 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return domain.Issue{}, err
 	}
 
+	base, err := e.prBase(ctx, executionID, issue)
+	if err != nil {
+		return domain.Issue{}, err
+	}
 	pr, err := e.PRTracker.CreatePullRequest(ctx, tracker.PullRequestRequest{
-		Base:  e.BaseBranch,
+		Base:  base,
 		Head:  ws.Branch,
 		Title: prTitle(issue),
 		Body:  prBody(issue, summary),
@@ -210,6 +215,34 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 	}
 
 	return e.transition(ctx, executionID, issueID, domain.StateCIPending)
+}
+
+// prBase resolves the base branch for issue's pull request (ticket 331,
+// constructorfleet/forge#288 "stacked-branch maintenance 2/4"). A
+// single-parent stacked child targets its prerequisite's branch, so review
+// shows only the child's own diff, not the prerequisite's commits mixed in.
+// The host auto-retargets the pull request to the base branch when the
+// prerequisite branch merges.
+//
+// issue with zero Dependencies, or more than one Dependency (a multi-parent
+// dependent), targets e.BaseBranch — unchanged from today. issue with
+// exactly one Dependency targets that prerequisite's Workspace.Branch,
+// recorded under executionID by RecordWorkspace once the prerequisite's
+// Worker prepared its Workspace; if no such Workspace was recorded (for
+// example, an External Dependency, which has no Forge-managed branch), it
+// falls back to e.BaseBranch too.
+func (e *Engine) prBase(ctx context.Context, executionID string, issue domain.Issue) (string, error) {
+	if len(issue.Dependencies) != 1 {
+		return e.BaseBranch, nil
+	}
+	ws, err := e.Store.WorkspaceByIssue(ctx, executionID, issue.Dependencies[0].DependsOnID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return e.BaseBranch, nil
+		}
+		return "", fmt.Errorf("engine: resolve prerequisite branch for issue %s: %w", issue.ID, err)
+	}
+	return ws.Branch, nil
 }
 
 // guardEmptyDiff is the empty-diff pre-publication guard: before the
