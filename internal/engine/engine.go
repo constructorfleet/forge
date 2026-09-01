@@ -1259,22 +1259,26 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID strin
 // environment's single command primitive) and bounds its captured
 // stdout/stderr to Config.Quality.MaxOutputBytes, tail-preserving, exactly
 // as gate.Runner did when it owned this execution directly.
+//
+// StartedAt/FinishedAt come from Engine.Now, not from env.Execute's own
+// result, so a GateRun's recorded timing stays deterministic under a test's
+// injected clock the same way every other Engine timestamp already is
+// (constructorfleet/forge#327) — a real environment's wall-clock timing is
+// not itself meaningful to callers, which only ever compare these two
+// fields to derive a duration.
 func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEnvironment, g config.QualityGate) gate.Result {
 	started := e.Now()
 	result, err := env.Execute(ctx, execbackend.Command{Name: g.Name, Command: g.Command})
+	finished := e.Now()
 	if err != nil {
-		if result.StartedAt.IsZero() {
-			result.StartedAt = started
-		}
-		result.FinishedAt = e.Now()
 		result.ExitCode = -1
 		result.Stderr += "\ngate runner: " + err.Error()
 	}
 	return gate.Result{
 		Name:       g.Name,
 		Command:    g.Command,
-		StartedAt:  result.StartedAt,
-		FinishedAt: result.FinishedAt,
+		StartedAt:  started,
+		FinishedAt: finished,
 		ExitCode:   result.ExitCode,
 		Stdout:     capOutput(result.Stdout, e.Config.Quality.MaxOutputBytes),
 		Stderr:     capOutput(result.Stderr, e.Config.Quality.MaxOutputBytes),
