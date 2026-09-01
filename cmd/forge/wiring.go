@@ -491,18 +491,21 @@ func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID 
 //     merged-and-reachable from gitBase before they satisfy — see
 //     completionResolver.externalSatisfied): resolves to gitBase's current
 //     tip, exactly as an Issue with no Dependencies always has.
-//   - One Managed Dependency: resolves directly to that Dependency's
-//     resulting branch (workspaces.BranchName via resolver.branchFor), so
-//     the dependent's Workspace is created from it — a stacked branch
-//     (main -> issue/A -> issue/B), not a fresh branch off gitBase that
-//     would leave A's committed work invisible to B's Worker.
+//   - One Managed Dependency: resolves that Dependency's resulting branch
+//     (workspaces.BranchName via resolver.branchFor) to its current commit
+//     SHA, so the dependent's Workspace is created from a pinned commit —
+//     a stacked branch (main -> issue/A -> issue/B), not a fresh branch off
+//     gitBase that would leave A's committed work invisible to B's Worker.
+//     Pinning to a SHA, not the moving branch name, keeps this base valid
+//     after A's branch merges and disappears (docs/adr/0018, ticket #330).
 //   - More than one source (multiple Managed Dependencies, or a mix of
 //     Managed and External): integrates every source into one synthetic
-//     branch via workspaces.Integrate, so the dependent sees the union of
-//     all its Dependencies' results. A merge conflict between Dependencies
-//     surfaces as a *workspace.ConflictError, deterministically naming the
-//     offending branch and paths, rather than silently dropping one
-//     Dependency's changes.
+//     branch via workspaces.Integrate, then resolves that integration
+//     branch to its current commit SHA, so the dependent sees the union of
+//     all its Dependencies' results pinned at a fixed point. A merge
+//     conflict between Dependencies surfaces as a *workspace.ConflictError,
+//     deterministically naming the offending branch and paths, rather than
+//     silently dropping one Dependency's changes.
 //
 // CurrentBase is only ever called for an Issue whose Dependencies
 // resolver.Resolver (DependencyResolver) has already reported Satisfied,
@@ -537,7 +540,12 @@ func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string
 			return "", fmt.Errorf(
 				"forge: resolve base for issue %s: dependency %s has not completed", issueID, dep.DependsOnID)
 		}
-		sources = append(sources, branch)
+		sha, err := resolveBaseRevision(b.repoRoot, branch)
+		if err != nil {
+			return "", fmt.Errorf(
+				"forge: resolve base for issue %s: pin dependency %s's branch to a SHA: %w", issueID, dep.DependsOnID, err)
+		}
+		sources = append(sources, sha)
 	}
 
 	if len(sources) == 0 {
@@ -562,7 +570,11 @@ func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string
 	if len(sources) == 1 {
 		return sources[0], nil
 	}
-	return b.workspaces.Integrate(ctx, issueID, sources)
+	integrated, err := b.workspaces.Integrate(ctx, issueID, sources)
+	if err != nil {
+		return "", err
+	}
+	return resolveBaseRevision(b.repoRoot, integrated)
 }
 
 // buildTracker constructs the Tracker capability for repoRoot, resolving

@@ -48,7 +48,7 @@ func TestDependencyBaseResolver_NoDependencies_ResolvesGitBaseTip(t *testing.T) 
 	}
 }
 
-func TestDependencyBaseResolver_SingleManagedDependency_ResolvesToItsBranch(t *testing.T) {
+func TestDependencyBaseResolver_SingleManagedDependency_ResolvesToItsBranchSHA(t *testing.T) {
 	root, base := newTempRepo(t)
 	ws := mustWorkspaceManager(t, root)
 
@@ -57,6 +57,7 @@ func TestDependencyBaseResolver_SingleManagedDependency_ResolvesToItsBranch(t *t
 		t.Fatalf("Create dependency workspace: %v", err)
 	}
 	commitFile(t, depWS.Path, "a.txt", "from a\n", "issue-a work")
+	wantSHA := strings.TrimSpace(runGit(t, root, "rev-parse", depWS.Branch))
 
 	trk := tracker.NewFakeTracker()
 	trk.AddIssue(domain.Issue{ID: "1", Dependencies: []domain.Dependency{{IssueID: "1", DependsOnID: "a"}}})
@@ -70,8 +71,11 @@ func TestDependencyBaseResolver_SingleManagedDependency_ResolvesToItsBranch(t *t
 	if err != nil {
 		t.Fatalf("CurrentBase: %v", err)
 	}
-	if got != depWS.Branch {
-		t.Errorf("CurrentBase = %s, want dependency branch %s", got, depWS.Branch)
+	if got != wantSHA {
+		t.Errorf("CurrentBase = %s, want dependency branch's pinned SHA %s", got, wantSHA)
+	}
+	if got == depWS.Branch {
+		t.Errorf("CurrentBase = %s, want a commit SHA, not the branch name %s", got, depWS.Branch)
 	}
 
 	// The dependent's Workspace, built on this base, must contain the
@@ -85,7 +89,7 @@ func TestDependencyBaseResolver_SingleManagedDependency_ResolvesToItsBranch(t *t
 	}
 }
 
-func TestDependencyBaseResolver_MultipleManagedDependencies_Integrates(t *testing.T) {
+func TestDependencyBaseResolver_MultipleManagedDependencies_IntegratesAndPinsSHA(t *testing.T) {
 	root, base := newTempRepo(t)
 	ws := mustWorkspaceManager(t, root)
 
@@ -117,8 +121,12 @@ func TestDependencyBaseResolver_MultipleManagedDependencies_Integrates(t *testin
 	if err != nil {
 		t.Fatalf("CurrentBase: %v", err)
 	}
-	if got != "forge/integration/c" {
-		t.Errorf("CurrentBase = %s, want forge/integration/c", got)
+	wantSHA := strings.TrimSpace(runGit(t, root, "rev-parse", "forge/integration/c"))
+	if got != wantSHA {
+		t.Errorf("CurrentBase = %s, want integration branch's pinned SHA %s", got, wantSHA)
+	}
+	if got == "forge/integration/c" {
+		t.Errorf("CurrentBase = %s, want a commit SHA, not the integration branch name", got)
 	}
 
 	dependentWS, err := ws.Create(context.Background(), "exec-c", "c", got)
@@ -209,7 +217,7 @@ func TestDependencyBaseResolver_ExternalOnlyDependency_ResolvesGitBaseTip(t *tes
 	}
 }
 
-func TestDependencyBaseResolver_MixedManagedAndExternal_IntegratesWithBaseTip(t *testing.T) {
+func TestDependencyBaseResolver_MixedManagedAndExternal_IntegratesWithBaseTipAndPinsSHA(t *testing.T) {
 	root, base := newTempRepo(t)
 	ws := mustWorkspaceManager(t, root)
 
@@ -233,8 +241,12 @@ func TestDependencyBaseResolver_MixedManagedAndExternal_IntegratesWithBaseTip(t 
 	if err != nil {
 		t.Fatalf("CurrentBase: %v", err)
 	}
-	if !strings.HasPrefix(got, "forge/integration/") {
-		t.Errorf("CurrentBase = %s, want an integration branch (mixed managed+external sources)", got)
+	wantSHA := strings.TrimSpace(runGit(t, root, "rev-parse", "forge/integration/1"))
+	if got != wantSHA {
+		t.Errorf("CurrentBase = %s, want integration branch's pinned SHA %s", got, wantSHA)
+	}
+	if strings.HasPrefix(got, "forge/integration/") {
+		t.Errorf("CurrentBase = %s, want a commit SHA, not the integration branch name", got)
 	}
 }
 
