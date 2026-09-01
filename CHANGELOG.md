@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.28.0](https://github.com/constructorfleet/forge/compare/forge-v0.27.0...forge-v0.28.0) (2026-09-01)
+
+
+### Features
+
+* wire ExecutionLease claiming/heartbeating into the Remote backend ([#414](https://github.com/constructorfleet/forge/issues/414)) ([63c3097](https://github.com/constructorfleet/forge/commit/63c309773dc6d0143a4b0d968763e36fed35b799)), closes [#405](https://github.com/constructorfleet/forge/issues/405)
+
+
+### Bug Fixes
+
+* **scheduler:** prevent false unsatisfiable-dependency stall on CI-watched prerequisite ([#418](https://github.com/constructorfleet/forge/issues/418)) ([a9dfd07](https://github.com/constructorfleet/forge/commit/a9dfd0778d5e0e1271d5608c44305435316bdcf7))
+
 ## [0.27.0](https://github.com/constructorfleet/forge/compare/forge-v0.26.0...forge-v0.27.0) (2026-09-01)
 
 
