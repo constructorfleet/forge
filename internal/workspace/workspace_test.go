@@ -521,6 +521,123 @@ func TestRebase_MissingWorkspaceReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+// TestRebaseOnto_ReplaysOnlyOwnCommitsAfterSquashMerge is stacked-branch
+// maintenance ticket 3's core case (docs/adr/0018): a prerequisite's
+// pull request squash-merges, so the target branch's new tip is one
+// commit with no ancestry back to the prerequisite's original commits. A
+// plain `git rebase newBase` would compute a merge base before those
+// original commits and try to replay them again, conflicting with the
+// squash commit that already carries their content. RebaseOnto instead
+// uses the pinned old-base SHA as an explicit boundary, so only the
+// dependent's own commit replays.
+func TestRebaseOnto_ReplaysOnlyOwnCommitsAfterSquashMerge(t *testing.T) {
+	root, base := newTempRepo(t)
+
+	// Build the prerequisite's two commits directly on root, and pin their
+	// tip as oldBase — the SHA a dependent's Worker would have captured at
+	// READY (ADR 0018) when it stacked on the prerequisite's branch.
+	writeFile(t, filepath.Join(root, "prereq.txt"), "line one\n")
+	runGit(t, root, "add", "prereq.txt")
+	runGit(t, root, "commit", "-q", "-m", "prereq commit 1")
+	writeFile(t, filepath.Join(root, "prereq.txt"), "line one\nline two\n")
+	runGit(t, root, "add", "prereq.txt")
+	runGit(t, root, "commit", "-q", "-m", "prereq commit 2")
+	oldBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	mgr := newManager(t, root)
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", oldBase)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(ws.Path, "worker.txt"), "worker change\n")
+	runGit(t, ws.Path, "add", "worker.txt")
+	runGit(t, ws.Path, "commit", "-q", "-m", "worker commit")
+
+	// Simulate the squash-merge: reset root back to base and replace the
+	// two prerequisite commits with a single squashed commit carrying the
+	// same final content.
+	runGit(t, root, "reset", "--hard", base)
+	writeFile(t, filepath.Join(root, "prereq.txt"), "line one\nline two\n")
+	runGit(t, root, "add", "prereq.txt")
+	runGit(t, root, "commit", "-q", "-m", "prereq (squashed)")
+	newBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	conflicts, err := mgr.RebaseOnto(context.Background(), "exec1", "issue-42", newBase, oldBase)
+	if err != nil {
+		t.Fatalf("RebaseOnto: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts = %v, want none", conflicts)
+	}
+
+	runGit(t, ws.Path, "merge-base", "--is-ancestor", newBase, "HEAD")
+	if _, err := os.Stat(filepath.Join(ws.Path, "worker.txt")); err != nil {
+		t.Fatalf("worktree lost its own commit's worker.txt after RebaseOnto: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(ws.Path, "prereq.txt"))
+	if err != nil {
+		t.Fatalf("read prereq.txt: %v", err)
+	}
+	if string(content) != "line one\nline two\n" {
+		t.Fatalf("prereq.txt = %q, want squashed content unchanged", content)
+	}
+}
+
+// TestRebaseOnto_ConflictAbortsAndReportsPaths mirrors
+// TestRebase_ConflictAbortsAndReportsPaths for the --onto boundary shape:
+// a conflict is reported as conflicting paths, not an error, and leaves
+// the Workspace exactly as it was.
+func TestRebaseOnto_ConflictAbortsAndReportsPaths(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(ws.Path, "README.md"), "worker edit\n")
+	runGit(t, ws.Path, "add", "README.md")
+	runGit(t, ws.Path, "commit", "-q", "-m", "worker edit")
+	originalHead := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+
+	writeFile(t, filepath.Join(root, "README.md"), "conflicting target edit\n")
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-q", "-m", "conflicting target edit")
+	newBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+
+	conflicts, err := mgr.RebaseOnto(context.Background(), "exec1", "issue-42", newBase, base)
+	if err != nil {
+		t.Fatalf("RebaseOnto: %v", err)
+	}
+	if len(conflicts) != 1 || conflicts[0] != "README.md" {
+		t.Fatalf("conflicts = %v, want [README.md]", conflicts)
+	}
+
+	head := strings.TrimSpace(runGit(t, ws.Path, "rev-parse", "HEAD"))
+	if head != originalHead {
+		t.Fatalf("HEAD after aborted rebase = %s, want unchanged %s", head, originalHead)
+	}
+}
+
+// TestRebaseOnto_MissingWorkspaceReturnsErrNotFound mirrors
+// TestRebase_MissingWorkspaceReturnsErrNotFound for RebaseOnto.
+func TestRebaseOnto_MissingWorkspaceReturnsErrNotFound(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	_, err := mgr.RebaseOnto(context.Background(), "exec1", "never-created", base, base)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RebaseOnto err = %v, want ErrNotFound", err)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func TestConflictCandidate_RebasesInDisposableWorkspaceAndCleansUp(t *testing.T) {
 	root, base := newTempRepo(t)
 	mgr := newManager(t, root)

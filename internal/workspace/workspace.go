@@ -598,6 +598,34 @@ func (m *Manager) CleanupConflictCandidate(ctx context.Context, candidate domain
 // of an error: a rebase conflict is an expected, caller-actionable outcome
 // here, not an infrastructure failure.
 func (m *Manager) Rebase(ctx context.Context, executionID, issueID, newBase string) ([]string, error) {
+	return m.rebase(ctx, executionID, issueID, newBase, "--", newBase)
+}
+
+// RebaseOnto moves an existing Workspace's branch onto newBase using
+// newBase's pinned old-base SHA (oldBase) as an explicit rebase boundary,
+// via `git rebase --onto newBase oldBase`, instead of Rebase's implicit
+// merge-base search. It repairs a stacked dependent after its
+// prerequisite's pull request merges (docs/adr/0018; stacked-branch
+// maintenance ticket 3): a squash-merge leaves no ancestry back to the
+// prerequisite's original commits, so git's automatic merge base would sit
+// before them and replay them again, conflicting with the squashed commit
+// that already carries their content. Naming oldBase explicitly tells git
+// to replay only the Workspace's own commits (those after oldBase) onto
+// newBase.
+//
+// Conflict and not-found behavior are identical to Rebase: a conflict
+// aborts the rebase and returns conflicting paths with a nil error; a
+// missing Workspace returns ErrNotFound.
+func (m *Manager) RebaseOnto(ctx context.Context, executionID, issueID, newBase, oldBase string) ([]string, error) {
+	return m.rebase(ctx, executionID, issueID, newBase, "--onto", newBase, oldBase)
+}
+
+// rebase runs `git rebase <rebaseArgs...>` in the Workspace for
+// executionID/issueID, sharing the conflict-detection and abort handling
+// Rebase and RebaseOnto both need: a conflict aborts the rebase and
+// returns conflicting paths with a nil error, and a missing Workspace
+// returns ErrNotFound, both naming targetBase for the error text.
+func (m *Manager) rebase(ctx context.Context, executionID, issueID, targetBase string, rebaseArgs ...string) ([]string, error) {
 	if err := validateIDs(executionID, issueID); err != nil {
 		return nil, err
 	}
@@ -611,10 +639,10 @@ func (m *Manager) Rebase(ctx context.Context, executionID, issueID, newBase stri
 		if _, ok, err := m.lookupWorktree(ctx, path); err != nil {
 			return err
 		} else if !ok {
-			return fmt.Errorf("workspace: rebase issue %s onto %s: %w", issueID, newBase, ErrNotFound)
+			return fmt.Errorf("workspace: rebase issue %s onto %s: %w", issueID, targetBase, ErrNotFound)
 		}
 
-		if _, rebaseErr := m.runGit(ctx, path, "rebase", "--", newBase); rebaseErr != nil {
+		if _, rebaseErr := m.runGit(ctx, path, append([]string{"rebase"}, rebaseArgs...)...); rebaseErr != nil {
 			paths, err := m.conflictedPaths(ctx, path)
 			if err != nil {
 				return err
@@ -627,7 +655,7 @@ func (m *Manager) Rebase(ctx context.Context, executionID, issueID, newBase stri
 				return rebaseErr
 			}
 			if _, err := m.runGit(ctx, path, "rebase", "--abort"); err != nil {
-				return fmt.Errorf("workspace: abort conflicted rebase for issue %s onto %s: %w", issueID, newBase, err)
+				return fmt.Errorf("workspace: abort conflicted rebase for issue %s onto %s: %w", issueID, targetBase, err)
 			}
 			conflicts = paths
 		}

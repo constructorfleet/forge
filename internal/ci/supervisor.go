@@ -200,6 +200,9 @@ func (s *Supervisor) Wait(ctx context.Context, executionID, issueID string) (dom
 			if err != nil {
 				return "", fmt.Errorf("ci: transition issue %s to DONE: %w", issueID, err)
 			}
+			if err := s.restackDependents(ctx, executionID, issueID); err != nil {
+				return "", err
+			}
 			if err := statusreflect.Apply(ctx, s.StatusTracker, s.Config.StatusReflection, issueID, domain.StateCIPending, domain.StateDone); err != nil {
 				return "", fmt.Errorf("ci: reflect status for issue %s: %w", issueID, err)
 			}
