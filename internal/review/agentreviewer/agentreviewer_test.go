@@ -676,6 +676,41 @@ func TestReview_InjectsRubricAndDiffIntoAgentPolicyNotes(t *testing.T) {
 	}
 }
 
+// TestReview_RubricsWarnAgainstFlaggingIntentionallyUnwiredCodeAsDead
+// verifies issue #374's fix: the bugs and quality rubrics must instruct the
+// reviewing agent not to flag a field or code path as dead/unused solely
+// because its only caller in the diff leaves it at its zero value, when a
+// doc comment states the field is intentionally left unwired pending other
+// work (e.g. issue #296's case, a provider-general field one provider does
+// not populate yet). Without this guidance, the reviewer sees only the sole
+// caller in view and misreads deliberate future-wiring as dead code.
+func TestReview_RubricsWarnAgainstFlaggingIntentionallyUnwiredCodeAsDead(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	_, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "diff --git a/x b/x\n+marker-diff-content",
+		Issue: newIssue(),
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+
+	invocations := fake.Invocations()
+	if len(invocations) != 3 {
+		t.Fatalf("invocations = %d, want 3", len(invocations))
+	}
+	for _, inv := range invocations {
+		notes := inv.Policy.Notes
+		if strings.Contains(notes, docsAxisMarker) {
+			continue // the docs axis does not review code for dead/unused fields
+		}
+		if !strings.Contains(notes, "intentionally unwired") {
+			t.Errorf("Policy.Notes missing the intentionally-unwired dispositive-comment guidance: %q", notes)
+		}
+	}
+}
+
 func TestReview_PassesWorkspacePathThroughToAgentRequest(t *testing.T) {
 	fake := newAxisRoutingAgent()
 	reviewer := agentreviewer.New(fake, 0.7)

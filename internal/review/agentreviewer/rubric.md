@@ -58,6 +58,14 @@ defect.
 - Do not check for a PR/MR discussion or bot comments, and do not withhold
   a finding to "avoid wasting the author's time" — there is no human
   author and no PR thread at this point in the workflow.
+- Do not flag a field, parameter, or code path as dead or unused only
+  because its one caller visible in the diff leaves it at the zero value.
+  A doc comment that states the field is intentionally unwired pending
+  other work (for example, `// intentionally unwired (spec #NNN)`, or an
+  equivalent statement naming the future consumer) is dispositive: treat
+  it as evidence the gap is deliberate, not a defect. Report it as a LOW
+  finding at most, and only when the comment does not point to a tracked
+  spec or issue.
 
 ## Output contract
 
