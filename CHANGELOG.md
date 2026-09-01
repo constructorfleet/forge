@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/constructorfleet/forge/compare/forge-v0.23.0...forge-v0.24.0) (2026-09-01)
+
+
+### Features
+
+* Remote backend · 2: clone-in / bundle-out publication transport + credential boundary ([#396](https://github.com/constructorfleet/forge/issues/396)) ([bbf073c](https://github.com/constructorfleet/forge/commit/bbf073c00c0b6d9e3b222c77a83b71490774eda2)), closes [#340](https://github.com/constructorfleet/forge/issues/340)
+
 ## [0.23.0](https://github.com/constructorfleet/forge/compare/forge-v0.22.0...forge-v0.23.0) (2026-09-01)
 
 
