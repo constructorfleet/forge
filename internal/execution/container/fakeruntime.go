@@ -52,6 +52,7 @@ type FakeRuntime struct {
 	removed  []ContainerHandle
 	executed []executedCall
 	startErr error
+	exited   map[ContainerHandle]error
 }
 
 // NewFakeRuntime returns an empty FakeRuntime.
@@ -83,18 +84,37 @@ func (r *FakeRuntime) Start(_ context.Context, spec ContainerSpec) (ContainerHan
 	return handle, nil
 }
 
+// ExitUnexpectedly makes every later Exec call against handle fail with err
+// instead of running the command, simulating a container that stops or
+// crashes while a Worker step is in progress (constructorfleet/forge#338),
+// rather than one that was never running at all (see errUnknownHandle).
+func (r *FakeRuntime) ExitUnexpectedly(handle ContainerHandle, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.exited == nil {
+		r.exited = make(map[ContainerHandle]error)
+	}
+	r.exited[handle] = err
+}
+
 // Exec runs cmd for real, on the host, inside the host directory handle's
 // ContainerSpec bind-mounted at WorkspaceMountPath (joined with
 // cmd.WorkDir, if set). It fails with errUnknownHandle if handle was never
-// returned by Start (or has since been Removed), and with an error if
-// handle's ContainerSpec has no mount at WorkspaceMountPath.
+// returned by Start (or has since been Removed), with the error a prior
+// ExitUnexpectedly call configured if handle's container exited mid-run,
+// and with an error if handle's ContainerSpec has no mount at
+// WorkspaceMountPath.
 func (r *FakeRuntime) Exec(ctx context.Context, handle ContainerHandle, cmd execution.Command) (execution.Result, error) {
 	r.mu.Lock()
 	spec, ok := r.specs[handle]
+	exitErr := r.exited[handle]
 	if ok {
 		r.executed = append(r.executed, executedCall{Handle: handle, Command: cmd})
 	}
 	r.mu.Unlock()
+	if exitErr != nil {
+		return execution.Result{}, fmt.Errorf("container: exec in exited container: %w", exitErr)
+	}
 	if !ok {
 		return execution.Result{}, fmt.Errorf("%w: %s", errUnknownHandle, handle)
 	}

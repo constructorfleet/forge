@@ -262,4 +262,55 @@ func TestBackend_PrepareCleansUpWorktreeWhenContainerFailsToStart(t *testing.T) 
 	}
 }
 
+// TestEnvironment_ExecuteSurfacesDeterministicErrorWhenContainerExits drives
+// a FakeRuntime whose container exits unexpectedly (constructorfleet/forge#338:
+// the container stops or crashes while a Worker step is in progress) and
+// asserts Execute surfaces that failure deterministically, then Cleanup
+// still succeeds so the container and worktree do not leak.
+func TestEnvironment_ExecuteSurfacesDeterministicErrorWhenContainerExits(t *testing.T) {
+	runtime := NewFakeRuntime()
+	backend, _, root, base := newTestBackendWithRuntime(t, runtime, nil)
+
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	containerEnv, ok := env.(*environment)
+	if !ok {
+		t.Fatalf("env = %T, want *environment", env)
+	}
+	exitErr := errors.New("container: container exited unexpectedly")
+	runtime.ExitUnexpectedly(containerEnv.handle, exitErr)
+
+	_, execErr := env.Execute(context.Background(), execution.Command{Name: "test", Command: "go test ./..."})
+	if execErr == nil {
+		t.Fatal("Execute: want error when the container exits unexpectedly, got nil")
+	}
+	if !errors.Is(execErr, exitErr) {
+		t.Errorf("Execute error = %v, want it to wrap %v", execErr, exitErr)
+	}
+
+	if cleanupErr := env.Cleanup(context.Background()); cleanupErr != nil {
+		t.Fatalf("Cleanup after an unexpected exit: %v", cleanupErr)
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", root, err)
+	}
+	worktreeDir := filepath.Join(resolvedRoot, ".forge", "worktrees", "exec1", "issue-42")
+	if _, statErr := os.Stat(worktreeDir); !os.IsNotExist(statErr) {
+		t.Errorf("worktree dir still exists at %s after Cleanup, want it removed: %v", worktreeDir, statErr)
+	}
+	if len(runtime.Stopped()) != 1 {
+		t.Errorf("len(Stopped()) = %d, want 1", len(runtime.Stopped()))
+	}
+	if len(runtime.Removed()) != 1 {
+		t.Errorf("len(Removed()) = %d, want 1", len(runtime.Removed()))
+	}
+}
+
 var _ execution.ExecutionBackend = (*Backend)(nil)
