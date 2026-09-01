@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/constructorfleet/forge/compare/forge-v0.19.0...forge-v0.19.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* CI conflict resolver loops forever: rebases onto stale local base, not fetched remote tip ([#351](https://github.com/constructorfleet/forge/issues/351)) ([9072462](https://github.com/constructorfleet/forge/commit/90724626fb11c0b3c1bad7ca60871e2ca4dcd41f)), closes [#349](https://github.com/constructorfleet/forge/issues/349)
+
 ## [0.19.0](https://github.com/constructorfleet/forge/compare/forge-v0.18.0...forge-v0.19.0) (2026-08-31)
 
 
