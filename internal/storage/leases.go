@@ -53,6 +53,7 @@ type ExecutionLease struct {
 func (l ExecutionLease) Lapsed(now time.Time) bool {
 	return !now.Before(l.ExpiresAt)
 }
+
 // ClaimExecutionLease records a remote execution's lease on issueID within
 // executionID, with an initial heartbeat and expiresAt. Returns
 // ErrExecutionLeaseHeld (unwrappable to *ExecutionLeaseConflictError) if a
