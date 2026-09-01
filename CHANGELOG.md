@@ -6,6 +6,7 @@
 ### Features
 
 * Wire LOST-detection into a periodic/scheduling loop ([#406](https://github.com/constructorfleet/forge/issues/406)) ([aef784c](https://github.com/constructorfleet/forge/commit/aef784cab7033312c6c12db0f9574944df0e4bd9)), closes [#400](https://github.com/constructorfleet/forge/issues/400)
+* Wire RecoverLostExecution into an actual controller reconciliation loop ([#409](https://github.com/constructorfleet/forge/issues/409)) ([78c5378](https://github.com/constructorfleet/forge/commit/78c53788a56a67fb6f75892b8076703c7886a7a9)), closes [#398](https://github.com/constructorfleet/forge/issues/398)
 
 ## [0.25.0](https://github.com/constructorfleet/forge/compare/forge-v0.24.0...forge-v0.25.0) (2026-09-01)
 
