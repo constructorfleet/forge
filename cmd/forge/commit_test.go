@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gittest"
 )
 
@@ -29,7 +31,7 @@ func TestGitPublisherCommit_CommitsDirtyWorkspaceAndReturnsHeadSHA(t *testing.T)
 		t.Fatalf("write feature.txt: %v", err)
 	}
 
-	sha, err := (gitPublisher{}).Commit(context.Background(), root, "Add feature\n\nRefs #22")
+	sha, err := (gitPublisher{}).Commit(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), "Add feature\n\nRefs #22")
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -48,7 +50,7 @@ func TestGitPublisherCommit_CleanWorkspaceReturnsExistingHead(t *testing.T) {
 
 	root, base := gittest.NewTempRepo(t)
 
-	sha, err := (gitPublisher{}).Commit(context.Background(), root, "unused")
+	sha, err := (gitPublisher{}).Commit(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), "unused")
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -75,7 +77,7 @@ func TestGitPublisherPush_PushesBranchToOrigin(t *testing.T) {
 	gittest.RunGit(t, root, "add", "feature.txt")
 	gittest.RunGit(t, root, "commit", "-q", "-m", "feature")
 
-	if err := (gitPublisher{}).Push(context.Background(), root, "forge/exec/22"); err != nil {
+	if err := (gitPublisher{}).Push(context.Background(), execution.NewFakeEnvironment(domain.Workspace{Path: root}), "forge/exec/22"); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 

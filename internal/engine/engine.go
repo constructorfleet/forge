@@ -38,13 +38,15 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
-// DiffProducer produces the diff (base...HEAD) for a Workspace, used to
-// build a review.Request. Engine stays git-free per its design (see this
-// file's package doc comment): a DiffProducer seam lets cmd/forge implement
-// this with git while tests inject a fake, exactly as WorkspaceCreator does
-// for Workspace creation.
+// DiffProducer produces the diff (base...HEAD) for an ExecutionEnvironment's
+// Workspace, used to build a review.Request. Engine stays git-free per its
+// design (see this file's package doc comment): a DiffProducer seam lets
+// cmd/forge implement this with git while tests inject a fake, exactly as
+// WorkspaceCreator does for Workspace creation. Diff takes the environment
+// rather than a bare path (ticket 303, constructorfleet/forge#285) so a
+// future non-local backend can relocate the Workspace it reads.
 type DiffProducer interface {
-	Diff(ctx context.Context, workspacePath, base string) (string, error)
+	Diff(ctx context.Context, env execbackend.ExecutionEnvironment, base string) (string, error)
 }
 
 // IssueFetcher is the subset of tracker.Tracker's exported behavior the
@@ -556,7 +558,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 			return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 		}
 		if issue.State == domain.StateCommitting {
-			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, workerBase, ws, issue)
+			issue, err = e.runCommitAndPR(ctx, execution.ID, issueID, workerBase, env, issue)
 			if err != nil {
 				return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, env, err)
 			}
@@ -641,7 +643,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	if issue.State != domain.StateCommitting {
 		return issue, nil
 	}
-	return e.runCommitAndPR(ctx, executionID, issueID, workerBase, ws, issue)
+	return e.runCommitAndPR(ctx, executionID, issueID, workerBase, env, issue)
 }
 
 // workerRef derives the Worker identity used both to claim an Issue
@@ -710,7 +712,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		// there is no separate nil check needed here. It also handles
 		// review.VerdictInconclusive itself (issue #161), routing straight
 		// to NEEDS_INFO, so only VerdictChangesRequired needs handling here.
-		issue, verdict, findings, err := e.runReview(ctx, executionID, issueID, workerBase, workspacePath, repoCtx, issue, gateResults)
+		issue, verdict, findings, err := e.runReview(ctx, executionID, issueID, workerBase, env, repoCtx, issue, gateResults)
 		if err != nil {
 			return domain.Issue{}, err
 		}
@@ -1294,7 +1296,7 @@ func capOutput(s string, maxBytes int) string {
 // gitDiffProducer doc comment): until ticket 22's commit step exists, a
 // production Reviewer wired up here would see an empty diff regardless of
 // what the Agent changed on disk.
-func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase, workspacePath string, repoCtx agent.RepositoryContext, issue domain.Issue, gateResults []gate.Result) (domain.Issue, review.Verdict, []review.Finding, error) {
+func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, gateResults []gate.Result) (domain.Issue, review.Verdict, []review.Finding, error) {
 	if e.Reviewer == nil {
 		// No Reviewer configured: auto-approve once Quality Gates have
 		// passed and advance to COMMITTING, exactly as an explicit
@@ -1313,10 +1315,11 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: Reviewer is set but Diff (DiffProducer) is nil for issue %s", issueID)
 	}
 
-	diff, err := e.Diff.Diff(ctx, workspacePath, workerBase)
+	diff, err := e.Diff.Diff(ctx, env, workerBase)
 	if err != nil {
 		return domain.Issue{}, "", nil, fmt.Errorf("engine: produce diff for issue %s: %w", issueID, err)
 	}
+	workspacePath := env.Workspace().Path
 
 	started := e.Now()
 	// transcriptCoord gives each review axis its own agent_runs row and

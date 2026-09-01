@@ -11,6 +11,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -28,9 +29,9 @@ type fakePublisher struct {
 	pushCalls   []struct{ workspacePath, branch string }
 }
 
-func (f *fakePublisher) Commit(_ context.Context, workspacePath, message string) (string, error) {
+func (f *fakePublisher) Commit(_ context.Context, env execution.ExecutionEnvironment, message string) (string, error) {
 	f.mu.Lock()
-	f.commitCalls = append(f.commitCalls, struct{ workspacePath, message string }{workspacePath, message})
+	f.commitCalls = append(f.commitCalls, struct{ workspacePath, message string }{env.Workspace().Path, message})
 	f.mu.Unlock()
 	if f.commitErr != nil {
 		return "", f.commitErr
@@ -41,9 +42,9 @@ func (f *fakePublisher) Commit(_ context.Context, workspacePath, message string)
 	return "deadbeef", nil
 }
 
-func (f *fakePublisher) Push(_ context.Context, workspacePath, branch string) error {
+func (f *fakePublisher) Push(_ context.Context, env execution.ExecutionEnvironment, branch string) error {
 	f.mu.Lock()
-	f.pushCalls = append(f.pushCalls, struct{ workspacePath, branch string }{workspacePath, branch})
+	f.pushCalls = append(f.pushCalls, struct{ workspacePath, branch string }{env.Workspace().Path, branch})
 	f.mu.Unlock()
 	return f.pushErr
 }
@@ -221,6 +222,47 @@ func TestExecute_CommitAndPR_AdvancesToCIPending(t *testing.T) {
 	}
 	if !sawCIPending {
 		t.Error("no transition to CI_PENDING found in events")
+	}
+}
+
+// TestExecute_CommitAndPR_UsesWorkspaceFromEnvironment covers ticket 303
+// (constructorfleet/forge#285): Commit, Push, and Diff must all read the
+// Workspace from the ExecutionEnvironment the Engine prepared, not a path
+// captured separately, so a future non-local backend can relocate it. On
+// LocalHost this means every call still sees the same Workspace path.
+func TestExecute_CommitAndPR_UsesWorkspaceFromEnvironment(t *testing.T) {
+	te := approvedTestEngine(t, "41", domain.Issue{ID: "41", Title: "Add widget support"})
+	pub := &fakePublisher{commitSHA: "def456"}
+	te.eng.Publisher = pub
+	te.eng.PRTracker = newFakePRTracker()
+	te.eng.BaseBranch = "main"
+	diff, ok := te.eng.Diff.(*stubDiff)
+	if !ok {
+		t.Fatalf("te.eng.Diff = %T, want *stubDiff", te.eng.Diff)
+	}
+
+	ctx := context.Background()
+	if _, err := te.eng.Execute(ctx, "41", te.base); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if len(diff.calls) == 0 {
+		t.Fatal("got 0 Diff calls, want at least 1")
+	}
+	if len(pub.commitCalls) != 1 || len(pub.pushCalls) != 1 {
+		t.Fatalf("got %d commit calls and %d push calls, want 1 each", len(pub.commitCalls), len(pub.pushCalls))
+	}
+	wantPath := pub.commitCalls[0].workspacePath
+	if wantPath == "" {
+		t.Fatal("commit workspacePath is empty")
+	}
+	if pub.pushCalls[0].workspacePath != wantPath {
+		t.Errorf("push workspacePath = %q, want %q (same Workspace commit used)", pub.pushCalls[0].workspacePath, wantPath)
+	}
+	for _, call := range diff.calls {
+		if call.workspacePath != wantPath {
+			t.Errorf("diff workspacePath = %q, want %q (same Workspace commit/push used)", call.workspacePath, wantPath)
+		}
 	}
 }
 
