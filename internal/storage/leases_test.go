@@ -220,7 +220,6 @@ func TestExecutionLeaseLapsed(t *testing.T) {
 		})
 	}
 }
-
 func TestRecordExecutionPlacementReplacesEarlierRecord(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

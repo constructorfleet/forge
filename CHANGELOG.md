@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.24.0](https://github.com/constructorfleet/forge/compare/forge-v0.23.0...forge-v0.24.0) (2026-09-01)
+
+
+### Features
+
+* Remote backend · 2: clone-in / bundle-out publication transport + credential boundary ([#396](https://github.com/constructorfleet/forge/issues/396)) ([bbf073c](https://github.com/constructorfleet/forge/commit/bbf073c00c0b6d9e3b222c77a83b71490774eda2)), closes [#340](https://github.com/constructorfleet/forge/issues/340)
+
+## [0.23.0](https://github.com/constructorfleet/forge/compare/forge-v0.22.0...forge-v0.23.0) (2026-09-01)
+
+
+### Features
+
+* Remote backend · 3: ExecutionLease storage + heartbeat + execution-placement record ([#394](https://github.com/constructorfleet/forge/issues/394)) ([a772e20](https://github.com/constructorfleet/forge/commit/a772e201ccf9312a6dbeffe101b3ef205937b844)), closes [#341](https://github.com/constructorfleet/forge/issues/341)
+* Remote backend · 5: config, wiring & preflight for backend: remote ([#393](https://github.com/constructorfleet/forge/issues/393)) ([2090fe1](https://github.com/constructorfleet/forge/commit/2090fe13949053f1edc81754d80e90f811c051f1)), closes [#343](https://github.com/constructorfleet/forge/issues/343)
+
 ## [0.22.0](https://github.com/constructorfleet/forge/compare/forge-v0.21.0...forge-v0.22.0) (2026-09-01)
 
 

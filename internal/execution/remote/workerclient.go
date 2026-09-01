@@ -5,11 +5,17 @@ package remote
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/execution"
 )
+
+// ErrWorkerUnreachable is returned by a WorkerClient constructor when the
+// single statically-configured worker cannot be reached, so callers can
+// fail wiring's preflight before any work is dispatched (issue #343).
+var ErrWorkerUnreachable = errors.New("remote: worker unreachable")
 
 // WorkerHandle identifies one Workspace a WorkerClient prepared. It is
 // opaque to the Remote backend; only the WorkerClient implementation gives
@@ -17,11 +23,20 @@ import (
 type WorkerHandle string
 
 // WorkerResult is the worker's finished work product for a prepared
-// Workspace. A later ticket turns this into a Git bundle the controller
-// imports; this ticket carries only the worker's Workspace, so a fetched
-// result already reflects any changes the Agent or a Command made there.
+// Workspace: a Git bundle spanning the pinned base commit
+// (WorkspaceRequest.Base, the revision PrepareWorkspace fetched) to the
+// worker's HEAD, plus that HEAD's commit SHA. The controller imports Bundle
+// into its canonical repository and publishes through the existing push
+// and change-request path (constructorfleet/forge#340); the worker never
+// pushes, and no shared filesystem between controller and worker is
+// required.
 type WorkerResult struct {
-	Workspace domain.Workspace
+	// Bundle is the raw output of `git bundle create` on the worker,
+	// spanning the pinned base to HeadSHA.
+	Bundle []byte
+
+	// HeadSHA is the commit SHA at Bundle's tip, on the worker.
+	HeadSHA string
 }
 
 // WorkerClient is the single controller-to-worker boundary the Remote

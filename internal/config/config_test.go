@@ -555,7 +555,7 @@ func TestLoad_BackendExplicitLocal(t *testing.T) {
 }
 
 func TestLoad_UnsupportedBackendRejected(t *testing.T) {
-	path := writeTemp(t, "execution:\n  backend: remote\n")
+	path := writeTemp(t, "execution:\n  backend: bogus\n")
 
 	_, err := Load(path)
 	if err == nil {
@@ -564,7 +564,7 @@ func TestLoad_UnsupportedBackendRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "execution.backend") {
 		t.Errorf("Load() error = %v, want it to identify execution.backend", err)
 	}
-	if !strings.Contains(err.Error(), "remote") {
+	if !strings.Contains(err.Error(), "bogus") {
 		t.Errorf("Load() error = %v, want it to include the offending value", err)
 	}
 }
@@ -599,6 +599,33 @@ func TestLoad_ContainerBackendParsesImageAndResources(t *testing.T) {
 	}
 	if cfg.Execution.Container.Memory != "4Gi" {
 		t.Errorf("Execution.Container.Memory = %q, want 4Gi", cfg.Execution.Container.Memory)
+	}
+}
+
+func TestLoad_RemoteBackendWithoutWorkerRejected(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: remote\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "execution.worker.endpoint") {
+		t.Errorf("Load() error = %v, want it to identify execution.worker.endpoint", err)
+	}
+}
+
+func TestLoad_RemoteBackendParsesWorkerEndpoint(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: remote\n  worker:\n    endpoint: https://worker.example.com:9090\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Execution.Backend != BackendRemote {
+		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendRemote)
+	}
+	if cfg.Execution.Worker.Endpoint != "https://worker.example.com:9090" {
+		t.Errorf("Execution.Worker.Endpoint = %q, want https://worker.example.com:9090", cfg.Execution.Worker.Endpoint)
 	}
 }
 

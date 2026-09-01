@@ -28,10 +28,13 @@ type FakeWorker struct {
 	prepareErr      error
 	executeOutcomes *fake.OutcomeQueue[execution.Result]
 	agentOutcomes   *fake.OutcomeQueue[agent.AgentResult]
+	fetchResult     WorkerResult
+	fetchErr        error
 
 	mu         sync.Mutex
 	prepared   []execution.WorkspaceRequest
 	executed   []execution.Command
+	agentCalls int
 	heartbeats int
 	fetched    int
 	cleanedUp  []WorkerHandle
@@ -79,6 +82,22 @@ func (w *FakeWorker) ProgramAgentError(issueID string, err error) {
 	w.agentOutcomes.ProgramError(issueID, err)
 }
 
+// ProgramFetchResult makes FetchResult return result.
+func (w *FakeWorker) ProgramFetchResult(result WorkerResult) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fetchResult = result
+	w.fetchErr = nil
+}
+
+// ProgramFetchError makes FetchResult return err instead of a result,
+// simulating a worker whose finished work product cannot be retrieved.
+func (w *FakeWorker) ProgramFetchError(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fetchErr = err
+}
+
 // PrepareWorkspace records req and returns the FakeWorker's Workspace, or
 // the programmed error if ProgramPrepareError was called.
 func (w *FakeWorker) PrepareWorkspace(_ context.Context, req execution.WorkspaceRequest) (WorkerHandle, domain.Workspace, error) {
@@ -103,6 +122,9 @@ func (w *FakeWorker) Execute(_ context.Context, _ WorkerHandle, cmd execution.Co
 // RunAgent returns the next programmed outcome for req.Issue.ID, per
 // fake.OutcomeQueue's consume/repeat/default rules.
 func (w *FakeWorker) RunAgent(_ context.Context, _ WorkerHandle, req agent.AgentRequest) (agent.AgentResult, error) {
+	w.mu.Lock()
+	w.agentCalls++
+	w.mu.Unlock()
 	return w.agentOutcomes.Next(req.Issue.ID)
 }
 
@@ -114,13 +136,17 @@ func (w *FakeWorker) Heartbeat(_ context.Context, _ WorkerHandle) error {
 	return nil
 }
 
-// FetchResult records that it was called and returns the FakeWorker's
-// Workspace as the result.
+// FetchResult records that it was called and returns the programmed
+// WorkerResult (via ProgramFetchResult), or the programmed error (via
+// ProgramFetchError).
 func (w *FakeWorker) FetchResult(_ context.Context, _ WorkerHandle) (WorkerResult, error) {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.fetched++
-	w.mu.Unlock()
-	return WorkerResult{Workspace: w.workspace}, nil
+	if w.fetchErr != nil {
+		return WorkerResult{}, w.fetchErr
+	}
+	return w.fetchResult, nil
 }
 
 // Cleanup records handle and always succeeds.
@@ -148,6 +174,13 @@ func (w *FakeWorker) Executed() []execution.Command {
 	out := make([]execution.Command, len(w.executed))
 	copy(out, w.executed)
 	return out
+}
+
+// AgentCalls returns how many times RunAgent was called.
+func (w *FakeWorker) AgentCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.agentCalls
 }
 
 // Heartbeats returns how many times Heartbeat was called.
