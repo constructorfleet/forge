@@ -17,16 +17,16 @@ type Backend struct {
 	workspaces *workspace.Manager
 	runtime    ContainerRuntime
 	image      string
+	resources  Resources
 	newAgent   AgentFactory
 }
 
 // NewBackend returns a Backend that prepares Workspaces via workspaces,
-// launches every environment's container from image through runtime, and
-// gives every prepared environment the Agent newAgent builds for it.
-// newAgent may be nil, in which case every environment's Agent() returns
-// nil, matching LocalHost's Backend for a nil ag.
-func NewBackend(workspaces *workspace.Manager, runtime ContainerRuntime, image string, newAgent AgentFactory) *Backend {
-	return &Backend{workspaces: workspaces, runtime: runtime, image: image, newAgent: newAgent}
+// launches every environment's container from image, with resources,
+// through runtime, and gives every prepared environment the Agent newAgent
+// builds for it. newAgent may be nil, in which case Agent() returns nil.
+func NewBackend(workspaces *workspace.Manager, runtime ContainerRuntime, image string, resources Resources, newAgent AgentFactory) *Backend {
+	return &Backend{workspaces: workspaces, runtime: runtime, image: image, resources: resources, newAgent: newAgent}
 }
 
 // Prepare creates (or, per workspace.Manager.Create, idempotently reuses)
@@ -42,6 +42,8 @@ func (b *Backend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (
 
 	handle, err := b.runtime.Start(ctx, ContainerSpec{
 		Image:  b.image,
+		CPU:    b.resources.CPU,
+		Memory: b.resources.Memory,
 		Mounts: []Mount{{HostPath: ws.Path, ContainerPath: WorkspaceMountPath}},
 	})
 	if err != nil {

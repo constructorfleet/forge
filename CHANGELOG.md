@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/constructorfleet/forge/compare/forge-v0.20.0...forge-v0.21.0) (2026-09-01)
+
+
+### Features
+
+* Container backend · 3: config, wiring & preflight for backend: container ([#386](https://github.com/constructorfleet/forge/issues/386)) ([41a8a62](https://github.com/constructorfleet/forge/commit/41a8a6282ffcaa71fd0d8e5af757a6a590679936)), closes [#336](https://github.com/constructorfleet/forge/issues/336)
+
 ## [0.20.0](https://github.com/constructorfleet/forge/compare/forge-v0.19.4...forge-v0.20.0) (2026-09-01)
 
 

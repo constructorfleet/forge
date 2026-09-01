@@ -60,10 +60,14 @@ type ExecutionConfig struct {
 
 	// Backend selects where a Worker's ExecutionEnvironment is prepared.
 	// Empty defaults to BackendLocal, so an existing .forge.yaml with no
-	// `execution.backend` key keeps running exactly as before. Container
-	// and Remote values are reserved for later specs; an unrecognized value
-	// is rejected by validate before anything is wired.
+	// `execution.backend` key keeps running exactly as before. Remote is
+	// reserved for a later spec; an unrecognized value is rejected by
+	// validate before anything is wired.
 	Backend string `yaml:"backend"`
+
+	// Container configures the Container backend. It is read only when
+	// Backend is BackendContainer.
+	Container ContainerConfig `yaml:"container"`
 }
 
 // Backend selects the ExecutionBackend a Worker's ExecutionEnvironment is
@@ -73,7 +77,30 @@ const (
 	// Workspace and local subprocesses, reproducing Forge's execution
 	// behavior exactly. The default when unspecified.
 	BackendLocal = "local"
+
+	// BackendContainer selects the Container backend: a git-worktree
+	// Workspace bind-mounted into an isolated container built from
+	// ExecutionConfig.Container.
+	BackendContainer = "container"
 )
+
+// ContainerConfig gives the Container backend the image to run and coarse
+// resource limits, when ExecutionConfig.Backend is BackendContainer. Forge
+// does not build Image; it must already exist in a registry the container
+// runtime can pull from.
+type ContainerConfig struct {
+	// Image is the container image reference to launch (e.g.
+	// "forge/agent:latest"). Required when Backend is BackendContainer.
+	Image string `yaml:"image"`
+
+	// CPU is the coarse CPU limit to give the container (e.g. "2"), passed
+	// through to the container runtime unparsed. Optional.
+	CPU string `yaml:"cpu"`
+
+	// Memory is the coarse memory limit to give the container (e.g. "4Gi"),
+	// passed through to the container runtime unparsed. Optional.
+	Memory string `yaml:"memory"`
+}
 
 // WorkflowConfig configures the implementation loop and whether a Review
 // stage runs after Quality Gates pass.
