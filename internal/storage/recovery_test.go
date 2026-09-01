@@ -123,3 +123,36 @@ func TestRecordPullRequest_IdenticalRecoveryIsIdempotent(t *testing.T) {
 		t.Fatalf("got %d events, want 1 after identical recovery", len(events))
 	}
 }
+
+func TestRecordPullRequest_RecoveryFillsMissingBaseBranch(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForPullRequest(t, store, "exec-pr-base-recovery", "issue-pr-base-recovery")
+
+	pr := storage.PullRequest{
+		ExecutionID: "exec-pr-base-recovery",
+		IssueID:     "issue-pr-base-recovery",
+		Number:      99,
+		URL:         "https://example.invalid/pr/99",
+		CommitSHA:   "deadbeef",
+		CreatedAt:   time.Date(2026, 8, 28, 12, 1, 0, 0, time.UTC),
+	}
+	if err := store.RecordPullRequest(ctx, pr); err != nil {
+		t.Fatalf("first RecordPullRequest: %v", err)
+	}
+	pr.BaseBranch = "main"
+	if err := store.RecordPullRequest(ctx, pr); err != nil {
+		t.Fatalf("second RecordPullRequest: %v", err)
+	}
+
+	prs, err := store.PullRequestsByIssue(ctx, "exec-pr-base-recovery", "issue-pr-base-recovery")
+	if err != nil {
+		t.Fatalf("PullRequestsByIssue: %v", err)
+	}
+	if len(prs) != 1 {
+		t.Fatalf("got %d pull requests, want 1 after base branch recovery", len(prs))
+	}
+	if prs[0].BaseBranch != "main" {
+		t.Fatalf("BaseBranch = %q, want main", prs[0].BaseBranch)
+	}
+}

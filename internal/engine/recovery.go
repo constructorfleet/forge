@@ -355,6 +355,7 @@ func (e *Engine) resumeFromPRCreating(ctx context.Context, executionID string, i
 		IssueID:     issue.ID,
 		Number:      pr.Number,
 		URL:         pr.URL,
+		BaseBranch:  base,
 		CommitSHA:   sha,
 		CreatedAt:   e.Now(),
 	}); err != nil {

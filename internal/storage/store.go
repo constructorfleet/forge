@@ -190,6 +190,8 @@ type PullRequest struct {
 	IssueID     string
 	Number      int
 	URL         string
+	// BaseBranch is the pull request target branch recorded at creation.
+	BaseBranch string
 	// CommitSHA is the HEAD commit the Publisher committed and pushed
 	// immediately before this pull request was created (CONTEXT.md
 	// "COMMITTING", "PR_CREATING").

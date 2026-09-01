@@ -218,6 +218,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		IssueID:     issueID,
 		Number:      pr.Number,
 		URL:         pr.URL,
+		BaseBranch:  base,
 		CommitSHA:   sha,
 		CreatedAt:   e.Now(),
 	}); err != nil {

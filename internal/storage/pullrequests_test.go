@@ -37,6 +37,7 @@ func TestRecordPullRequest_PersistsAndAppendsEvent(t *testing.T) {
 		IssueID:     "issue-pr",
 		Number:      22,
 		URL:         "https://example.invalid/pr/22",
+		BaseBranch:  "main",
 		CommitSHA:   "deadbeef",
 		CreatedAt:   createdAt,
 	}
@@ -52,7 +53,7 @@ func TestRecordPullRequest_PersistsAndAppendsEvent(t *testing.T) {
 		t.Fatalf("got %d pull requests, want 1", len(prs))
 	}
 	got := prs[0]
-	if got.Number != 22 || got.URL != "https://example.invalid/pr/22" || got.CommitSHA != "deadbeef" {
+	if got.Number != 22 || got.URL != "https://example.invalid/pr/22" || got.BaseBranch != "main" || got.CommitSHA != "deadbeef" {
 		t.Fatalf("persisted pull request = %+v", got)
 	}
 	if !got.CreatedAt.Equal(createdAt) {
@@ -67,14 +68,15 @@ func TestRecordPullRequest_PersistsAndAppendsEvent(t *testing.T) {
 		t.Fatalf("events = %+v, want one pull_request.created event", events)
 	}
 	var payload struct {
-		URL       string `json:"url"`
-		Number    int    `json:"number"`
-		CommitSHA string `json:"commit_sha"`
+		URL        string `json:"url"`
+		Number     int    `json:"number"`
+		BaseBranch string `json:"base_branch"`
+		CommitSHA  string `json:"commit_sha"`
 	}
 	if err := json.Unmarshal([]byte(events[0].Data), &payload); err != nil {
 		t.Fatalf("unmarshal pull_request.created event: %v", err)
 	}
-	if payload.URL != pr.URL || payload.Number != pr.Number || payload.CommitSHA != pr.CommitSHA {
+	if payload.URL != pr.URL || payload.Number != pr.Number || payload.BaseBranch != pr.BaseBranch || payload.CommitSHA != pr.CommitSHA {
 		t.Fatalf("event payload = %+v, want %+v", payload, pr)
 	}
 }

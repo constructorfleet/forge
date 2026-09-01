@@ -364,6 +364,44 @@ func TestWait_MergeConflict_ResolverSuccessRecordsRepairAndContinuesToChecks(t *
 	}
 }
 
+func TestWait_MergeConflict_ResolverUsesStoredPullRequestBaseBranch(t *testing.T) {
+	store := openTestStore(t)
+	seedIssueWithPR(t, store, "exec-conflict-stacked", "52")
+	prs, err := store.PullRequestsByIssue(context.Background(), "exec-conflict-stacked", "52")
+	if err != nil {
+		t.Fatalf("PullRequestsByIssue: %v", err)
+	}
+	prs[0].BaseBranch = "forge/exec-conflict-stacked/51"
+	if err := store.RecordPullRequest(context.Background(), prs[0]); err != nil {
+		t.Fatalf("RecordPullRequest: %v", err)
+	}
+
+	trk := &stubTrackerWithMergeStatus{
+		stubTracker: stubTracker{
+			mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+			checkResponses: [][]tracker.PullRequestCheck{
+				{{Name: "build", State: tracker.CheckSuccess}},
+			},
+		},
+		conflictedUntil: 1,
+		mergedAfter:     1,
+	}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	resolver := &stubConflictResolver{result: ci.ConflictResolutionResult{Resolved: true}}
+	supervisor.ConflictResolver = resolver
+
+	if _, err := supervisor.Wait(context.Background(), "exec-conflict-stacked", "52"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("ResolveMergeConflict calls = %d, want 1", resolver.calls)
+	}
+	if got := resolver.requests[0].BaseBranch; got != "forge/exec-conflict-stacked/51" {
+		t.Fatalf("resolver BaseBranch = %q, want stored pull request base", got)
+	}
+}
+
 func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict-refused", "33")

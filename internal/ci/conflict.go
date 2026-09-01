@@ -56,7 +56,7 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 			ExecutionID:        executionID,
 			IssueID:            issueID,
 			PullRequestNumber:  pr.Number,
-			BaseBranch:         s.BaseBranch,
+			BaseBranch:         conflictResolutionBaseBranch(pr, s.BaseBranch),
 			PullRequestHeadSHA: pr.CommitSHA,
 		})
 		if err != nil {
@@ -82,6 +82,13 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 	}
 
 	return s.routeUnresolvedConflict(ctx, executionID, issueID, "pull request cannot be merged into its base branch due to a conflict")
+}
+
+func conflictResolutionBaseBranch(pr storage.PullRequest, fallback string) string {
+	if pr.BaseBranch != "" {
+		return pr.BaseBranch
+	}
+	return fallback
 }
 
 func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, issueID, details string) (handled bool, state domain.IssueState, err error) {
