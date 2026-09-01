@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,6 +225,40 @@ func TestEnvironment_CleanupStopsAndRemovesContainerAndWorktree(t *testing.T) {
 	}
 	if len(runtime.Removed()) != 1 {
 		t.Errorf("len(Removed()) = %d, want 1", len(runtime.Removed()))
+	}
+}
+
+// TestBackend_PrepareCleansUpWorktreeWhenContainerFailsToStart drives a
+// FakeRuntime whose Start always fails (constructorfleet/forge#337: the
+// image is missing or the runtime rejects the launch) and asserts Prepare
+// surfaces that failure deterministically, with no lingering worktree from
+// the workspace.Manager.Create that ran before Start failed.
+func TestBackend_PrepareCleansUpWorktreeWhenContainerFailsToStart(t *testing.T) {
+	runtime := NewFakeRuntime()
+	startErr := errors.New("container: image forge/agent:latest not found")
+	runtime.FailStart(startErr)
+	backend, _, root, base := newTestBackendWithRuntime(t, runtime, nil)
+
+	env, err := backend.Prepare(context.Background(), execution.WorkspaceRequest{
+		ExecutionID: "exec1", IssueID: "issue-42", Base: base,
+	})
+	if err == nil {
+		t.Fatal("Prepare: want error when the container fails to start, got nil")
+	}
+	if !errors.Is(err, startErr) {
+		t.Errorf("Prepare error = %v, want it to wrap %v", err, startErr)
+	}
+	if env != nil {
+		t.Errorf("Prepare env = %v, want nil on a start failure", env)
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", root, err)
+	}
+	worktreeDir := filepath.Join(resolvedRoot, ".forge", "worktrees", "exec1", "issue-42")
+	if _, statErr := os.Stat(worktreeDir); !os.IsNotExist(statErr) {
+		t.Errorf("worktree dir still exists at %s after a start failure, want it cleaned up: %v", worktreeDir, statErr)
 	}
 }
 

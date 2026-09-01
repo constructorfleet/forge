@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
@@ -47,7 +48,15 @@ func (b *Backend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (
 		Mounts: []Mount{{HostPath: ws.Path, ContainerPath: WorkspaceMountPath}},
 	})
 	if err != nil {
-		return nil, err
+		// Start failed after Create already made the worktree above, so
+		// this environment never comes up and the Engine gets no
+		// ExecutionEnvironment to Cleanup (constructorfleet/forge#337):
+		// the Backend must remove the partial worktree itself here.
+		startErr := fmt.Errorf("container: start container: %w", err)
+		if cleanupErr := b.workspaces.Cleanup(ctx, req.ExecutionID, req.IssueID); cleanupErr != nil {
+			return nil, errors.Join(startErr, fmt.Errorf("container: cleanup worktree after start failure: %w", cleanupErr))
+		}
+		return nil, startErr
 	}
 
 	return &environment{

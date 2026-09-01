@@ -515,7 +515,12 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		Base:        workerBase,
 	})
 	if err != nil {
-		return ExecuteResult{}, fmt.Errorf("engine: prepare environment for issue %s: %w", issueID, err)
+		// No Environment exists yet (Prepare itself failed, e.g. a
+		// Container backend whose container never starts), so this
+		// routes through failOut with a nil env rather than the raw
+		// error: the Issue must still land in a deterministic terminal
+		// state instead of hanging in PREPARING (constructorfleet/forge#337).
+		return ExecuteResult{}, e.failOut(ctx, execution.ID, issueID, nil, fmt.Errorf("engine: prepare environment for issue %s: %w", issueID, err))
 	}
 	ws := env.Workspace()
 	// Repository Context is compiled exactly once per Execution (CONTEXT.md
@@ -1565,7 +1570,10 @@ func (e *Engine) failOut(ctx context.Context, executionID, issueID string, env e
 	errs := []error{origErr}
 
 	cancelled := errors.Is(origErr, context.Canceled)
-	if !cancelled {
+	// env is nil when Prepare itself failed: no Environment ever came up,
+	// so there is nothing here for failOut to clean up (the backend owns
+	// cleaning up whatever it partially created before it errored).
+	if !cancelled && env != nil {
 		if err := env.Cleanup(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("engine: cleanup workspace for issue %s: %w", issueID, err))
 		}
