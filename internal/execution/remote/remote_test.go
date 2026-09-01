@@ -11,7 +11,7 @@ import (
 
 func newTestBackend(ws domain.Workspace) (*Backend, *FakeWorker) {
 	worker := NewFakeWorker(ws)
-	return NewBackend(worker), worker
+	return NewBackend(worker, nil), worker
 }
 
 func TestBackend_PreparePassesRequestToWorkerAndReturnsItsWorkspace(t *testing.T) {

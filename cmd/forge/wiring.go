@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
@@ -109,7 +110,7 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 		return nil, err
 	}
 
-	backend, err := buildExecutionBackend(cfg, wsMgr, ag)
+	backend, err := buildExecutionBackend(cfg, wsMgr, ag, store)
 	if err != nil {
 		return nil, err
 	}
@@ -777,11 +778,14 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 // unavailable container runtime is a wiring-time error, not a mid-run one.
 // config.BackendRemote selects the Remote backend (issue #343), targeting
 // the single statically-configured worker named by cfg.Execution.Worker;
-// buildWorkerClient's preflight failure surfaces here the same way. config.
-// Load's validation already rejects any other value before wiring ever
-// runs (see config.validate); the default case here is a defensive
-// backstop, matching buildAgent's provider switch.
-func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent.Agent) (execution.ExecutionBackend, error) {
+// buildWorkerClient's preflight failure surfaces here the same way. store
+// backs the Remote backend's loss recovery (issue #344): a WorkerClient
+// error is only ever routed to LOST after engine.RecoverLostExecution
+// confirms the ExecutionLease has lapsed, never merely because Execute or
+// RunAgent returned an error. config.Load's validation already rejects any
+// other value before wiring ever runs (see config.validate); the default
+// case here is a defensive backstop, matching buildAgent's provider switch.
+func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent.Agent, store storage.Store) (execution.ExecutionBackend, error) {
 	switch cfg.Execution.Backend {
 	case config.BackendLocal, "":
 		return localhost.NewBackend(wsMgr, ag), nil
@@ -797,9 +801,27 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 		if err != nil {
 			return nil, fmt.Errorf("forge: remote worker preflight: %w", err)
 		}
-		return remote.NewBackend(worker), nil
+		return remote.NewBackend(worker, buildRemoteRecoverFunc(store)), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
+	}
+}
+
+// buildRemoteRecoverFunc adapts engine.RecoverLostExecution to
+// remote.RecoverFunc, so the Remote backend can tell a vanished worker
+// (heartbeat lapse) from a worker-reported failure without the Engine
+// itself knowing which backend is running (issue #344).
+func buildRemoteRecoverFunc(store storage.Store) remote.RecoverFunc {
+	return func(ctx context.Context, executionID, issueID string) (bool, error) {
+		result, err := engine.RecoverLostExecution(ctx, store, executionID, issueID, time.Now)
+		if err != nil {
+			var exhausted *domain.RetryExhaustedError
+			if errors.As(err, &exhausted) {
+				return true, nil
+			}
+			return false, err
+		}
+		return result.Lost, nil
 	}
 }
 

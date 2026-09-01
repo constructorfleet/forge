@@ -9,11 +9,22 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 )
+
+// ErrLost signals that Execute or Agent().Execute failed because the
+// backend lost its worker (e.g. a remote worker's heartbeat lapsed past its
+// lease), as distinct from the backend reporting an ordinary Command or
+// Agent failure. A backend that can lose a worker wraps ErrLost onto the
+// returned error only after confirming the loss (internal/execution/remote
+// checks the ExecutionLease before wrapping); every other error from
+// Execute or Agent().Execute is an ordinary failure that routes through the
+// Engine's existing failure handling, exactly as a local failure does.
+var ErrLost = errors.New("execution: backend lost its worker")
 
 // WorkspaceRequest describes the Workspace an ExecutionEnvironment must
 // prepare: which Execution and Issue it belongs to, and which revision to
