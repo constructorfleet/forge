@@ -592,6 +592,38 @@ type Store interface {
 	// for a Planning Execution.
 	GetDecisionCheckpointsByExecution(ctx context.Context, executionID string) ([]DecisionCheckpoint, error)
 
+	// ClaimExecutionLease records a remote execution's lease on issueID
+	// within executionID, following ClaimFeaturePlanningLease's pattern
+	// plus an initial heartbeat and expiresAt. Returns ErrExecutionLeaseHeld
+	// (unwrappable to *ExecutionLeaseConflictError) if a lease is already
+	// held, via a database constraint rather than a read-then-write check
+	// that would race.
+	ClaimExecutionLease(ctx context.Context, executionID, issueID string, expiresAt time.Time) error
+
+	// ExecutionLease reloads the active execution lease for issueID within
+	// executionID. Returns ErrNotFound if no active lease exists.
+	ExecutionLease(ctx context.Context, executionID, issueID string) (ExecutionLease, error)
+
+	// HeartbeatExecutionLease records that the worker is still alive,
+	// advancing the lease's heartbeat to now and its expiry to expiresAt.
+	// Returns ErrNotFound if no active lease exists.
+	HeartbeatExecutionLease(ctx context.Context, executionID, issueID string, expiresAt time.Time) error
+
+	// ReleaseExecutionLease removes the active execution lease for issueID
+	// within executionID. Releasing a missing lease is a no-op.
+	ReleaseExecutionLease(ctx context.Context, executionID, issueID string) error
+
+	// RecordExecutionPlacement persists the remote-execution substrate
+	// facts for one Issue execution — backend, worker, Workspace, and
+	// workspace-lifecycle state — replacing any earlier record for the same
+	// Execution/Issue pair.
+	RecordExecutionPlacement(ctx context.Context, placement ExecutionPlacement) error
+
+	// ExecutionPlacementByIssue reloads the persisted execution placement
+	// for issueID within executionID. Returns ErrNotFound if none has been
+	// recorded.
+	ExecutionPlacementByIssue(ctx context.Context, executionID, issueID string) (ExecutionPlacement, error)
+
 	// Close releases the underlying database connection(s).
 	Close() error
 }
