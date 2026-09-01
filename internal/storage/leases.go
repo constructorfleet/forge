@@ -137,7 +137,8 @@ func (s *SQLiteStore) HeartbeatExecutionLease(ctx context.Context, executionID, 
 func (s *SQLiteStore) ListActiveExecutionLeases(ctx context.Context) ([]ExecutionLease, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT execution_id, issue_id, heartbeat_at, expires_at, claimed_at
-		FROM execution_leases`,
+		FROM execution_leases
+		ORDER BY claimed_at, execution_id, issue_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list active execution leases: %w", err)
