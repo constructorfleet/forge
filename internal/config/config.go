@@ -51,10 +51,29 @@ type GitConfig struct {
 	WorktreeRoot   string `yaml:"worktree_root"`
 }
 
-// ExecutionConfig bounds how many Workers may run concurrently.
+// ExecutionConfig bounds how many Workers may run concurrently and selects
+// the ExecutionBackend a Worker's environment prepares against (issue #304,
+// constructorfleet/forge#285: the execution-location configuration
+// surface).
 type ExecutionConfig struct {
 	MaxParallel int `yaml:"max_parallel"`
+
+	// Backend selects where a Worker's ExecutionEnvironment is prepared.
+	// Empty defaults to BackendLocal, so an existing .forge.yaml with no
+	// `execution.backend` key keeps running exactly as before. Container
+	// and Remote values are reserved for later specs; an unrecognized value
+	// is rejected by validate before anything is wired.
+	Backend string `yaml:"backend"`
 }
+
+// Backend selects the ExecutionBackend a Worker's ExecutionEnvironment is
+// prepared against (ExecutionConfig.Backend).
+const (
+	// BackendLocal selects the in-process LocalHost backend: a git-worktree
+	// Workspace and local subprocesses, reproducing Forge's execution
+	// behavior exactly. The default when unspecified.
+	BackendLocal = "local"
+)
 
 // WorkflowConfig configures the implementation loop and whether a Review
 // stage runs after Quality Gates pass.
@@ -488,7 +507,7 @@ func unresolvedDefault() Config {
 			BranchTemplate: "forge/{execution}/{issue}",
 			WorktreeRoot:   ".forge/worktrees",
 		},
-		Execution: ExecutionConfig{MaxParallel: 4},
+		Execution: ExecutionConfig{MaxParallel: 4, Backend: BackendLocal},
 		Retry:     domain.RetryLimits{Gate: 3, Review: 2, CI: 3},
 		Workflow: WorkflowConfig{
 			Implementation:        "tdd",

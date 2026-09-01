@@ -158,6 +158,16 @@ type Engine struct {
 	// fake so they never shell out.
 	Gates gate.CommandRunner
 
+	// Backend is the ExecutionBackend cmd/forge selects from
+	// Config.Execution.Backend (issue #304, constructorfleet/forge#285:
+	// execution-location configuration). It is optional: nil leaves
+	// e.backend() building its own workspaceCreatorBackend from
+	// Workspaces/Gates/Agent (see environment.go), which every existing
+	// caller of New relies on. cmd/forge wires it explicitly so an
+	// unsupported backend value fails at wiring instead of silently falling
+	// back.
+	Backend execbackend.ExecutionBackend
+
 	// Reviewer is the review.Reviewer the REVIEWING stage invokes once
 	// Quality Gates pass (ticket 20, CONTEXT.md "Review"). It is optional
 	// like NeedsInfoTracker: nil leaves REVIEWING a resting state (this
