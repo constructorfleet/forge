@@ -383,6 +383,14 @@ type MergeStatusGetter interface {
 	GetPullRequestMergeStatus(ctx context.Context, number int) (PullRequestMergeStatus, error)
 }
 
+// PullRequestTargetBranchGetter is an optional capability a Tracker adapter
+// implements when it can report the pull request's current target branch.
+// GitHub can retarget a stacked pull request after its prerequisite merges,
+// so stored creation data can be stale during conflict repair.
+type PullRequestTargetBranchGetter interface {
+	GetPullRequestTargetBranch(ctx context.Context, number int) (string, error)
+}
+
 // RateLimitError is returned by a Tracker implementation when a request is
 // rejected because the tracker's API rate limit has been exhausted. It is
 // tracker-agnostic so scheduler-facing code can detect and react to rate

@@ -2,10 +2,10 @@ package ci
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/prbase"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -90,6 +90,15 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 }
 
 func (s *Supervisor) conflictResolutionBaseBranch(ctx context.Context, executionID, issueID string, pr storage.PullRequest) (string, error) {
+	if getter, ok := s.Tracker.(tracker.PullRequestTargetBranchGetter); ok {
+		base, err := getter.GetPullRequestTargetBranch(ctx, pr.Number)
+		if err != nil {
+			return "", fmt.Errorf("ci: resolve current pull request target for issue %s: %w", issueID, err)
+		}
+		if base != "" {
+			return base, nil
+		}
+	}
 	if pr.BaseBranch != "" {
 		return pr.BaseBranch, nil
 	}
@@ -97,17 +106,11 @@ func (s *Supervisor) conflictResolutionBaseBranch(ctx context.Context, execution
 	if err != nil {
 		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
 	}
-	if len(issue.Dependencies) != 1 {
-		return s.BaseBranch, nil
-	}
-	ws, err := s.Store.WorkspaceByIssue(ctx, executionID, issue.Dependencies[0].DependsOnID)
+	base, err := prbase.Resolve(ctx, s.Store, executionID, issue, s.BaseBranch)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return s.BaseBranch, nil
-		}
 		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
 	}
-	return ws.Branch, nil
+	return base, nil
 }
 
 func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, issueID, details string) (handled bool, state domain.IssueState, err error) {

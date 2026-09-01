@@ -26,6 +26,8 @@ type stubTrackerWithMergeStatus struct {
 	conflictedUntil int
 	mergedAfter     int
 	mergeCalls      int
+	targetBranch    string
+	targetErr       error
 }
 
 func (s *stubTrackerWithMergeStatus) GetPullRequestMergeStatus(context.Context, int) (tracker.PullRequestMergeStatus, error) {
@@ -38,6 +40,10 @@ func (s *stubTrackerWithMergeStatus) GetPullRequestMergeStatus(context.Context, 
 		Conflicted: conflicted,
 		Merged:     s.mergedAfter > 0 && s.mergeCalls >= s.mergedAfter,
 	}, nil
+}
+
+func (s *stubTrackerWithMergeStatus) GetPullRequestTargetBranch(context.Context, int) (string, error) {
+	return s.targetBranch, s.targetErr
 }
 
 // stubTrackerWithReviews adds tracker.ReviewsGetter to stubTracker, same
@@ -364,7 +370,7 @@ func TestWait_MergeConflict_ResolverSuccessRecordsRepairAndContinuesToChecks(t *
 	}
 }
 
-func TestWait_MergeConflict_ResolverUsesStoredPullRequestBaseBranch(t *testing.T) {
+func TestWait_MergeConflict_ResolverUsesCurrentPullRequestTargetBranch(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict-stacked", "52")
 	prs, err := store.PullRequestsByIssue(context.Background(), "exec-conflict-stacked", "52")
@@ -385,6 +391,7 @@ func TestWait_MergeConflict_ResolverUsesStoredPullRequestBaseBranch(t *testing.T
 		},
 		conflictedUntil: 1,
 		mergedAfter:     1,
+		targetBranch:    "main",
 	}
 
 	supervisor := ci.New(store, trk, config.Default(), "main")
@@ -397,8 +404,8 @@ func TestWait_MergeConflict_ResolverUsesStoredPullRequestBaseBranch(t *testing.T
 	if resolver.calls != 1 {
 		t.Fatalf("ResolveMergeConflict calls = %d, want 1", resolver.calls)
 	}
-	if got := resolver.requests[0].BaseBranch; got != "forge/exec-conflict-stacked/51" {
-		t.Fatalf("resolver BaseBranch = %q, want stored pull request base", got)
+	if got := resolver.requests[0].BaseBranch; got != "main" {
+		t.Fatalf("resolver BaseBranch = %q, want current pull request target", got)
 	}
 }
 

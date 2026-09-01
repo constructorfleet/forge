@@ -16,6 +16,9 @@ import (
 type ghPullRequest struct {
 	Number  int    `json:"number"`
 	HTMLURL string `json:"html_url"`
+	Base    struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
 // CreatePullRequest idempotently creates a pull request from req.Head into
@@ -68,4 +71,15 @@ func (c *Client) findOpenPullRequest(ctx context.Context, head string) (tracker.
 		return tracker.PullRequest{}, false, nil
 	}
 	return tracker.PullRequest{Number: prs[0].Number, URL: prs[0].HTMLURL}, true, nil
+}
+
+// GetPullRequestTargetBranch returns pull request number's current target
+// branch. GitHub can retarget stacked pull requests after their base merges.
+func (c *Client) GetPullRequestTargetBranch(ctx context.Context, number int) (string, error) {
+	var pr ghPullRequest
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", c.owner, c.repo, number)
+	if err := c.do(ctx, http.MethodGet, path, nil, &pr); err != nil {
+		return "", err
+	}
+	return pr.Base.Ref, nil
 }
