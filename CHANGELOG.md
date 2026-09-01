@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.2](https://github.com/constructorfleet/forge/compare/forge-v0.19.1...forge-v0.19.2) (2026-09-01)
+
+
+### Bug Fixes
+
+* internal/gate.Runner default Now uses real time.Now(), causing intermittent test flakiness ([#371](https://github.com/constructorfleet/forge/issues/371)) ([c595fb0](https://github.com/constructorfleet/forge/commit/c595fb0f7b11cf0a8333e9f1d5f075312fb84792)), closes [#327](https://github.com/constructorfleet/forge/issues/327)
+
 ## [0.19.1](https://github.com/constructorfleet/forge/compare/forge-v0.19.0...forge-v0.19.1) (2026-09-01)
 
 
