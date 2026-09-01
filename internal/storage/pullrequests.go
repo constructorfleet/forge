@@ -7,9 +7,10 @@ import (
 	"fmt"
 )
 
-// RecordPullRequest persists one created (or recovered) pull request and
-// appends a "pull_request.created" Event, all inside a single database
-// transaction — mirroring RecordGateRun/RecordReviewRun's shape.
+// RecordPullRequest persists one created pull request and appends a
+// "pull_request.created" Event in one transaction. It is idempotent for an
+// identical recovered record. It also backfills a missing base branch on an
+// existing recovered record, without a new creation Event.
 func (s *SQLiteStore) RecordPullRequest(ctx context.Context, pr PullRequest) error {
 	existing, err := s.PullRequestsByIssue(ctx, pr.ExecutionID, pr.IssueID)
 	if err != nil {
@@ -20,15 +21,7 @@ func (s *SQLiteStore) RecordPullRequest(ctx context.Context, pr PullRequest) err
 			return nil
 		}
 		if prior.Number == pr.Number && prior.URL == pr.URL && prior.BaseBranch == "" && pr.BaseBranch != "" && prior.CommitSHA == pr.CommitSHA {
-			if _, err := s.db.ExecContext(ctx, `
-				UPDATE pull_requests
-				SET base_branch = ?
-				WHERE execution_id = ? AND issue_id = ? AND number = ? AND url = ? AND commit_sha = ? AND base_branch = ''`,
-				pr.BaseBranch, pr.ExecutionID, pr.IssueID, pr.Number, pr.URL, pr.CommitSHA,
-			); err != nil {
-				return fmt.Errorf("storage: record pull request for issue %s/%s: %w", pr.ExecutionID, pr.IssueID, err)
-			}
-			return nil
+			return s.backfillPullRequestBaseBranch(ctx, pr)
 		}
 	}
 
@@ -58,6 +51,19 @@ func (s *SQLiteStore) RecordPullRequest(ctx context.Context, pr PullRequest) err
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("storage: record pull request for issue %s/%s: %w", pr.ExecutionID, pr.IssueID, err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) backfillPullRequestBaseBranch(ctx context.Context, pr PullRequest) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE pull_requests
+		SET base_branch = ?
+		WHERE execution_id = ? AND issue_id = ? AND number = ? AND url = ? AND commit_sha = ? AND base_branch = ''`,
+		pr.BaseBranch, pr.ExecutionID, pr.IssueID, pr.Number, pr.URL, pr.CommitSHA,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: backfill pull request base branch for issue %s/%s: %w", pr.ExecutionID, pr.IssueID, err)
 	}
 	return nil
 }

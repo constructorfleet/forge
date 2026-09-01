@@ -2,6 +2,7 @@ package ci
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -52,11 +53,15 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 		if pr.CommitSHA == "" {
 			return s.routeUnresolvedConflict(ctx, executionID, issueID, "automatic conflict replay refused: recorded pull request head SHA is empty")
 		}
+		baseBranch, err := s.conflictResolutionBaseBranch(ctx, executionID, issueID, pr)
+		if err != nil {
+			return true, "", err
+		}
 		result, err := s.ConflictResolver.ResolveMergeConflict(ctx, ConflictResolutionRequest{
 			ExecutionID:        executionID,
 			IssueID:            issueID,
 			PullRequestNumber:  pr.Number,
-			BaseBranch:         conflictResolutionBaseBranch(pr, s.BaseBranch),
+			BaseBranch:         baseBranch,
 			PullRequestHeadSHA: pr.CommitSHA,
 		})
 		if err != nil {
@@ -84,11 +89,25 @@ func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID stri
 	return s.routeUnresolvedConflict(ctx, executionID, issueID, "pull request cannot be merged into its base branch due to a conflict")
 }
 
-func conflictResolutionBaseBranch(pr storage.PullRequest, fallback string) string {
+func (s *Supervisor) conflictResolutionBaseBranch(ctx context.Context, executionID, issueID string, pr storage.PullRequest) (string, error) {
 	if pr.BaseBranch != "" {
-		return pr.BaseBranch
+		return pr.BaseBranch, nil
 	}
-	return fallback
+	issue, err := s.Store.GetIssue(ctx, executionID, issueID)
+	if err != nil {
+		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
+	}
+	if len(issue.Dependencies) != 1 {
+		return s.BaseBranch, nil
+	}
+	ws, err := s.Store.WorkspaceByIssue(ctx, executionID, issue.Dependencies[0].DependsOnID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.BaseBranch, nil
+		}
+		return "", fmt.Errorf("ci: resolve conflict base for issue %s: %w", issueID, err)
+	}
+	return ws.Branch, nil
 }
 
 func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, issueID, details string) (handled bool, state domain.IssueState, err error) {

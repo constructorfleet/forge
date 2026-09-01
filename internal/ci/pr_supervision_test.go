@@ -402,6 +402,85 @@ func TestWait_MergeConflict_ResolverUsesStoredPullRequestBaseBranch(t *testing.T
 	}
 }
 
+func TestWait_MergeConflict_ResolverDerivesMigratedStackedPullRequestBaseBranch(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	executionID := "exec-conflict-migrated-stacked"
+	if err := store.CreateExecution(ctx, domain.Execution{
+		ID:           executionID,
+		BaseRevision: "base",
+		StartedAt:    time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := store.CreateIssue(ctx, domain.Issue{
+		ID:          "51",
+		ExecutionID: executionID,
+		Title:       "Issue 51",
+		State:       domain.StateDone,
+		Scope:       domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 1, Review: 1, CI: 3}),
+	}); err != nil {
+		t.Fatalf("CreateIssue prerequisite: %v", err)
+	}
+	if err := store.RecordWorkspace(ctx, executionID, domain.Workspace{
+		IssueID: "51",
+		Path:    "/tmp/ws-51",
+		Branch:  "forge/exec-conflict-migrated-stacked/51",
+	}); err != nil {
+		t.Fatalf("RecordWorkspace prerequisite: %v", err)
+	}
+	if err := store.CreateIssue(ctx, domain.Issue{
+		ID:          "52",
+		ExecutionID: executionID,
+		Title:       "Issue 52",
+		State:       domain.StateCIPending,
+		Scope:       domain.ScopeManaged,
+		Dependencies: []domain.Dependency{{
+			IssueID:     "52",
+			DependsOnID: "51",
+		}},
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 1, Review: 1, CI: 3}),
+	}); err != nil {
+		t.Fatalf("CreateIssue dependent: %v", err)
+	}
+	if err := store.RecordPullRequest(ctx, storage.PullRequest{
+		ExecutionID: executionID,
+		IssueID:     "52",
+		Number:      23,
+		URL:         "https://example.invalid/pr/23",
+		CommitSHA:   "abc123",
+		CreatedAt:   time.Date(2026, 8, 28, 12, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("RecordPullRequest: %v", err)
+	}
+
+	trk := &stubTrackerWithMergeStatus{
+		stubTracker: stubTracker{
+			mergeRequirements: tracker.MergeRequirements{RequiredChecks: []string{"build"}},
+			checkResponses: [][]tracker.PullRequestCheck{
+				{{Name: "build", State: tracker.CheckSuccess}},
+			},
+		},
+		conflictedUntil: 1,
+		mergedAfter:     1,
+	}
+
+	supervisor := ci.New(store, trk, config.Default(), "main")
+	resolver := &stubConflictResolver{result: ci.ConflictResolutionResult{Resolved: true}}
+	supervisor.ConflictResolver = resolver
+
+	if _, err := supervisor.Wait(ctx, executionID, "52"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("ResolveMergeConflict calls = %d, want 1", resolver.calls)
+	}
+	if got := resolver.requests[0].BaseBranch; got != "forge/exec-conflict-migrated-stacked/51" {
+		t.Fatalf("resolver BaseBranch = %q, want prerequisite workspace branch", got)
+	}
+}
+
 func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict-refused", "33")

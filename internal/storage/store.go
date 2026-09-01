@@ -190,7 +190,8 @@ type PullRequest struct {
 	IssueID     string
 	Number      int
 	URL         string
-	// BaseBranch is the pull request target branch recorded at creation.
+	// BaseBranch is the pull request target branch when known. It can be
+	// empty on pre-0024 or partially recovered records.
 	BaseBranch string
 	// CommitSHA is the HEAD commit the Publisher committed and pushed
 	// immediately before this pull request was created (CONTEXT.md
@@ -428,10 +429,10 @@ type Store interface {
 	// Execution, ordered by insertion (i.e. execution order).
 	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]GateRun, error)
 
-	// RecordPullRequest persists one created (or recovered) pull request —
-	// its id, url, and the commit SHA it was created from — and appends a
-	// "pull_request.created" Event, transactionally (CONTEXT.md
-	// "COMMITTING", "PR_CREATING"; ticket 22).
+	// RecordPullRequest persists one created pull request and appends a
+	// "pull_request.created" Event, transactionally. An identical recovered
+	// record is a no-op. A recovered record can backfill a missing
+	// BaseBranch without a new creation Event.
 	RecordPullRequest(ctx context.Context, pr PullRequest) error
 
 	// PullRequestsByIssue returns every PullRequest recorded for one Issue
