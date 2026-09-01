@@ -803,7 +803,7 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 		if err != nil {
 			return nil, fmt.Errorf("forge: remote worker preflight: %w", err)
 		}
-		return remote.NewBackend(worker, buildRemoteRecoverFunc(store)), nil
+		return remote.NewBackendWithLeases(worker, buildRemoteRecoverFunc(store), store), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
 	}
