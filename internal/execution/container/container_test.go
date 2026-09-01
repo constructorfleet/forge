@@ -14,6 +14,8 @@ import (
 
 const testImage = "forge/agent:latest"
 
+var testResources = Resources{CPU: "2", Memory: "4Gi"}
+
 func newTestBackend(t *testing.T) (*Backend, *FakeRuntime, string, string) {
 	t.Helper()
 	root, base := gittest.NewTempRepo(t)
@@ -22,7 +24,7 @@ func newTestBackend(t *testing.T) (*Backend, *FakeRuntime, string, string) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	runtime := NewFakeRuntime()
-	return NewBackend(mgr, runtime, testImage), runtime, root, base
+	return NewBackend(mgr, runtime, testImage, testResources), runtime, root, base
 }
 
 func TestBackend_PrepareCreatesWorkspaceMatchingManager(t *testing.T) {
@@ -85,6 +87,12 @@ func TestBackend_PrepareStartsContainerWithWorkspaceBindMounted(t *testing.T) {
 	}
 	if mount.ContainerPath != WorkspaceMountPath {
 		t.Errorf("Mounts[0].ContainerPath = %q, want %q", mount.ContainerPath, WorkspaceMountPath)
+	}
+	if spec.CPU != testResources.CPU {
+		t.Errorf("CPU = %q, want %q", spec.CPU, testResources.CPU)
+	}
+	if spec.Memory != testResources.Memory {
+		t.Errorf("Memory = %q, want %q", spec.Memory, testResources.Memory)
 	}
 }
 

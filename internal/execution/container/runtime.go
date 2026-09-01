@@ -6,9 +6,16 @@ package container
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Teagan42/forge/internal/execution"
 )
+
+// ErrRuntimeUnavailable is returned by a ContainerRuntime constructor when
+// no container runtime (e.g. a docker or podman daemon) is available to
+// drive. A caller selecting backend: container sees this at wiring time,
+// before any container is launched.
+var ErrRuntimeUnavailable = errors.New("container: no container runtime is available")
 
 // WorkspaceMountPath is the fixed path inside a container where Prepare
 // bind-mounts the host Workspace.
@@ -25,10 +32,20 @@ type Mount struct {
 	ContainerPath string
 }
 
-// ContainerSpec describes the container Start must launch: the image to run
-// and the Mounts to bind into it.
+// Resources gives a container coarse resource limits. Both fields are
+// passed through to the container runtime unparsed (e.g. CPU "2", Memory
+// "4Gi"); an empty field leaves that limit up to the runtime's own default.
+type Resources struct {
+	CPU    string
+	Memory string
+}
+
+// ContainerSpec describes the container Start must launch: the image to
+// run, the Resources to give it, and the Mounts to bind into it.
 type ContainerSpec struct {
 	Image  string
+	CPU    string
+	Memory string
 	Mounts []Mount
 }
 

@@ -555,7 +555,7 @@ func TestLoad_BackendExplicitLocal(t *testing.T) {
 }
 
 func TestLoad_UnsupportedBackendRejected(t *testing.T) {
-	path := writeTemp(t, "execution:\n  backend: container\n")
+	path := writeTemp(t, "execution:\n  backend: remote\n")
 
 	_, err := Load(path)
 	if err == nil {
@@ -564,8 +564,41 @@ func TestLoad_UnsupportedBackendRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "execution.backend") {
 		t.Errorf("Load() error = %v, want it to identify execution.backend", err)
 	}
-	if !strings.Contains(err.Error(), "container") {
+	if !strings.Contains(err.Error(), "remote") {
 		t.Errorf("Load() error = %v, want it to include the offending value", err)
+	}
+}
+
+func TestLoad_ContainerBackendWithoutImageRejected(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: container\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "execution.container.image") {
+		t.Errorf("Load() error = %v, want it to identify execution.container.image", err)
+	}
+}
+
+func TestLoad_ContainerBackendParsesImageAndResources(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: container\n  container:\n    image: forge/agent:latest\n    cpu: \"2\"\n    memory: 4Gi\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Execution.Backend != BackendContainer {
+		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendContainer)
+	}
+	if cfg.Execution.Container.Image != "forge/agent:latest" {
+		t.Errorf("Execution.Container.Image = %q, want forge/agent:latest", cfg.Execution.Container.Image)
+	}
+	if cfg.Execution.Container.CPU != "2" {
+		t.Errorf("Execution.Container.CPU = %q, want 2", cfg.Execution.Container.CPU)
+	}
+	if cfg.Execution.Container.Memory != "4Gi" {
+		t.Errorf("Execution.Container.Memory = %q, want 4Gi", cfg.Execution.Container.Memory)
 	}
 }
 

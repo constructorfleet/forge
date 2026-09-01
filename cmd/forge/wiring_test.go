@@ -15,6 +15,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent/opencode"
 	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -240,7 +241,6 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 	}{
 		{config.BackendLocal, (*localhost.Backend)(nil), false},
 		{"", (*localhost.Backend)(nil), false},
-		{"container", nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.backend, func(t *testing.T) {
@@ -261,6 +261,29 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 				t.Fatalf("buildExecutionBackend(%q) = %T, want %T", tc.backend, backend, tc.wantType)
 			}
 		})
+	}
+}
+
+// TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable
+// pins the ticket-336 acceptance criterion that selecting backend: container
+// fails at wiring, with a clear error, rather than reaching Prepare and
+// failing mid-run — today, before any concrete container-runtime adapter
+// exists, that means every container selection fails this way.
+func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *testing.T) {
+	root, _ := newTempRepo(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	ag := agent.NewFakeAgent()
+
+	cfg := config.Default()
+	cfg.Execution.Backend = config.BackendContainer
+	cfg.Execution.Container.Image = "forge/agent:latest"
+
+	_, err = buildExecutionBackend(cfg, wsMgr, ag)
+	if !errors.Is(err, container.ErrRuntimeUnavailable) {
+		t.Fatalf("buildExecutionBackend: want container.ErrRuntimeUnavailable, got %v", err)
 	}
 }
 

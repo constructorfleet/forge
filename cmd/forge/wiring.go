@@ -22,6 +22,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/execution"
+	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/planengine"
@@ -770,16 +771,36 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 // backend built from wsMgr/ag — the same WorkspaceCreator and Agent
 // buildEngine wires everywhere else, so a Worker's environment and Engine's
 // own Workspaces/Agent fields always agree on which Workspace and Agent they
-// mean. config.Load's validation already rejects any other value before
-// wiring ever runs (see config.validate); the default case here is a
-// defensive backstop, matching buildAgent's provider switch.
+// mean. config.BackendContainer selects the Container backend (issue #336);
+// buildContainerRuntime's preflight failure surfaces here, so an
+// unavailable container runtime is a wiring-time error, not a mid-run one.
+// config.Load's validation already rejects any other value before wiring
+// ever runs (see config.validate); the default case here is a defensive
+// backstop, matching buildAgent's provider switch.
 func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent.Agent) (execution.ExecutionBackend, error) {
 	switch cfg.Execution.Backend {
 	case config.BackendLocal, "":
 		return localhost.NewBackend(wsMgr, ag), nil
+	case config.BackendContainer:
+		runtime, err := buildContainerRuntime(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("forge: container runtime preflight: %w", err)
+		}
+		resources := container.Resources{CPU: cfg.Execution.Container.CPU, Memory: cfg.Execution.Container.Memory}
+		return container.NewBackend(wsMgr, runtime, cfg.Execution.Container.Image, resources), nil
 	default:
 		return nil, fmt.Errorf("forge: unknown execution backend %q", cfg.Execution.Backend)
 	}
+}
+
+// buildContainerRuntime constructs the container.ContainerRuntime the
+// Container backend drives. No concrete container-runtime adapter (docker,
+// podman, ...) exists in Forge yet — a later Container backend ticket adds
+// one — so selecting backend: container always fails this preflight today,
+// with container.ErrRuntimeUnavailable, rather than reaching Prepare and
+// failing mid-run against a nil runtime.
+func buildContainerRuntime(_ config.Config) (container.ContainerRuntime, error) {
+	return nil, container.ErrRuntimeUnavailable
 }
 
 // buildPlanningBackend selects the planning Backend `forge plan` runs
