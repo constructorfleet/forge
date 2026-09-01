@@ -16,6 +16,8 @@ import (
 	"github.com/Teagan42/forge/internal/agent/opencode"
 	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/execution/remote"
@@ -351,6 +353,49 @@ func TestBuildExecutionBackend_RemoteWiresRealClientAgainstReachableWorker(t *te
 	}
 	if _, ok := backend.(*remote.Backend); !ok {
 		t.Fatalf("buildExecutionBackend = %T, want *remote.Backend", backend)
+	}
+}
+
+func TestBuildExecutionBackend_RemoteClaimsLeaseThroughWiredStore(t *testing.T) {
+	root, originPath, base := gittest.NewTempRepoWithOrigin(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	store := openPlanningStore(t)
+	ctx := context.Background()
+	if err := store.CreateExecution(ctx, domain.Execution{ID: "exec1", BaseRevision: base}); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := store.CreateIssue(ctx, domain.Issue{ExecutionID: "exec1", ID: "issue-42"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	workerRoot := t.TempDir()
+	runGit(t, workerRoot, "clone", "-q", originPath, ".")
+	srv, err := httpworker.NewServer(workerRoot, "origin", agent.NewFakeAgent())
+	if err != nil {
+		t.Fatalf("httpworker.NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	cfg := config.Default()
+	cfg.Execution.Backend = config.BackendRemote
+	cfg.Execution.Worker.Endpoint = ts.URL
+
+	backend, err := buildExecutionBackend(cfg, wsMgr, agent.NewFakeAgent(), store)
+	if err != nil {
+		t.Fatalf("buildExecutionBackend: %v", err)
+	}
+	env, err := backend.Prepare(ctx, execution.WorkspaceRequest{ExecutionID: "exec1", IssueID: "issue-42", Base: base})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = env.Cleanup(context.Background()) })
+
+	if _, err := store.ExecutionLease(ctx, "exec1", "issue-42"); err != nil {
+		t.Fatalf("ExecutionLease: %v", err)
 	}
 }
 
