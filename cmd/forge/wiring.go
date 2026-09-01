@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/execution/remote"
+	"github.com/Teagan42/forge/internal/execution/remote/httpworker"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -835,15 +837,28 @@ func buildContainerRuntime(_ config.Config) (container.ContainerRuntime, error) 
 	return nil, container.ErrRuntimeUnavailable
 }
 
+// workerPreflightTimeout bounds how long buildWorkerClient waits for the
+// configured worker to answer its health check, so an unreachable worker
+// fails preflight quickly rather than hanging wiring.
+const workerPreflightTimeout = 5 * time.Second
+
 // buildWorkerClient constructs the remote.WorkerClient the Remote backend
 // drives, against the single statically-configured worker named by
-// cfg.Execution.Worker.Endpoint. No concrete worker transport exists in
-// Forge yet — a later Remote backend ticket adds one (issue #345) — so
-// selecting backend: remote always fails this preflight today, with
-// remote.ErrWorkerUnreachable, rather than reaching Prepare and failing
-// mid-run against a nil worker.
-func buildWorkerClient(_ config.Config) (remote.WorkerClient, error) {
-	return nil, remote.ErrWorkerUnreachable
+// cfg.Execution.Worker.Endpoint. It is httpworker.Client (issue #345), the
+// one concrete WorkerClient transport: plain HTTP+JSON against a worker
+// daemon (httpworker.Server) running behind that endpoint. Ping confirms
+// the worker answers its health check before any work is dispatched;
+// a failure there is wrapped in remote.ErrWorkerUnreachable, matching the
+// sentinel this preflight always returned before a concrete transport
+// existed.
+func buildWorkerClient(cfg config.Config) (remote.WorkerClient, error) {
+	client := httpworker.NewClient(cfg.Execution.Worker.Endpoint, &http.Client{Timeout: workerPreflightTimeout})
+	ctx, cancel := context.WithTimeout(context.Background(), workerPreflightTimeout)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", remote.ErrWorkerUnreachable, cfg.Execution.Worker.Endpoint, err)
+	}
+	return client, nil
 }
 
 // buildPlanningBackend selects the planning Backend `forge plan` runs
