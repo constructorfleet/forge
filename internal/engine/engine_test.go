@@ -103,6 +103,11 @@ type testEngine struct {
 	trk   *stubTracker
 	fake  *agent.FakeAgent
 	ws    *spyWorkspaces
+
+	// gates is the command runner every Quality Gate the prepared
+	// environment executes goes through. A test calls gates.Set to install
+	// its own runner instead of shelling out. See execbackend_test.go.
+	gates *gateCommandSwitch
 }
 
 func newTestEngine(t *testing.T, issues map[string]domain.Issue) testEngine {
@@ -117,7 +122,9 @@ func newTestEngine(t *testing.T, issues map[string]domain.Issue) testEngine {
 	ws := &spyWorkspaces{mgr: mgr}
 	fake := agent.NewFakeAgent()
 	eng := engine.New(store, trk, ws, fake, config.Default(), repoRoot)
-	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake, ws: ws}
+	gates := newGateCommandSwitch()
+	eng.Backend = &fakeBackend{eng: eng, workspaces: ws, commands: gates}
+	return testEngine{eng: eng, store: store, base: base, trk: trk, fake: fake, ws: ws, gates: gates}
 }
 
 func TestExecute_HappyPath_NoGatesConfiguredReachesCommitting(t *testing.T) {
@@ -370,7 +377,7 @@ func TestExecute_QualityGatesPass_AdvancesToCommitting(t *testing.T) {
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 0, "tests ok", "")
 	runner.ProgramResult("make lint", 0, "lint ok", "")
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	ctx := context.Background()
 	result, err := te.eng.Execute(ctx, "20", te.base)
@@ -420,7 +427,7 @@ func TestExecute_QualityGateFails_RoutesToFailedWithDiagnostic(t *testing.T) {
 	te.eng.Config.Retry.Gate = 0
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 1, "1 test failed", "assertion error in foo_test.go")
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	ctx := context.Background()
 	result, err := te.eng.Execute(ctx, "21", te.base)

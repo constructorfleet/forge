@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,5 +269,113 @@ func TestHandleReplanRequired_ToleratesLeaseConflict(t *testing.T) {
 	}
 	if store.checkpoint.LeaseExecutionID != "" {
 		t.Errorf("no lease was taken, so LeaseExecutionID must stay empty: %q", store.checkpoint.LeaseExecutionID)
+	}
+}
+
+// revalidateSpyStore is a minimal in-package storage.Store double covering
+// only what revalidateAfterReplan touches.
+type revalidateSpyStore struct {
+	storage.Store // embed to satisfy Store; only the overridden methods are called
+
+	workspace domain.Workspace
+	gateRuns  []storage.GateRun
+}
+
+func (s *revalidateSpyStore) WorkspaceByIssue(context.Context, string, string) (domain.Workspace, error) {
+	return s.workspace, nil
+}
+
+func (s *revalidateSpyStore) RecordGateRun(_ context.Context, run storage.GateRun) error {
+	s.gateRuns = append(s.gateRuns, run)
+	return nil
+}
+
+// newRevalidateEngine builds an Engine that revalidates gates inside dir.
+func newRevalidateEngine(dir string, gates []config.QualityGate) (*Engine, *revalidateSpyStore) {
+	store := &revalidateSpyStore{workspace: domain.Workspace{Path: dir}}
+	cfg := config.Default()
+	cfg.Quality.Gates = gates
+	return &Engine{
+		Store:      store,
+		Workspaces: &recordingWorkspaceCreator{},
+		Config:     cfg,
+		Now:        func() time.Time { return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) },
+	}, store
+}
+
+// TestRevalidateAfterReplan_RunsGatesThroughTheEnvironment covers ticket
+// 305 for the replan path: revalidation runs each gate through the
+// environment and records the result.
+func TestRevalidateAfterReplan_RunsGatesThroughTheEnvironment(t *testing.T) {
+	eng, store := newRevalidateEngine(t.TempDir(), []config.QualityGate{
+		{Name: "build", Command: "echo built"},
+	})
+
+	passed, detail, err := eng.revalidateAfterReplan(context.Background(), "exec-1", "7")
+	if err != nil {
+		t.Fatalf("revalidateAfterReplan: %v", err)
+	}
+	if !passed {
+		t.Errorf("passed = false, want true (detail: %s)", detail)
+	}
+	if len(store.gateRuns) != 1 {
+		t.Fatalf("gate runs = %+v, want exactly one", store.gateRuns)
+	}
+	run := store.gateRuns[0]
+	if run.Name != "build" || run.Command != "echo built" || !run.Passed || run.ExitCode != 0 {
+		t.Errorf("gate run = %+v, want a passing build gate", run)
+	}
+	if run.Stdout != "built\n" {
+		t.Errorf("Stdout = %q, want the command output", run.Stdout)
+	}
+	if run.ExecutionID != "exec-1" || run.IssueID != "7" {
+		t.Errorf("gate run = %+v, want it keyed by (exec-1, 7)", run)
+	}
+}
+
+// TestRevalidateAfterReplan_StopsAtTheFirstFailingGate pins the unchanged
+// stop-on-first-fail behavior: a failing gate ends revalidation, so the
+// later gates never run.
+func TestRevalidateAfterReplan_StopsAtTheFirstFailingGate(t *testing.T) {
+	eng, store := newRevalidateEngine(t.TempDir(), []config.QualityGate{
+		{Name: "build", Command: "exit 2"},
+		{Name: "test", Command: "echo tested"},
+	})
+
+	passed, detail, err := eng.revalidateAfterReplan(context.Background(), "exec-1", "7")
+	if err != nil {
+		t.Fatalf("revalidateAfterReplan: %v", err)
+	}
+	if passed {
+		t.Error("passed = true, want false")
+	}
+	if !strings.Contains(detail, "build") {
+		t.Errorf("detail = %q, want it to name the failing gate", detail)
+	}
+	if len(store.gateRuns) != 1 {
+		t.Fatalf("gate runs = %+v, want only the failing one", store.gateRuns)
+	}
+	if store.gateRuns[0].ExitCode != 2 || store.gateRuns[0].Passed {
+		t.Errorf("gate run = %+v, want a failing build gate", store.gateRuns[0])
+	}
+}
+
+// TestRevalidateAfterReplan_ReportsAnEmptyGateSet pins the no-gates case:
+// there is nothing to revalidate, so the Issue still passes.
+func TestRevalidateAfterReplan_ReportsAnEmptyGateSet(t *testing.T) {
+	eng, store := newRevalidateEngine(t.TempDir(), nil)
+
+	passed, detail, err := eng.revalidateAfterReplan(context.Background(), "exec-1", "7")
+	if err != nil {
+		t.Fatalf("revalidateAfterReplan: %v", err)
+	}
+	if !passed {
+		t.Error("passed = false, want true")
+	}
+	if detail != "no quality gates configured to revalidate against" {
+		t.Errorf("detail = %q", detail)
+	}
+	if len(store.gateRuns) != 0 {
+		t.Errorf("gate runs = %+v, want none", store.gateRuns)
 	}
 }

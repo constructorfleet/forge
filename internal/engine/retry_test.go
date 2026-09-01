@@ -62,7 +62,7 @@ func TestExecute_GateFailure_RetriesThenPassesReachesCommitting(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
 	runner := &flakyRunner{failUntil: 1}
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	reviewer := review.NewFakeReviewer()
 	reviewer.ProgramResult("40", review.Result{Verdict: review.VerdictApproved, Summary: "ship it"})
@@ -343,7 +343,7 @@ func TestExecute_GateBudgetExhaustion_RoutesToFailed(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 2, Review: 2, CI: 2}
 	runner := &flakyRunner{failUntil: 1000} // never passes
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	ctx := context.Background()
 	result, err := te.eng.Execute(ctx, "42", te.base)
@@ -403,7 +403,7 @@ func TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo(t *testing.T
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
 	runner := &flakyRunner{failUntil: 1000} // never passes; repair's Agent call is what changes
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	result, err := te.eng.Execute(context.Background(), "44", te.base)
 	if err != nil {
@@ -428,7 +428,7 @@ func TestExecute_GateRepair_AgentReturnsFailed_RoutesToFailed(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
 	runner := &flakyRunner{failUntil: 1000}
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	result, err := te.eng.Execute(context.Background(), "45", te.base)
 	if err != nil {
@@ -513,7 +513,7 @@ func TestRepairCIFailure_RetriesInSameWorkspaceReachesCIPending(t *testing.T) {
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
 	runner := &flakyRunner{failUntil: 0}
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 
 	ctx := context.Background()
 	initial, err := te.eng.Execute(ctx, "46", te.base)
@@ -675,7 +675,7 @@ func TestRepairCIFailure_UsesCapturedWorkerBaseInsteadOfExecutionBase(t *testing
 	te.eng.BaseBranch = "main"
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
-	te.eng.Gates = &flakyRunner{failUntil: 0}
+	te.gates.Set(&flakyRunner{failUntil: 0})
 
 	ctx := context.Background()
 	gittest.RunGit(t, te.eng.RepoRoot, "commit", "--allow-empty", "-q", "-m", "worker base")

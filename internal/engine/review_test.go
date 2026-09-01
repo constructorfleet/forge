@@ -315,7 +315,7 @@ func TestExecute_QualityGateFails_ReviewerNeverInvoked(t *testing.T) {
 	te.eng.Config.Retry.Gate = 0
 	runner := gatetest.NewFakeCommandRunner()
 	runner.ProgramResult("make test", 1, "failure output", "")
-	te.eng.Gates = runner
+	te.gates.Set(runner)
 	reviewer := review.NewFakeReviewer()
 	te.eng.Reviewer = reviewer
 	te.eng.Diff = &stubDiff{diff: "diff"}

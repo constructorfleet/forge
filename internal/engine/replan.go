@@ -8,7 +8,6 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
-	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -396,13 +395,17 @@ func (e *Engine) revalidateAfterReplan(ctx context.Context, executionID, issueID
 		return false, "", fmt.Errorf("engine: load workspace for issue %s: %w", issueID, err)
 	}
 
-	results := gate.NewRunner(e.Gates).Run(ctx, ws.Path, e.Config.Quality.Gates, gate.Options{
-		MaxOutputBytes: e.Config.Quality.MaxOutputBytes,
-	})
+	// Each gate runs through the environment's single command primitive
+	// (ticket 305, constructorfleet/forge#285), exactly as the VALIDATING
+	// stage runs them. The loop stops at the first failing gate, which is
+	// the Gate Runner's stop-on-first-fail rule (CONTEXT.md "Gate Runner").
+	env := e.wrapWorkspace(executionID, issueID, ws)
 	passed = true
 	detail = "all configured quality gates still pass"
-	for i := range results {
-		res := results[i]
+	ran := 0
+	for _, g := range e.Config.Quality.Gates {
+		res := e.runQualityGate(ctx, env, g)
+		ran++
 		if err := e.Store.RecordGateRun(ctx, storage.GateRun{
 			ExecutionID: executionID,
 			IssueID:     issueID,
@@ -417,12 +420,13 @@ func (e *Engine) revalidateAfterReplan(ctx context.Context, executionID, issueID
 		}); err != nil {
 			return false, "", fmt.Errorf("engine: record revalidation gate run %s for issue %s: %w", res.Name, issueID, err)
 		}
-		if !res.Passed && passed {
+		if !res.Passed {
 			passed = false
 			detail = "quality gate " + res.Name + " no longer passes; the suspended result must be repaired"
+			break
 		}
 	}
-	if len(results) == 0 {
+	if ran == 0 {
 		detail = "no quality gates configured to revalidate against"
 	}
 	return passed, detail, nil

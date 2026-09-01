@@ -115,7 +115,7 @@ func TestRetryIssue_ResetsExhaustedRetryBudget(t *testing.T) {
 	te.fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: "implemented"})
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
 	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
-	te.eng.Gates = &failThenPassRunner{failUntil: 2}
+	te.gates.Set(&failThenPassRunner{failUntil: 2})
 
 	ctx := context.Background()
 	result, err := te.eng.Execute(ctx, "64", te.base)

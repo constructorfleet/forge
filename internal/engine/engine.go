@@ -153,21 +153,15 @@ type Engine struct {
 	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
 	ReplanDecisions ReplanDecisionRecorder
 
-	// Gates is the CommandRunner the Gate Runner (ticket 19,
-	// internal/gate) executes each configured Quality Gate's command
-	// through, once an Issue reaches IMPLEMENTED. New defaults it to
-	// gate.ExecCommandRunner{}, the real subprocess runner; tests inject a
-	// fake so they never shell out.
-	Gates gate.CommandRunner
-
 	// Backend is the ExecutionBackend cmd/forge selects from
 	// Config.Execution.Backend (issue #304, constructorfleet/forge#285:
 	// execution-location configuration). It is optional: nil leaves
 	// e.backend() building its own workspaceCreatorBackend from
-	// Workspaces/Gates/Agent (see environment.go), which every existing
-	// caller of New relies on. cmd/forge wires it explicitly so an
-	// unsupported backend value fails at wiring instead of silently falling
-	// back.
+	// Workspaces/Agent (see environment.go), which every existing caller
+	// of New relies on. cmd/forge wires it explicitly so an unsupported
+	// backend value fails at wiring instead of silently falling back. The
+	// environment's Execute is the Engine's only command primitive (ticket
+	// 305): Engine keeps no separate command-runner seam.
 	Backend execbackend.ExecutionBackend
 
 	// Reviewer is the review.Reviewer the REVIEWING stage invokes once
@@ -279,7 +273,6 @@ func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag 
 		Workspaces:         workspaces,
 		Agent:              ag,
 		Config:             cfg,
-		Gates:              gate.ExecCommandRunner{},
 		RepoRoot:           repoRoot,
 		Now:                time.Now,
 		NewExecutionID:     func() string { return uuid.NewString() },
@@ -602,19 +595,30 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return domain.Issue{}, fmt.Errorf("engine: issue %s is %s, want CI_FAILED", issueID, issue.State)
 	}
 
-	ws, err := e.Workspaces.Validate(ctx, executionID, issueID)
-	if err != nil {
+	// RepairCIFailure resumes an existing Workspace rather than preparing a
+	// fresh one, so it validates the Workspace is still healthy first and
+	// fails outright if not — unlike ensureWorkspace's resume paths, it
+	// never recreates a missing Workspace here.
+	if _, err := e.Workspaces.Validate(ctx, executionID, issueID); err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: validate workspace for issue %s: %w", issueID, err)
 	}
-	// RepairCIFailure resumes an existing Workspace rather than Preparing a
-	// fresh one, so it wraps ws in the same environment type Prepare
-	// returns (ticket 301) instead of calling backend.Prepare, which would
-	// try to create a Workspace that already exists.
-	env := e.wrapWorkspace(executionID, issueID, ws)
 
 	workerBase, err := e.workerBase(ctx, state.Execution, issueID)
 	if err != nil {
 		return domain.Issue{}, err
+	}
+
+	// The environment is the Engine's only path to a Workspace (ticket 305,
+	// constructorfleet/forge#285): Prepare reuses the Workspace just
+	// validated above, since workspace.Manager.Create returns an already
+	// registered worktree unchanged rather than recreating it.
+	env, err := e.backend().Prepare(ctx, execbackend.WorkspaceRequest{
+		ExecutionID: executionID,
+		IssueID:     issueID,
+		Base:        workerBase,
+	})
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: prepare workspace for issue %s: %w", issueID, err)
 	}
 
 	repoCtx, err := repocontext.Compile(e.Config, env.Workspace().Path, workerBase)
@@ -625,7 +629,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	// after a CI failure, potentially in a new process), so it prepares its
 	// own Session for this repair, reused across whatever repair iterations
 	// follow, exactly like ExecuteInExecution's call above.
-	e.prepareSemantic(ctx, executionID, issueID, ws.Path, repoCtx)
+	e.prepareSemantic(ctx, executionID, issueID, env.Workspace().Path, repoCtx)
 	defer e.teardownSemantic(executionID, issueID)
 
 	feedback, err := e.latestCIFeedback(ctx, executionID, issueID)
@@ -648,7 +652,7 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return issue, nil
 	}
 
-	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, ws.Path, env, repoCtx, issue)
+	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, env.Workspace().Path, env, repoCtx, issue)
 	if err != nil {
 		return domain.Issue{}, err
 	}
@@ -1294,7 +1298,7 @@ func capOutput(s string, maxBytes int) string {
 // implementation Agent's prior conversation — receiving the diff (produced
 // by the injected DiffProducer, since Engine stays git-free), the Issue,
 // the Repository Context, and gateResults. When Reviewer is unset (the
-// optional-seam convention shared with NeedsInfoTracker/Gates — see
+// optional-seam convention shared with NeedsInfoTracker — see
 // Engine.Reviewer's doc comment), REVIEWING stays a resting state and the
 // returned verdict is review.VerdictApproved so runRepairLoop's caller
 // (which itself also short-circuits on a nil Reviewer before calling this)
