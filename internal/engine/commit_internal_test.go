@@ -24,6 +24,22 @@ func TestConventionalCommitType_InfersFromTitleAndBody(t *testing.T) {
 		{"test keyword", domain.Issue{Title: "Add test coverage"}, "test"},
 		{"chore keyword", domain.Issue{Title: "Repo cleanup"}, "chore"},
 		{"no keyword defaults to feat", domain.Issue{Title: "Add widget support"}, "feat"},
+		{
+			name: "test mentioned only in body's TDD acceptance criteria stays feat",
+			issue: domain.Issue{
+				Title: "Add widget caching support",
+				Body:  "## Acceptance\nWrite tests covering the cache eviction path.\n\nQuality Gates: go test ./...",
+			},
+			want: "feat",
+		},
+		{
+			name: "chore mentioned only in body stays feat",
+			issue: domain.Issue{
+				Title: "Add widget caching support",
+				Body:  "As a cleanup follow-on, note the config format.",
+			},
+			want: "feat",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

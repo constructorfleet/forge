@@ -95,18 +95,28 @@ var allowedConventionalCommitTypes = map[string]bool{
 // in order; the first match wins. This is a best-effort heuristic — Forge's
 // Issue model (CONTEXT.md "Issue") carries no explicit change-type field, so
 // the type is inferred from the text an Agent/human already wrote.
+//
+// titleOnly restricts a keyword to the Issue's Title. "test", "chore", and
+// "cleanup" are weak, generic signals that show up incidentally in almost
+// every Issue's Body — Forge's TDD acceptance criteria and "Quality Gates:
+// go test ./..." boilerplate both contain "test" — so matching them against
+// Body misclassified nearly every feat/fix Issue as type "test" (issue
+// 364). Restricting them to Title keeps the heuristic reserved for Issues
+// that are actually about testing or repo hygiene, not ones that merely
+// mention tests as part of unrelated work.
 var conventionalCommitTypeKeywords = []struct {
-	keyword string
-	ctype   string
+	keyword   string
+	ctype     string
+	titleOnly bool
 }{
-	{"fix", "fix"},
-	{"bug", "fix"},
-	{"doc", "docs"},
-	{"refactor", "refactor"},
-	{"test", "test"},
-	{"perf", "perf"},
-	{"chore", "chore"},
-	{"cleanup", "chore"},
+	{"fix", "fix", false},
+	{"bug", "fix", false},
+	{"doc", "docs", false},
+	{"refactor", "refactor", false},
+	{"test", "test", true},
+	{"perf", "perf", false},
+	{"chore", "chore", true},
+	{"cleanup", "chore", true},
 }
 
 // defaultConventionalCommitType is used when no keyword in
@@ -360,11 +370,19 @@ func stripInvalidConventionalCommitPrefix(title string) string {
 
 // conventionalCommitType infers the Conventional Commits type implied by
 // issue's Title/Body via conventionalCommitTypeKeywords, defaulting to
-// defaultConventionalCommitType.
+// defaultConventionalCommitType. It checks the Title against every keyword
+// first, then falls back to the Body but only for keywords that are not
+// titleOnly (see conventionalCommitTypeKeywords).
 func conventionalCommitType(issue domain.Issue) string {
-	haystack := strings.ToLower(issue.Title + " " + issue.Body)
+	title := strings.ToLower(issue.Title)
 	for _, kw := range conventionalCommitTypeKeywords {
-		if strings.Contains(haystack, kw.keyword) {
+		if strings.Contains(title, kw.keyword) {
+			return kw.ctype
+		}
+	}
+	body := strings.ToLower(issue.Body)
+	for _, kw := range conventionalCommitTypeKeywords {
+		if !kw.titleOnly && strings.Contains(body, kw.keyword) {
 			return kw.ctype
 		}
 	}
