@@ -65,6 +65,15 @@ type Supervisor struct {
 	// remediation.
 	Pusher BranchPusher
 
+	// Resetter moves a restacked Workspace branch back to the dependent's
+	// last published pull-request commit when the force-push of that branch
+	// fails (docs/adr/0018, stacked-branch maintenance ticket 4). A failed
+	// push leaves the local branch on commits the pull request does not
+	// show, so Forge restores the branch before it asks a human for help.
+	// Optional alongside Rebaser/Pusher: nil keeps the restack behavior, but
+	// Forge then reports that it cannot restore the workspace.
+	Resetter BranchResetter
+
 	// ConflictResolver attempts the narrow automatic pull-request conflict
 	// repair allowed by ADR 0017. Optional: nil preserves the conservative
 	// issue-109 behavior of routing merge conflicts to NEEDS_INFO.
