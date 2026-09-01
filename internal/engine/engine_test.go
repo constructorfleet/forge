@@ -216,6 +216,39 @@ func TestExecute_HappyPath_NoGatesConfiguredReachesCommitting(t *testing.T) {
 	}
 }
 
+// TestExecute_CompilesRepositoryContextFromWorkspaceNotRawRepoRoot proves
+// Repository Context is compiled from the environment's Workspace (the
+// per-Issue git worktree checked out at the Worker base) rather than from a
+// raw read of RepoRoot's working directory (constructorfleet/forge#302).
+// It writes an uncommitted AGENTS.md directly into RepoRoot after the
+// Workspace is set up: a raw-RepoRoot read would pick it up (it is a real
+// file sitting on disk at RepoRoot), while a Workspace-sourced read would
+// not, since the Workspace worktree only contains what was committed at the
+// checked-out revision.
+func TestExecute_CompilesRepositoryContextFromWorkspaceNotRawRepoRoot(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"42": {ID: "42"},
+	})
+	te.fake.ProgramResult("42", agent.AgentResult{Status: agent.StatusImplemented, Summary: "did the thing"})
+
+	if err := os.WriteFile(filepath.Join(te.eng.RepoRoot, "AGENTS.md"), []byte("uncommitted repo-root-only instructions"), 0o644); err != nil {
+		t.Fatalf("write uncommitted AGENTS.md: %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := te.eng.Execute(ctx, "42", te.base); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	invocations := te.fake.Invocations()
+	if len(invocations) != 1 {
+		t.Fatalf("got %d agent invocations, want 1", len(invocations))
+	}
+	if strings.Contains(invocations[0].Repository.AgentInstructions, "uncommitted repo-root-only instructions") {
+		t.Errorf("Repository.AgentInstructions = %q, want it compiled from the Workspace worktree, not the uncommitted RepoRoot file", invocations[0].Repository.AgentInstructions)
+	}
+}
+
 // TestExecute_DetectsCycleInIssueDependencies proves Execute builds its
 // single-Issue DAG check from the domain.Issue.Dependencies field GetIssue
 // returns (see tracker.BuildDAG) and rejects a cycle before any Worker

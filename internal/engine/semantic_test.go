@@ -4,12 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/semantic"
 )
 
@@ -230,9 +232,17 @@ func TestExecute_GoWorkspace_PreparesWithGoplsDetectedServer(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"64": {ID: "64"},
 	})
+	// go.mod is committed, not just written to disk: Repository Context is
+	// compiled from the environment's Workspace (constructorfleet/
+	// forge#302), a git worktree checked out at the Worker base, so only
+	// committed content is visible to it — an uncommitted go.mod sitting on
+	// disk at RepoRoot alone would not be detected.
 	if err := os.WriteFile(filepath.Join(te.eng.RepoRoot, "go.mod"), []byte("module example.com/x\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
+	gittest.RunGit(t, te.eng.RepoRoot, "add", "go.mod")
+	gittest.RunGit(t, te.eng.RepoRoot, "commit", "-q", "-m", "add go.mod")
+	base := strings.TrimSpace(gittest.RunGit(t, te.eng.RepoRoot, "rev-parse", "HEAD"))
 	te.fake.ProgramResult("64", agent.AgentResult{Status: agent.StatusImplemented})
 
 	sess := &fakeSemanticSession{}
@@ -240,7 +250,7 @@ func TestExecute_GoWorkspace_PreparesWithGoplsDetectedServer(t *testing.T) {
 	te.eng.Semantic = provider
 
 	ctx := context.Background()
-	if _, err := te.eng.Execute(ctx, "64", te.base); err != nil {
+	if _, err := te.eng.Execute(ctx, "64", base); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
