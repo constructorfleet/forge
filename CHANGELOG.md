@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/constructorfleet/forge/compare/forge-v0.24.0...forge-v0.25.0) (2026-09-01)
+
+
+### Features
+
+* Remote backend · 6: failure vs. loss distinction ([#402](https://github.com/constructorfleet/forge/issues/402)) ([fcb230d](https://github.com/constructorfleet/forge/commit/fcb230d533a73c6ce7819479f6f4bfb8b171c306)), closes [#344](https://github.com/constructorfleet/forge/issues/344)
+
 ## [0.24.0](https://github.com/constructorfleet/forge/compare/forge-v0.23.0...forge-v0.24.0) (2026-09-01)
 
 
