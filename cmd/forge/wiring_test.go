@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
 	"github.com/Teagan42/forge/internal/execution/remote"
+	"github.com/Teagan42/forge/internal/execution/remote/httpworker"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/storage"
@@ -293,9 +295,10 @@ func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *
 // TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker pins
 // the ticket-343 acceptance criterion that selecting backend: remote with
 // an unreachable worker fails at wiring, with a clear error, rather than
-// reaching Prepare and failing mid-run — today, before any concrete worker
-// transport exists (issue #345), that means every remote selection fails
-// this way.
+// reaching Prepare and failing mid-run. buildWorkerClient's httpworker.
+// Client (issue #345) reaches this endpoint for a real health check, so an
+// address nothing answers on still fails this preflight, exactly as it did
+// before a concrete worker transport existed.
 func TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker(t *testing.T) {
 	root, _ := newTempRepo(t)
 	wsMgr, err := workspace.NewManager(root)
@@ -307,11 +310,47 @@ func TestBuildExecutionBackend_RemoteFailsPreflightWithUnreachableWorker(t *test
 
 	cfg := config.Default()
 	cfg.Execution.Backend = config.BackendRemote
-	cfg.Execution.Worker.Endpoint = "https://worker.example.com:9090"
+	cfg.Execution.Worker.Endpoint = "http://127.0.0.1:1"
 
 	_, err = buildExecutionBackend(cfg, wsMgr, ag, store)
 	if !errors.Is(err, remote.ErrWorkerUnreachable) {
 		t.Fatalf("buildExecutionBackend: want remote.ErrWorkerUnreachable, got %v", err)
+	}
+}
+
+// TestBuildExecutionBackend_RemoteWiresRealClientAgainstReachableWorker
+// pins the other half of the ticket-343/345 seam: a reachable worker
+// daemon must let backend: remote build a Remote backend, constructed with
+// the real httpworker.Client (not the fake), through the exact same wiring
+// path production uses.
+func TestBuildExecutionBackend_RemoteWiresRealClientAgainstReachableWorker(t *testing.T) {
+	root, _ := newTempRepo(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	ag := agent.NewFakeAgent()
+	store := openPlanningStore(t)
+
+	workerRoot := t.TempDir()
+	runGit(t, workerRoot, "init", "-q", "-b", "main")
+	srv, err := httpworker.NewServer(workerRoot, "origin", agent.NewFakeAgent())
+	if err != nil {
+		t.Fatalf("httpworker.NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	cfg := config.Default()
+	cfg.Execution.Backend = config.BackendRemote
+	cfg.Execution.Worker.Endpoint = ts.URL
+
+	backend, err := buildExecutionBackend(cfg, wsMgr, ag, store)
+	if err != nil {
+		t.Fatalf("buildExecutionBackend: %v", err)
+	}
+	if _, ok := backend.(*remote.Backend); !ok {
+		t.Fatalf("buildExecutionBackend = %T, want *remote.Backend", backend)
 	}
 }
 
