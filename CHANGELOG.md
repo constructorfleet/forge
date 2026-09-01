@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/constructorfleet/forge/compare/forge-v0.25.0...forge-v0.26.0) (2026-09-01)
+
+
+### Features
+
+* Wire LOST-detection into a periodic/scheduling loop ([#406](https://github.com/constructorfleet/forge/issues/406)) ([aef784c](https://github.com/constructorfleet/forge/commit/aef784cab7033312c6c12db0f9574944df0e4bd9)), closes [#400](https://github.com/constructorfleet/forge/issues/400)
+
 ## [0.25.0](https://github.com/constructorfleet/forge/compare/forge-v0.24.0...forge-v0.25.0) (2026-09-01)
 
 
