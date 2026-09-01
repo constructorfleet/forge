@@ -570,3 +570,24 @@ func TestVerifyTrackerAuth_SkipAuthPreflightIsAnEscapeHatch(t *testing.T) {
 		t.Fatalf("verifyTrackerAuth with SkipAuthPreflight: want nil, got %v", err)
 	}
 }
+
+func TestLostRecoveryEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend string
+		want    bool
+	}{
+		{name: "local backend disables loss detection", backend: config.BackendLocal, want: false},
+		{name: "remote backend enables loss detection", backend: config.BackendRemote, want: true},
+		{name: "empty backend disables loss detection", backend: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Execution.Backend = tt.backend
+			if got := lostRecoveryEnabled(cfg); got != tt.want {
+				t.Fatalf("lostRecoveryEnabled(%q) = %v, want %v", tt.backend, got, tt.want)
+			}
+		})
+	}
+}
