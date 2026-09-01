@@ -51,6 +51,7 @@ type FakeRuntime struct {
 	stopped  []ContainerHandle
 	removed  []ContainerHandle
 	executed []executedCall
+	startErr error
 }
 
 // NewFakeRuntime returns an empty FakeRuntime.
@@ -58,10 +59,23 @@ func NewFakeRuntime() *FakeRuntime {
 	return &FakeRuntime{specs: make(map[ContainerHandle]ContainerSpec)}
 }
 
-// Start records spec and returns a freshly minted handle for it.
+// FailStart makes every later Start call fail with err instead of
+// launching a container, simulating a runtime that rejects the launch
+// (e.g. a missing image) for constructorfleet/forge#337.
+func (r *FakeRuntime) FailStart(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.startErr = err
+}
+
+// Start records spec and returns a freshly minted handle for it, unless a
+// prior FailStart call configured Start to fail instead.
 func (r *FakeRuntime) Start(_ context.Context, spec ContainerSpec) (ContainerHandle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.startErr != nil {
+		return "", r.startErr
+	}
 	r.nextID++
 	handle := ContainerHandle(fmt.Sprintf("fake-container-%d", r.nextID))
 	r.started = append(r.started, spec)

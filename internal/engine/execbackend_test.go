@@ -59,11 +59,20 @@ type fakeBackend struct {
 	eng        *engine.Engine
 	workspaces engine.WorkspaceCreator
 	commands   *gateCommandSwitch
+
+	// prepareErr, when set, makes Prepare fail immediately with this error
+	// instead of creating a Workspace — the seam
+	// TestExecute_PrepareError_RoutesThroughFailOutWithoutHanging uses to
+	// simulate a backend (e.g. Container) whose environment never comes up.
+	prepareErr error
 }
 
 var _ execution.ExecutionBackend = (*fakeBackend)(nil)
 
 func (b *fakeBackend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (execution.ExecutionEnvironment, error) {
+	if b.prepareErr != nil {
+		return nil, b.prepareErr
+	}
 	ws, err := b.workspaces.Create(ctx, req.ExecutionID, req.IssueID, req.Base)
 	if err != nil {
 		return nil, err

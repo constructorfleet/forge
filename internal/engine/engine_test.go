@@ -587,6 +587,44 @@ func TestExecute_AgentError_CleansUpWorkspaceAndFails(t *testing.T) {
 	}
 }
 
+// TestExecute_PrepareError_RoutesThroughFailOutWithoutHanging drives a
+// Prepare failure (the path a Container backend takes when the container
+// fails to start, constructorfleet/forge#337) and asserts it surfaces as a
+// deterministic, terminal outcome through failOut rather than leaving the
+// Issue stuck in PREPARING. No Environment exists yet, so failOut must
+// tolerate a nil one; PREPARING has no FAILED edge (internal/domain/state.go),
+// so failOut's transition falls back to its generic CANCELLED edge.
+func TestExecute_PrepareError_RoutesThroughFailOutWithoutHanging(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"21": {ID: "21"},
+	})
+	backend, ok := te.eng.Backend.(*fakeBackend)
+	if !ok {
+		t.Fatalf("eng.Backend = %T, want *fakeBackend", te.eng.Backend)
+	}
+	backend.prepareErr = errors.New("container: start container: image not found")
+
+	const executionID = "exec-prepare-error"
+	te.eng.NewExecutionID = func() string { return executionID }
+
+	ctx := context.Background()
+	_, err := te.eng.Execute(ctx, "21", te.base)
+	if err == nil {
+		t.Fatal("Execute: want error when Prepare fails, got nil")
+	}
+
+	issue, getErr := te.store.GetIssue(ctx, executionID, "21")
+	if getErr != nil {
+		t.Fatalf("GetIssue: %v", getErr)
+	}
+	if !issue.State.IsTerminal() {
+		t.Fatalf("issue.State = %s, want a terminal state (Prepare failure must not hang)", issue.State)
+	}
+	if issue.State != domain.StateCancelled {
+		t.Errorf("issue.State = %s, want CANCELLED (PREPARING has no FAILED edge, so failOut falls back)", issue.State)
+	}
+}
+
 func TestExecute_UnknownTrackerIssue_ReturnsError(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{})
 	if _, err := te.eng.Execute(context.Background(), "missing", te.base); err == nil {
