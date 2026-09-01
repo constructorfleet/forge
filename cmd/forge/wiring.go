@@ -283,11 +283,15 @@ func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot str
 	return engine.New(store, nil, nil, nil, cfg, repoRoot)
 }
 
-// buildScheduler wires a *scheduler.Scheduler (ticket 26) for a `forge
-// execute` invocation over issueIDs: the same tracker and Engine buildEngine
-// would construct for a single Issue, adapted to scheduler.Executor via
-// scheduler.Adapt, plus a completionResolver DependencyResolver and a
-// dependencyBaseResolver BaseResolver.
+type executeRuntime struct {
+	Scheduler               *scheduler.Scheduler
+	LostExecutionController *engine.LostExecutionController
+}
+
+// buildExecuteRuntime wires the long-running components that a `forge
+// execute` invocation owns. The Scheduler drives requested Issues. The lost
+// Execution controller runs only for the remote backend, where a Worker has
+// a lease that can lapse.
 //
 // An Issue with no Dependencies (or only External ones) resolves to
 // cfg.Git.Base's current tip, as before. An Issue with one or more
@@ -297,7 +301,7 @@ func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot str
 // so its Worker sees its prerequisites' committed changes before it starts
 // (issue #108: dependency-ordered execution must also constrain what
 // repository state a dependent executes against, not merely when it runs).
-func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*scheduler.Scheduler, error) {
+func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*executeRuntime, error) {
 	trk, err := buildTracker(cfg, repoRoot)
 	if err != nil {
 		return nil, err
@@ -351,7 +355,21 @@ func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, iss
 		sch.CIWatcher = sup
 		sch.CIRepairer = scheduler.AdaptCIRepairer(eng)
 	}
-	return sch, nil
+	runtime := &executeRuntime{Scheduler: sch}
+	if lostRecoveryEnabled(cfg) {
+		runtime.LostExecutionController = engine.NewLostExecutionController(store, store, eng, time.Now)
+	}
+	return runtime, nil
+}
+
+// buildScheduler wires a *scheduler.Scheduler (ticket 26) for a `forge
+// execute` invocation over issueIDs.
+func buildScheduler(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*scheduler.Scheduler, error) {
+	runtime, err := buildExecuteRuntime(store, cfg, repoRoot, issueIDs)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.Scheduler, nil
 }
 
 // publishReadyStates are the Issue states a Dependency is considered
@@ -810,38 +828,25 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 }
 
 // lostRecoveryPollInterval is how often `forge execute` checks in-flight
-// remote executions for a lapsed heartbeat, via engine.RunLostRecoveryLoop
-// (issue #400). It mirrors scheduler.defaultPollInterval's role as a
-// periodic fallback: independent of any single WorkerClient call, so a
-// vanished Worker is still caught even while no request is in flight to it.
+// remote executions for a lapsed heartbeat. It mirrors
+// scheduler.defaultPollInterval's role as a periodic fallback. It is
+// independent of any single WorkerClient call, so Forge can detect a lost
+// Worker when no request is in flight.
 const lostRecoveryPollInterval = 10 * time.Second
 
 // lostRecoveryEnabled reports whether `forge execute` should run the
-// background loss-detection loop for this Run. An ExecutionLease is only
+// background loss detection for this Execution. An ExecutionLease is only
 // ever claimed under the Remote ExecutionBackend (issue #343), so the loop
-// is a no-op busywork cost under every other backend and is skipped
-// entirely.
+// has no effect under every other backend and is skipped entirely.
 func lostRecoveryEnabled(cfg config.Config) bool {
 	return cfg.Execution.Backend == config.BackendRemote
 }
 
-// reportLostRecoveryTick is engine.RunLostRecoveryLoop's onTick callback for
-// `forge execute`: it prints one line per Issue the tick found lost, to
-// stderr alongside every other diagnostic runExecute emits, and one line
-// for a listing failure. It never stops the loop — RunLostRecoveryLoop
-// keeps ticking regardless of what onTick does.
-func reportLostRecoveryTick(entries []engine.LostRecoveryEntry, err error) {
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge execute: lost-execution recovery: %v\n", err)
-		return
-	}
-	for _, entry := range entries {
-		if entry.Err != nil {
-			fmt.Fprintf(os.Stderr, "forge execute: issue %s worker lost, retry budget exhausted: %v\n", entry.IssueID, entry.Err)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "forge execute: issue %s worker lost, retrying\n", entry.IssueID)
-	}
+// reportLostExecutionControllerError writes controller reconciliation
+// failures beside the other `forge execute` diagnostics. The controller
+// keeps running after a failed pass.
+func reportLostExecutionControllerError(err error) {
+	fmt.Fprintf(os.Stderr, "forge execute: lost-execution recovery: %v\n", err)
 }
 
 // buildRemoteRecoverFunc adapts engine.RecoverLostExecution to

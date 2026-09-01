@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"time"
-
-	"github.com/Teagan42/forge/internal/engine"
 )
 
 // runExecute implements `forge execute <issue-number> [<issue-number> ...]`
@@ -62,19 +61,18 @@ func runExecute(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	sch, err := buildScheduler(store, cfg, repoRoot, issueIDs)
+	runtime, err := buildExecuteRuntime(store, cfg, repoRoot, issueIDs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
 	}
 
-	if lostRecoveryEnabled(cfg) {
-		lostCtx, stopLostRecovery := context.WithCancel(ctx)
+	if runtime.LostExecutionController != nil {
+		stopLostRecovery := startLostExecutionController(ctx, runtime.LostExecutionController, reportLostExecutionControllerError)
 		defer stopLostRecovery()
-		go engine.RunLostRecoveryLoop(lostCtx, store, time.Now, lostRecoveryPollInterval, reportLostRecoveryTick)
 	}
 
-	results, err := sch.Run(ctx, issueIDs)
+	results, err := runtime.Scheduler.Run(ctx, issueIDs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
@@ -91,4 +89,23 @@ func runExecute(args []string) int {
 		fmt.Printf("issue %s -> %s\n", id, res.State)
 	}
 	return exitCode
+}
+
+type lostExecutionControllerRunner interface {
+	Run(ctx context.Context, interval time.Duration, onErr func(error)) error
+}
+
+func startLostExecutionController(ctx context.Context, controller lostExecutionControllerRunner, onErr func(error)) func() {
+	lostCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := controller.Run(lostCtx, lostRecoveryPollInterval, onErr); err != nil && !errors.Is(err, context.Canceled) && onErr != nil {
+			onErr(err)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
