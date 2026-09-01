@@ -8,6 +8,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -223,7 +224,9 @@ func (e *Engine) handleReplanRequired(ctx context.Context, executionID, issueID,
 	}
 
 	if e.Config.Blocked.Comment && e.NeedsInfoTracker != nil && !checkpoint.CommentPosted {
-		posted, err := e.NeedsInfoTracker.AddComment(ctx, issueID, replanCommentBody(result.Replan, result.Summary, featureID))
+		body := replanCommentBody(result.Replan, result.Summary, featureID)
+		body = needsinfo.AppendCommentMarker(body, executionID, issueID)
+		posted, err := e.NeedsInfoTracker.AddComment(ctx, issueID, body)
 		if err != nil {
 			return domain.Issue{}, fmt.Errorf("engine: post replan comment on issue %s: %w", issueID, err)
 		}

@@ -13,6 +13,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -277,6 +278,9 @@ func TestExecute_ReplanRequired_FreezesReopensAndParksIssue(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("comment missing %q:\n%s", want, body)
 		}
+	}
+	if !needsinfo.IsForgeComment(body, result.ExecutionID, "7") {
+		t.Errorf("replan comment body does not carry forge's hidden marker: %s", body)
 	}
 
 	// Ordering: the freeze event must precede the lease event, which must
