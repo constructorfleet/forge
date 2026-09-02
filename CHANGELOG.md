@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.4](https://github.com/constructorfleet/forge/compare/forge-v0.29.3...forge-v0.29.4) (2026-09-02)
+
+
+### Bug Fixes
+
+* Phase 3 · Workstream A: GitLab Tracker adapter + DependencyStore (+ shared GitLab client/auth) ([#433](https://github.com/constructorfleet/forge/issues/433)) ([b7ea793](https://github.com/constructorfleet/forge/commit/b7ea793043cf96c711c555ec9288d3aa821be253)), closes [#289](https://github.com/constructorfleet/forge/issues/289)
+
 ## [0.29.3](https://github.com/constructorfleet/forge/compare/forge-v0.29.2...forge-v0.29.3) (2026-09-02)
 
 
