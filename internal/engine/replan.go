@@ -407,7 +407,15 @@ func (e *Engine) revalidateAfterReplan(ctx context.Context, executionID, issueID
 	detail = "all configured quality gates still pass"
 	ran := 0
 	for _, g := range e.Config.Quality.Gates {
-		res := e.runQualityGate(ctx, env, g)
+		res, err := e.runQualityGate(ctx, env, g)
+		if err != nil {
+			// The command itself could not run, not that it ran and
+			// failed — the same deterministic infrastructure failure
+			// runQualityGates guards against (constructorfleet/forge#391),
+			// so it propagates the same way here rather than reporting a
+			// fabricated gate failure.
+			return false, "", fmt.Errorf("engine: run revalidation gate %s for issue %s: %w", g.Name, issueID, err)
+		}
 		ran++
 		if err := e.Store.RecordGateRun(ctx, storage.GateRun{
 			ExecutionID: executionID,
