@@ -697,6 +697,13 @@ func workerRef(executionID, issueID string) string {
 // Execute created before IMPLEMENTING and is never recreated or cleaned up
 // between iterations — repair works in place.
 func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, workerBase, workspacePath string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue) (domain.Issue, error) {
+	// previousReviewFindings holds the last review's surviving (post-
+	// override) CHANGES_REQUIRED Findings, so issue #375's non-convergence
+	// check below can tell "the reviewer raised the identical objection
+	// again" from "this is a new finding" without a storage round trip:
+	// this loop already re-enters from the top on every repair retry, so a
+	// local slice is exactly the retry history the check needs.
+	var previousReviewFindings []review.Finding
 	for {
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateValidating)
 		if err != nil {
@@ -739,6 +746,23 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		}
 		if verdict != review.VerdictChangesRequired {
 			return issue, nil
+		}
+
+		findings, done, resting, err := e.applyReviewOverrides(ctx, executionID, issueID, findings)
+		if err != nil {
+			return domain.Issue{}, err
+		}
+		if done {
+			return resting, nil
+		}
+
+		resting, escalated, err := e.escalateIfNonConvergent(ctx, executionID, issueID, findings, previousReviewFindings)
+		previousReviewFindings = findings
+		if err != nil {
+			return domain.Issue{}, err
+		}
+		if escalated {
+			return resting, nil
 		}
 
 		feedback := review.BuildFeedback(findings)
@@ -784,6 +808,70 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			return issue, nil
 		}
 	}
+}
+
+// applyReviewOverrides suppresses any Finding this Issue has already been
+// escalated for as non-convergent (issue #375). The persisted
+// ReviewOverride is keyed by IssueID, not ExecutionID, so it is applied on
+// every later review, including in a brand new Execution — a resumed Issue
+// does not re-spend its review retry budget on the same non-defect. done is
+// true when the caller should stop the repair loop and return resting
+// as-is: either every surviving Finding was overridden (resting transitions
+// straight to COMMITTING, the same resting state a real VerdictApproved
+// reaches) or an error occurred (resting is the zero Issue).
+func (e *Engine) applyReviewOverrides(ctx context.Context, executionID, issueID string, findings []review.Finding) (remaining []review.Finding, done bool, resting domain.Issue, err error) {
+	overrides, err := e.Store.ReviewOverridesByIssue(ctx, issueID)
+	if err != nil {
+		return nil, true, domain.Issue{}, fmt.Errorf("engine: load review overrides for issue %s: %w", issueID, err)
+	}
+	remaining, overridden := review.ApplyOverrides(findings, overrides)
+	if len(overridden) > 0 {
+		if err := e.appendEvent(ctx, executionID, issueID, "review.finding_overridden", map[string]string{
+			"count":    fmt.Sprint(len(overridden)),
+			"findings": reviewFindingsContext(overridden),
+		}); err != nil {
+			return nil, true, domain.Issue{}, err
+		}
+	}
+	if len(remaining) == 0 {
+		issue, err := e.transition(ctx, executionID, issueID, domain.StateCommitting)
+		return nil, true, issue, err
+	}
+	return remaining, false, domain.Issue{}, nil
+}
+
+// escalateIfNonConvergent detects a Finding that repeats identically from
+// the previous review — same axis, severity, file, line, and message
+// (review.Finding.Signature) — meaning the axis and the Agent are not
+// converging: another repair attempt will not change anything the reviewer
+// hasn't already rejected once (issue #375). It escalates to a human
+// immediately, before the retry budget check even runs, and persists a
+// ReviewOverride per repeated Finding so a later re-run of this Issue does
+// not hit the same wall again. escalated is true when the caller should
+// stop the repair loop and return resting as-is.
+func (e *Engine) escalateIfNonConvergent(ctx context.Context, executionID, issueID string, findings, previous []review.Finding) (resting domain.Issue, escalated bool, err error) {
+	repeated := review.NonConvergent(findings, previous)
+	if len(repeated) == 0 {
+		return domain.Issue{}, false, nil
+	}
+	for _, f := range repeated {
+		if err := e.Store.RecordReviewOverride(ctx, domain.ReviewOverride{
+			IssueID:   issueID,
+			Signature: f.Signature(),
+			Axis:      f.Axis,
+			File:      f.File,
+			Line:      f.Line,
+			Message:   f.Message,
+			Reason:    "non-convergent: identical finding repeated across review retries",
+			CreatedAt: e.Now(),
+		}); err != nil {
+			return domain.Issue{}, true, fmt.Errorf("engine: persist review override for issue %s: %w", issueID, err)
+		}
+	}
+	issue, err := e.escalateReviewToNeedsInfo(ctx, executionID, issueID,
+		"Review is repeating an identical finding against unchanged code across retries; escalating without exhausting the review retry budget.",
+		reviewFindingsContext(findings))
+	return issue, true, err
 }
 
 // repair implements the Retry Budget's (CONTEXT.md) shared shape for both

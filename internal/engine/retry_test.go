@@ -503,6 +503,171 @@ func TestExecute_ReviewBudgetExhaustion_RoutesToNeedsInfo(t *testing.T) {
 	}
 }
 
+// TestExecute_ReviewNonConvergentFinding_EscalatesBeforeBudgetExhausted is
+// issue #375's core case: a review axis repeats the exact same Finding
+// against unchanged code on the very next retry. Even though the review
+// retry budget (Review: 3) has plenty of room left, the repeated Finding
+// itself must trigger an early NEEDS_INFO escalation rather than burning
+// the remaining budget on an Agent that has nothing left to change.
+func TestExecute_ReviewNonConvergentFinding_EscalatesBeforeBudgetExhausted(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"375": {ID: "375"},
+	})
+	te.fake.ProgramResult("375", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 2, Review: 3, CI: 2}
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramDefault(review.Result{
+		Verdict: review.VerdictChangesRequired,
+		Findings: []review.Finding{
+			{Severity: review.SeverityError, Axis: "bugs", File: "main.go", Line: 1, Message: "still broken"},
+		},
+	})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "375", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+
+	// Escalation must fire on the second identical review, not after the
+	// third retry the Review:3 budget would otherwise allow.
+	if got := len(reviewer.Invocations()); got != 2 {
+		t.Errorf("got %d reviewer invocations, want 2 (initial + 1 repeat, escalated before a 3rd)", got)
+	}
+
+	issue, err := te.store.GetIssue(ctx, result.ExecutionID, "375")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if got := issue.RetryBudget.ReviewFailures(); got != 1 {
+		t.Errorf("ReviewFailures() = %d, want 1 (budget not burned on the non-convergent repeat)", got)
+	}
+
+	overrides, err := te.store.ReviewOverridesByIssue(ctx, "375")
+	if err != nil {
+		t.Fatalf("ReviewOverridesByIssue: %v", err)
+	}
+	if len(overrides) != 1 {
+		t.Fatalf("got %d review overrides, want 1", len(overrides))
+	}
+	if overrides[0].Message != "still broken" || overrides[0].Axis != "bugs" {
+		t.Errorf("override = %+v, want Message %q Axis %q", overrides[0], "still broken", "bugs")
+	}
+}
+
+// TestExecute_ReviewNonConvergentFinding_EscalationContextIncludesAllFindings
+// asserts the escalation's NEEDS_INFO context reports every standing
+// Finding from the triggering review, not only the non-convergent one: a
+// review round can return one repeated Finding alongside other, different
+// Findings, and a human resolving the escalation must see all of them.
+func TestExecute_ReviewNonConvergentFinding_EscalationContextIncludesAllFindings(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"377": {ID: "377"},
+	})
+	te.fake.ProgramResult("377", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 2, Review: 3, CI: 2}
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramResult("377", review.Result{
+		Verdict: review.VerdictChangesRequired,
+		Findings: []review.Finding{
+			{Severity: review.SeverityError, Axis: "bugs", File: "main.go", Line: 1, Message: "still broken"},
+			{Severity: review.SeverityWarning, Axis: "docs", File: "readme.md", Line: 2, Message: "missing section"},
+		},
+	})
+	reviewer.ProgramResult("377", review.Result{
+		Verdict: review.VerdictChangesRequired,
+		Findings: []review.Finding{
+			{Severity: review.SeverityError, Axis: "bugs", File: "main.go", Line: 1, Message: "still broken"},
+			{Severity: review.SeverityWarning, Axis: "docs", File: "readme.md", Line: 2, Message: "a different complaint"},
+		},
+	})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "377", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+
+	checkpoint, err := te.store.GetNeedsInfoCheckpoint(ctx, result.ExecutionID, "377")
+	if err != nil {
+		t.Fatalf("GetNeedsInfoCheckpoint: %v", err)
+	}
+	if !strings.Contains(checkpoint.Context, "still broken") {
+		t.Errorf("checkpoint context = %q, want it to mention the non-convergent finding %q", checkpoint.Context, "still broken")
+	}
+	if !strings.Contains(checkpoint.Context, "a different complaint") {
+		t.Errorf("checkpoint context = %q, want it to also mention the other standing finding %q", checkpoint.Context, "a different complaint")
+	}
+}
+
+// TestExecute_ReviewOverride_SuppressesRepeatedFindingInNewExecution
+// asserts the "survives re-runs" half of issue #375: once a non-convergent
+// Finding has been escalated once (persisting a ReviewOverride keyed by
+// IssueID), a later Execute for the same Issue — a brand new Execution,
+// e.g. after a human resumes it — must not spend any review retries on the
+// same Finding again; it is suppressed immediately and the Issue reaches
+// COMMITTING.
+func TestExecute_ReviewOverride_SuppressesRepeatedFindingInNewExecution(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"376": {ID: "376"},
+	})
+	te.fake.ProgramResult("376", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 2, Review: 3, CI: 2}
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramDefault(review.Result{
+		Verdict: review.VerdictChangesRequired,
+		Findings: []review.Finding{
+			{Severity: review.SeverityError, Axis: "bugs", File: "main.go", Line: 1, Message: "still broken"},
+		},
+	})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff"}
+
+	ctx := context.Background()
+	first, err := te.eng.Execute(ctx, "376", te.base)
+	if err != nil {
+		t.Fatalf("Execute (1st): %v", err)
+	}
+	if first.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("1st run final state = %s, want NEEDS_INFO", first.Issue.State)
+	}
+
+	// A brand new Execution for the same Issue. te.eng.Reviewer keeps
+	// returning the identical CHANGES_REQUIRED Finding; the persisted
+	// override must suppress it immediately.
+	second, err := te.eng.Execute(ctx, "376", te.base)
+	if err != nil {
+		t.Fatalf("Execute (2nd): %v", err)
+	}
+	if second.Issue.State != domain.StateCommitting {
+		t.Fatalf("2nd run final state = %s, want COMMITTING (override should suppress the repeated finding)", second.Issue.State)
+	}
+	if second.ExecutionID == first.ExecutionID {
+		t.Fatalf("2nd run reused the 1st run's ExecutionID; test needs a genuinely new Execution")
+	}
+
+	issue, err := te.store.GetIssue(ctx, second.ExecutionID, "376")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if got := issue.RetryBudget.ReviewFailures(); got != 0 {
+		t.Errorf("ReviewFailures() = %d, want 0 (override suppressed the finding on the first review)", got)
+	}
+}
+
 func TestRepairCIFailure_RetriesInSameWorkspaceReachesCIPending(t *testing.T) {
 	te := approvedTestEngine(t, "46", domain.Issue{ID: "46", Title: "repair CI"})
 	pub := &fakePublisher{commitSHA: "sha-1"}

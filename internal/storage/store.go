@@ -472,6 +472,16 @@ type Store interface {
 	// with its Findings populated.
 	ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]ReviewRun, error)
 
+	// RecordReviewOverride persists a non-convergent review finding (issue
+	// #375), keyed by IssueID alone so it survives into a new Execution for
+	// the same Issue/branch. Recording the same (IssueID, Signature) again
+	// is a no-op.
+	RecordReviewOverride(ctx context.Context, override domain.ReviewOverride) error
+
+	// ReviewOverridesByIssue returns every ReviewOverride recorded for one
+	// Issue, across all Executions, ordered by insertion.
+	ReviewOverridesByIssue(ctx context.Context, issueID string) ([]domain.ReviewOverride, error)
+
 	// EventsByExecution returns every Event recorded for an Execution,
 	// ordered by occurrence time.
 	EventsByExecution(ctx context.Context, executionID string) ([]Event, error)
