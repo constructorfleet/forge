@@ -314,7 +314,7 @@ func TestLoad_UnknownKeyRejected(t *testing.T) {
 }
 
 func TestLoad_InvalidTrackerType(t *testing.T) {
-	path := writeTemp(t, "tracker:\n  type: gitlab\n")
+	path := writeTemp(t, "tracker:\n  type: linear\n")
 
 	_, err := Load(path)
 	if err == nil {
@@ -323,8 +323,84 @@ func TestLoad_InvalidTrackerType(t *testing.T) {
 	if !strings.Contains(err.Error(), "tracker.type") {
 		t.Errorf("Load() error = %v, want it to identify tracker.type", err)
 	}
-	if !strings.Contains(err.Error(), "gitlab") {
+	if !strings.Contains(err.Error(), "linear") {
 		t.Errorf("Load() error = %v, want it to include the offending value", err)
+	}
+}
+
+func TestLoad_GitLabTrackerTypeIsAccepted(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Type != "gitlab" {
+		t.Errorf("Tracker.Type = %q, want gitlab", cfg.Tracker.Type)
+	}
+	if cfg.Tracker.GitLab.Project != "acme/widgets" {
+		t.Errorf("Tracker.GitLab.Project = %q, want acme/widgets", cfg.Tracker.GitLab.Project)
+	}
+	// The GitLab tracker composes alongside the GitHub SCM and CI
+	// capabilities; the tracker type never cascades to them.
+	if cfg.SCM.Type != "github" || cfg.CI.Type != "github" {
+		t.Errorf("SCM.Type = %q, CI.Type = %q, want github for both", cfg.SCM.Type, cfg.CI.Type)
+	}
+}
+
+func TestLoad_GitLabTrackerRequiresAProject(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitlab\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.gitlab.project") {
+		t.Errorf("Load() error = %v, want it to identify tracker.gitlab.project", err)
+	}
+}
+
+func TestLoad_GitLabTrackerBaseURLIsOptional(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n    base_url: https://gitlab.example.com\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.GitLab.BaseURL != "https://gitlab.example.com" {
+		t.Errorf("Tracker.GitLab.BaseURL = %q, want the configured instance root", cfg.Tracker.GitLab.BaseURL)
+	}
+}
+
+func TestLoad_GitLabProjectIsOnlyRequiredForTheGitLabTracker(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: github\n")
+
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+}
+
+func TestLoad_TrackerProviderTagDefaultsToTheTrackerType(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Provider != "gitlab" {
+		t.Errorf("Tracker.Provider = %q, want gitlab", cfg.Tracker.Provider)
+	}
+}
+
+func TestLoad_ExplicitTrackerProviderTagWins(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitlab\n  provider: acme-gitlab\n  gitlab:\n    project: acme/widgets\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Provider != "acme-gitlab" {
+		t.Errorf("Tracker.Provider = %q, want acme-gitlab", cfg.Tracker.Provider)
 	}
 }
 
@@ -717,15 +793,32 @@ func TestLoad_DependencyOverrideSelfReference(t *testing.T) {
 	}
 }
 
-func TestLoad_TrackerProviderMustNotBeEmpty(t *testing.T) {
+func TestLoad_EmptyTrackerProviderResolvesToTheTrackerType(t *testing.T) {
+	// An empty provider tag is not an error: resolveProviders fills it from
+	// the composed tracker type, so an Issue always carries a provider tag.
 	path := writeTemp(t, "tracker:\n  provider: \"\"\n")
 
-	_, err := Load(path)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Provider != "github" {
+		t.Errorf("Tracker.Provider = %q, want github (from the tracker type)", cfg.Tracker.Provider)
+	}
+}
+
+func TestValidate_RejectsAnEmptyTrackerProvider(t *testing.T) {
+	// resolveProviders always fills the provider tag, so this check is a
+	// backstop for a Config built in code rather than loaded from a file.
+	cfg := Default()
+	cfg.Tracker.Provider = ""
+
+	err := validate(cfg)
 	if err == nil {
-		t.Fatal("Load() error = nil, want tracker.provider validation error")
+		t.Fatal("validate() error = nil, want tracker.provider validation error")
 	}
 	if !strings.Contains(err.Error(), "tracker.provider") {
-		t.Errorf("Load() error = %v, want it to identify tracker.provider", err)
+		t.Errorf("validate() error = %v, want it to identify tracker.provider", err)
 	}
 }
 

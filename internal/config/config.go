@@ -23,7 +23,7 @@ import (
 // selects which provider implements the Tracker capability (see Config.
 // Provider's doc comment on capability composition); Provider is the
 // unrelated sidecar tag stamped onto every fetched domain.Issue (see
-// tracker/github.Client.Provider).
+// tracker/github.Client.Provider). Type accepts "github" and "gitlab".
 type TrackerConfig struct {
 	Type     string `yaml:"type"`
 	Provider string `yaml:"provider"`
@@ -35,6 +35,29 @@ type TrackerConfig struct {
 	// false: the preflight runs, and a missing/invalid credential aborts
 	// before any side-effecting work begins.
 	SkipAuthPreflight bool `yaml:"skip_auth_preflight"`
+
+	// GitLab configures the GitLab Tracker. Forge reads it only when Type
+	// is "gitlab" and ignores it otherwise.
+	GitLab GitLabConfig `yaml:"gitlab"`
+}
+
+// GitLabConfig configures the GitLab Tracker capability. It holds no
+// secrets: the GitLab token comes from the GITLAB_TOKEN environment
+// variable at the point of use (see the package doc comment and
+// internal/tracker/gitlab).
+type GitLabConfig struct {
+	// Project names the GitLab project the Tracker reads and writes. Give
+	// the path with namespace ("acme/widgets") or the numeric project ID.
+	// It is required when tracker.type is "gitlab": unlike the GitHub
+	// adapter, which resolves the repository from the "origin" remote,
+	// Forge does not infer a GitLab project from a remote URL, because a
+	// self-managed instance can use any host name.
+	Project string `yaml:"project"`
+
+	// BaseURL is the root URL of the GitLab instance, for example
+	// "https://gitlab.example.com". Leave it empty for gitlab.com. Give the
+	// instance root, not the API root: Forge appends the API path itself.
+	BaseURL string `yaml:"base_url"`
 }
 
 // SCMConfig identifies which provider implements the SCM (change-request)
@@ -546,7 +569,9 @@ func Default() Config {
 func unresolvedDefault() Config {
 	return Config{
 		Version: 1,
-		Tracker: TrackerConfig{Provider: "github"},
+		// Tracker.Provider is left blank here, not defaulted to "github":
+		// resolveProviders fills it from Tracker.Type, so the sidecar tag
+		// follows the composed tracker rather than always saying "github".
 		Git: GitConfig{
 			Base:           "origin/main",
 			BranchTemplate: "forge/{execution}/{issue}",
@@ -615,6 +640,13 @@ func resolveProviders(cfg *Config) {
 	}
 	if strings.TrimSpace(cfg.CI.Type) == "" {
 		cfg.CI.Type = cfg.Provider
+	}
+	// The sidecar Provider tag (stamped onto every fetched domain.Issue)
+	// follows the composed tracker type unless the file names it
+	// explicitly, so `tracker: {type: gitlab}` tags its Issues "gitlab"
+	// rather than "github".
+	if strings.TrimSpace(cfg.Tracker.Provider) == "" {
+		cfg.Tracker.Provider = cfg.Tracker.Type
 	}
 }
 

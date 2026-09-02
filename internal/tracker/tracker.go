@@ -195,6 +195,19 @@ type Capabilities struct {
 	// planning-mirror projection behavior is built yet; this flag reserves
 	// the surface for when it is.
 	PlanningMirror bool
+
+	// NativeDependencyLinks reports whether the Tracker reads Dependencies
+	// from the provider's own typed issue links rather than from the
+	// canonical `## Dependencies` body block (ADR 0003, ADR 0027). It is a
+	// provider-neutral question: several trackers expose typed links, and
+	// each one gates them behind a host version or a paid tier, so a caller
+	// cannot decide it from the provider name alone.
+	//
+	// An adapter that never probes for typed links leaves it false, which
+	// is the correct answer for a body-block-only adapter. False therefore
+	// means "this Tracker did not report typed links", not "the provider
+	// has none".
+	NativeDependencyLinks bool
 }
 
 // PullRequestRequest carries everything CreatePullRequest needs to create,

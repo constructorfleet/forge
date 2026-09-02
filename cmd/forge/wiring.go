@@ -39,6 +39,7 @@ import (
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
+	"github.com/Teagan42/forge/internal/tracker/gitlab"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -323,7 +324,7 @@ func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string
 		return nil, fmt.Errorf("forge: workspace manager: %w", err)
 	}
 
-	resolver := newCompletionResolver(issueIDs, trk, cfg.Git.Base)
+	resolver := newCompletionResolver(issueIDs, externalCheckerFor(trk), cfg.Git.Base)
 	base := &dependencyBaseResolver{
 		tracker:    trk,
 		resolver:   resolver,
@@ -610,24 +611,49 @@ func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string
 	return resolveBaseRevision(b.repoRoot, integrated)
 }
 
-// buildTracker constructs the Tracker capability for repoRoot, resolving
-// the target repository from its "origin" remote and selecting an
-// implementation by cfg.Tracker.Type. Factored out of buildEngine so
-// `forge resume` (which needs the full tracker.Tracker for GetComments, not
-// just engine.IssueFetcher) can build the same adapter without constructing
-// a whole Engine. Only "github" is implemented today; cfg.Tracker.Type is
-// otherwise rejected by config.Load's validation before wiring ever runs
-// (see config.validate), so the default case here is unreachable in
-// practice and exists only as a defensive backstop, matching buildAgent's
-// provider switch.
-func buildTracker(cfg config.Config, repoRoot string) (*github.Client, error) {
-	return resolveCapability("tracker", cfg.Tracker.Type, cfg, repoRoot)
+// trackerCapability is the Tracker capability as every caller in this
+// package consumes it: the neutral issue-domain interface plus the
+// dependency read/write capability. buildTracker returns this interface,
+// not a concrete client, because two providers implement it now —
+// *github.Client and *gitlab.Client.
+//
+// The interface stays this narrow on purpose. A caller that needs a
+// provider-specific extra (github.Client's CheckExternal, for example)
+// type-asserts for it and degrades when the assertion fails, the pattern
+// tracker.AuthPreflighter and tracker.ReviewsGetter already use.
+type trackerCapability interface {
+	tracker.Tracker
+	tracker.DependencyStore
+}
+
+// buildTracker constructs the Tracker capability for repoRoot and selects an
+// implementation by cfg.Tracker.Type. Factored out of buildEngine so `forge
+// resume` (which needs the full tracker.Tracker for GetComments, not just
+// engine.IssueFetcher) can build the same adapter without constructing a
+// whole Engine.
+//
+// "github" resolves the target repository from repoRoot's "origin" remote.
+// "gitlab" reads its project from config instead, because a self-managed
+// GitLab instance can use any host name. buildTracker's own default case
+// runs on every other configured type, including the common "github" case
+// — it is the reachable, load-bearing path, not dead code. Only
+// resolveCapability's inner default (an unrecognized provider string) is
+// unreachable in practice, because config.Load's validation (see
+// config.validate) rejects that before wiring ever runs.
+func buildTracker(cfg config.Config, repoRoot string) (trackerCapability, error) {
+	switch cfg.Tracker.Type {
+	case "gitlab":
+		return buildGitLabClient(cfg), nil
+	default:
+		return resolveCapability("tracker", cfg.Tracker.Type, cfg, repoRoot)
+	}
 }
 
 // buildSCM constructs the SCM capability for repoRoot, composed
 // independently of buildTracker per cfg.SCM.Type (see config.Config.
 // Provider's doc comment on capability composition). Only "github" is
-// implemented today, mirroring buildTracker's defensive default case.
+// implemented today: the GitLab adapter implements the Tracker capability
+// only, so "gitlab" falls to resolveCapability's error case.
 func buildSCM(cfg config.Config, repoRoot string) (*github.Client, error) {
 	return resolveCapability("scm", cfg.SCM.Type, cfg, repoRoot)
 }
@@ -638,13 +664,13 @@ func buildSCM(cfg config.Config, repoRoot string) (*github.Client, error) {
 // cfg.SCM.Type (or names a recognized external-status observer) by the
 // time wiring runs, so this switch only needs to know how to construct
 // each recognized type, not re-check coherence. Only "github" is
-// implemented today.
+// implemented today, for the same reason buildSCM is.
 func buildCI(cfg config.Config, repoRoot string) (*github.Client, error) {
 	return resolveCapability("ci", cfg.CI.Type, cfg, repoRoot)
 }
 
-// resolveCapability constructs the client for one capability (tracker/scm/
-// ci), sharing buildTracker/buildSCM/buildCI's identical
+// resolveCapability constructs the GitHub client for one capability
+// (tracker/scm/ci), sharing buildTracker/buildSCM/buildCI's identical
 // "github" -> buildGitHubClient, else error resolution — only the field
 // read and the capability label differ between them.
 func resolveCapability(capability, providerType string, cfg config.Config, repoRoot string) (*github.Client, error) {
@@ -654,6 +680,54 @@ func resolveCapability(capability, providerType string, cfg config.Config, repoR
 	default:
 		return nil, fmt.Errorf("forge: unknown %s provider type %q", capability, providerType)
 	}
+}
+
+// externalCheckerFor returns trk's External Issue satisfaction checker, or
+// nil when the composed Tracker has none. Reporting an External Issue as
+// satisfied needs a merged change request plus local git reachability (ADR
+// 0008), which is provider-specific work the GitHub adapter does and the
+// GitLab adapter does not.
+//
+// A nil checker is not silent: completionResolver.externalSatisfied reports
+// "no external dependency checker configured" for the first External
+// Dependency it meets, so a run that needs one fails loudly instead of
+// treating an unchecked prerequisite as satisfied.
+func externalCheckerFor(trk trackerCapability) tracker.ExternalChecker {
+	checker, ok := trk.(tracker.ExternalChecker)
+	if !ok {
+		return nil
+	}
+	return checker
+}
+
+// buildGitLabClient constructs the gitlab.Client for buildTracker's "gitlab"
+// case. It needs no git remote: cfg.Tracker.GitLab.Project names the
+// project, and config.validate already rejected an empty one.
+//
+// The GitLab token is not passed here. The client reads GITLAB_TOKEN from
+// the environment at call time, so no secret ever enters config (see the
+// config package doc comment).
+func buildGitLabClient(cfg config.Config) *gitlab.Client {
+	trk := gitlab.NewClient(nil, gitlabAPIRoot(cfg.Tracker.GitLab.BaseURL), cfg.Tracker.GitLab.Project)
+	trk.Provider = cfg.Tracker.Provider
+	trk.DependencyOverrides = cfg.Dependencies.Overrides
+	return trk
+}
+
+// gitlabAPIRoot turns a configured GitLab instance root (for example
+// "https://gitlab.example.com") into the REST API root the client sends
+// requests to. An empty instance root stays empty, which makes the client
+// use its gitlab.com default. An operator therefore configures the host they
+// know, and this one place owns the API path.
+func gitlabAPIRoot(baseURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/api/v4") {
+		return trimmed
+	}
+	return trimmed + "/api/v4"
 }
 
 // buildGitHubClient constructs the github.Client shared by buildTracker,
@@ -697,7 +771,7 @@ func verifyTrackerAuth(ctx context.Context, cfg config.Config, repoRoot string) 
 	if err != nil {
 		return err
 	}
-	preflighter, ok := interface{}(trk).(tracker.AuthPreflighter)
+	preflighter, ok := trk.(tracker.AuthPreflighter)
 	if !ok {
 		return nil
 	}
