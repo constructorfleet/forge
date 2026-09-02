@@ -26,6 +26,7 @@ type RecoverFunc func(ctx context.Context, executionID, issueID string) (lost bo
 // configured worker, through the WorkerClient seam, instead of in-process.
 type Backend struct {
 	worker            WorkerClient
+	workerRef         string
 	recover           RecoverFunc
 	leases            LeaseStore
 	heartbeatInterval time.Duration
@@ -76,7 +77,7 @@ func (b *Backend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (
 			ExecutionID: req.ExecutionID,
 			IssueID:     req.IssueID,
 			Backend:     "remote",
-			WorkerRef:   string(handle),
+			WorkerRef:   b.placementWorkerRef(handle),
 			Workspace:   ws,
 			Lifecycle:   domain.WorkspaceLifecycleActive,
 		}
@@ -97,6 +98,13 @@ func (b *Backend) Prepare(ctx context.Context, req execution.WorkspaceRequest) (
 		heartbeat:   b.heartbeatInterval,
 		ttl:         b.ttl,
 	}, nil
+}
+
+func (b *Backend) placementWorkerRef(handle WorkerHandle) string {
+	if b.workerRef != "" {
+		return b.workerRef
+	}
+	return string(handle)
 }
 
 // environment is the Remote ExecutionEnvironment: one Workspace prepared on

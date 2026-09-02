@@ -110,8 +110,8 @@ type ExecutionConfig struct {
 	// Backend is BackendContainer.
 	Container ContainerConfig `yaml:"container"`
 
-	// Worker configures the Remote backend's single statically-configured
-	// worker. It is read only when Backend is BackendRemote.
+	// Worker configures the Remote backend. It can name one worker, or an
+	// opt-in pool of workers.
 	Worker WorkerConfig `yaml:"worker"`
 }
 
@@ -129,19 +129,51 @@ const (
 	BackendContainer = "container"
 
 	// BackendRemote selects the Remote backend: a Workspace prepared and
-	// driven on the single statically-configured worker named by
-	// ExecutionConfig.Worker. This slice targets one worker; there is no
-	// registry, capability matching, or placement choice.
+	// driven on one remote worker. ExecutionConfig.Worker can select a
+	// single worker or an opt-in worker pool.
 	BackendRemote = "remote"
 )
 
-// WorkerConfig gives the Remote backend the single statically-configured
-// worker to target, when ExecutionConfig.Backend is BackendRemote.
+// WorkerConfig gives the Remote backend its worker selection settings, when
+// ExecutionConfig.Backend is BackendRemote.
 type WorkerConfig struct {
 	// Endpoint is the worker's address (e.g.
 	// "https://worker.example.com:9090"). Required when Backend is
-	// BackendRemote.
+	// BackendRemote and Pool.Enabled is false.
 	Endpoint string `yaml:"endpoint"`
+
+	// Pool enables the remote worker pool. It is opt-in. When enabled,
+	// Forge registers the configured workers and places each execution
+	// by capability and capacity.
+	Pool WorkerPoolConfig `yaml:"pool"`
+}
+
+type WorkerPoolConfig struct {
+	Enabled      bool               `yaml:"enabled"`
+	AuthTokenEnv string             `yaml:"auth_token_env"`
+	Workers      []PoolWorkerConfig `yaml:"workers"`
+}
+
+type PoolWorkerConfig struct {
+	ID               string             `yaml:"id"`
+	Endpoint         string             `yaml:"endpoint"`
+	AgentBackends    []string           `yaml:"agent_backends"`
+	ContainerCapable bool               `yaml:"container_capable"`
+	Capacity         ResourceConfig     `yaml:"capacity"`
+	Load             ResourceLoadConfig `yaml:"load"`
+	Labels           map[string]string  `yaml:"labels"`
+}
+
+type ResourceConfig struct {
+	CPU      int `yaml:"cpu"`
+	MemoryMB int `yaml:"memory_mb"`
+	Slots    int `yaml:"slots"`
+}
+
+type ResourceLoadConfig struct {
+	CPU      int `yaml:"cpu"`
+	MemoryMB int `yaml:"memory_mb"`
+	Slots    int `yaml:"slots"`
 }
 
 // ContainerConfig gives the Container backend the image to run and coarse

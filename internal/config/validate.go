@@ -132,7 +132,26 @@ func validate(cfg Config) error {
 			errs = append(errs, fieldErr("execution.container.image", cfg.Execution.Container.Image, "must not be empty when execution.backend is container"))
 		}
 	case BackendRemote:
-		if strings.TrimSpace(cfg.Execution.Worker.Endpoint) == "" {
+		if cfg.Execution.Worker.Pool.Enabled {
+			if strings.TrimSpace(cfg.Execution.Worker.Pool.AuthTokenEnv) == "" {
+				errs = append(errs, fieldErr("execution.worker.pool.auth_token_env", cfg.Execution.Worker.Pool.AuthTokenEnv, "must not be empty when worker pool is enabled"))
+			}
+			for i, worker := range cfg.Execution.Worker.Pool.Workers {
+				prefix := fmt.Sprintf("execution.worker.pool.workers[%d]", i)
+				if strings.TrimSpace(worker.ID) == "" {
+					errs = append(errs, fieldErr(prefix+".id", worker.ID, "must not be empty"))
+				}
+				if strings.TrimSpace(worker.Endpoint) == "" {
+					errs = append(errs, fieldErr(prefix+".endpoint", worker.Endpoint, "must not be empty"))
+				}
+				if len(worker.AgentBackends) == 0 {
+					errs = append(errs, fieldErr(prefix+".agent_backends", "", "must list at least one agent backend"))
+				}
+				if worker.Capacity.Slots < 1 {
+					errs = append(errs, fieldErr(prefix+".capacity.slots", fmt.Sprint(worker.Capacity.Slots), "must be >= 1"))
+				}
+			}
+		} else if strings.TrimSpace(cfg.Execution.Worker.Endpoint) == "" {
 			errs = append(errs, fieldErr("execution.worker.endpoint", cfg.Execution.Worker.Endpoint, "must not be empty when execution.backend is remote"))
 		}
 	default:
