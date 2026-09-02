@@ -26,6 +26,7 @@ import (
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker/github"
+	"github.com/Teagan42/forge/internal/tracker/gitlab"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -160,8 +161,113 @@ func TestBuildTrackerUsesConfiguredIssueProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildTracker: %v", err)
 	}
-	if trk.Provider != "linear" {
-		t.Fatalf("buildTracker Provider = %q, want linear", trk.Provider)
+	ghClient, ok := trk.(*github.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *github.Client", trk)
+	}
+	if ghClient.Provider != "linear" {
+		t.Fatalf("buildTracker Provider = %q, want linear", ghClient.Provider)
+	}
+}
+
+func TestBuildTracker_ComposesTheGitLabTracker(t *testing.T) {
+	root, _ := newTempRepo(t)
+	// No "origin" remote is added on purpose: the GitLab tracker names its
+	// project in config, so it must not need a GitHub remote URL.
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.Provider = "gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	glClient, ok := trk.(*gitlab.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *gitlab.Client", trk)
+	}
+	if glClient.Provider != "gitlab" {
+		t.Fatalf("buildTracker Provider = %q, want gitlab", glClient.Provider)
+	}
+	if got := glClient.BaseURL(); got != "https://gitlab.com/api/v4" {
+		t.Fatalf("BaseURL = %q, want the gitlab.com API root", got)
+	}
+}
+
+func TestBuildTracker_GitLabUsesTheConfiguredInstance(t *testing.T) {
+	root, _ := newTempRepo(t)
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+	cfg.Tracker.GitLab.BaseURL = "https://gitlab.example.com/"
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	glClient, ok := trk.(*gitlab.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *gitlab.Client", trk)
+	}
+	if got := glClient.BaseURL(); got != "https://gitlab.example.com/api/v4" {
+		t.Fatalf("BaseURL = %q, want the self-managed API root", got)
+	}
+}
+
+func TestBuildTracker_GitLabCarriesDependencyOverrides(t *testing.T) {
+	root, _ := newTempRepo(t)
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+	cfg.Dependencies.Overrides = map[string][]string{"42": {"99"}}
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	glClient, ok := trk.(*gitlab.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *gitlab.Client", trk)
+	}
+	if got := glClient.DependencyOverrides["42"]; len(got) != 1 || got[0] != "99" {
+		t.Fatalf("DependencyOverrides = %+v, want the configured overrides", glClient.DependencyOverrides)
+	}
+}
+
+func TestBuildSCM_GitLabIsNotImplemented(t *testing.T) {
+	// The GitLab adapter implements the Tracker capability only. SCM and CI
+	// stay GitHub-only.
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.SCM.Type = "gitlab"
+
+	if _, err := buildSCM(cfg, root); err == nil {
+		t.Fatal("buildSCM: want error for the gitlab scm type, got nil")
+	}
+	cfg = config.Default()
+	cfg.CI.Type = "gitlab"
+	if _, err := buildCI(cfg, root); err == nil {
+		t.Fatal("buildCI: want error for the gitlab ci type, got nil")
+	}
+}
+
+func TestVerifyTrackerAuth_GitLabReportsAMissingToken(t *testing.T) {
+	t.Setenv("GITLAB_TOKEN", "")
+	root, _ := newTempRepo(t)
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+
+	err := verifyTrackerAuth(context.Background(), cfg, root)
+	if !errors.Is(err, gitlab.ErrMissingToken) {
+		t.Fatalf("verifyTrackerAuth error = %v, want gitlab.ErrMissingToken", err)
 	}
 }
 

@@ -39,8 +39,19 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("version", fmt.Sprint(cfg.Version), "must be >= 1"))
 	}
 
-	if cfg.Tracker.Type != "github" {
-		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github"))
+	switch cfg.Tracker.Type {
+	case "github":
+		// no further constraints
+	case "gitlab":
+		// Forge does not infer a GitLab project from the "origin" remote,
+		// because a self-managed instance can use any host name. The
+		// project must therefore be named in the file.
+		if strings.TrimSpace(cfg.Tracker.GitLab.Project) == "" {
+			errs = append(errs, fieldErr("tracker.gitlab.project", cfg.Tracker.GitLab.Project,
+				"must not be empty when tracker.type is gitlab; give the path with namespace (group/project) or the numeric project ID"))
+		}
+	default:
+		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github, gitlab"))
 	}
 	if strings.TrimSpace(cfg.Tracker.Provider) == "" {
 		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))
