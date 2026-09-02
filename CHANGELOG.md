@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.2](https://github.com/constructorfleet/forge/compare/forge-v0.29.1...forge-v0.29.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* RepairCIFailure's runRepairLoop error path skips failOut ([#426](https://github.com/constructorfleet/forge/issues/426)) ([05ca141](https://github.com/constructorfleet/forge/commit/05ca141be0ac784f606c961ce311a64f387b8940)), closes [#420](https://github.com/constructorfleet/forge/issues/420)
+
 ## [0.29.1](https://github.com/constructorfleet/forge/compare/forge-v0.29.0...forge-v0.29.1) (2026-09-02)
 
 
