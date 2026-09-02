@@ -324,13 +324,28 @@ type Store interface {
 	TransitionIssue(ctx context.Context, executionID, issueID string, to domain.IssueState) (domain.Issue, error)
 
 	// UpdateRetryBudget persists budget's current used-counters (gate,
-	// review, CI) for issueID within executionID; the configured limits are
-	// immutable after CreateIssue and are not touched. Ticket 21's repair
-	// loop calls this immediately after incrementing a counter in memory
-	// (domain.Issue.RecordGateFailure/RecordReviewRejection/RecordCIFailure)
-	// so a subsequent TransitionIssue/GetIssue reload reflects the new
-	// count rather than silently reverting it to what CreateIssue wrote.
+	// review, CI, provider limit) for issueID within executionID; the
+	// configured limits are immutable after CreateIssue and are not touched.
+	// Ticket 21's repair loop calls this immediately after incrementing a
+	// counter in memory (domain.Issue.RecordGateFailure/
+	// RecordReviewRejection/RecordCIFailure/RecordProviderLimitStop) so a
+	// subsequent TransitionIssue/GetIssue reload reflects the new count
+	// rather than silently reverting it to what CreateIssue wrote.
 	UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error
+
+	// ScheduleProviderLimitRetry persists the earliest time an Issue parked
+	// in PROVIDER_LIMIT may return to READY (issue 423). A nil retryAt
+	// clears the deadline, which engine.ProviderLimitController does once it
+	// retries the Issue.
+	ScheduleProviderLimitRetry(ctx context.Context, executionID, issueID string, retryAt *time.Time) error
+
+	// ListDueProviderLimitIssues reloads every Issue that is in
+	// PROVIDER_LIMIT and whose backoff deadline has passed as of now, across
+	// every Execution. engine.ProviderLimitController polls this to find
+	// parked Issues without knowing their Execution IDs in advance, the same
+	// cross-Execution role ListActiveExecutionLeases has. Returns an empty
+	// slice, never nil, when no Issue is due.
+	ListDueProviderLimitIssues(ctx context.Context, now time.Time) ([]domain.Issue, error)
 
 	// ClaimIssue records a Worker claim on an Issue and appends a claim
 	// Event, transactionally. Returns ErrAlreadyClaimed when the Issue is

@@ -83,7 +83,7 @@ A fresh Agent invocation (three concurrent axes — bugs/security, code-quality,
 _Avoid_: Self-review, continuation review
 
 **Retry Budget**:
-Separate counters for gate failures, review rejections, and CI failures. Each has its own configurable ceiling. Every repair — whether from gate failure, review rejection, or CI failure — must rerun the full Quality Gate set before proceeding. The CI counter (`retry.ci`) is the post-PR repair budget: it bounds both a failed required check and an actionable review-requesting-changes repair, since both re-enter the same repair loop from CI_FAILED. It does not bound NEEDS_INFO detours (an unresolvable merge conflict, ambiguous review feedback, an INCONCLUSIVE pre-commit Review, or a pre-commit Review that stays CHANGES_REQUIRED once its own counter is exhausted) — those require human input, not another repair attempt, so they are never retried against this budget and never fall through to FAILED on their own.
+Separate counters for gate failures, review rejections, CI failures, and provider-limit stops. Each has its own configurable ceiling. Every repair — whether from gate failure, review rejection, or CI failure — must rerun the full Quality Gate set before proceeding. The CI counter (`retry.ci`) is the post-PR repair budget: it bounds both a failed required check and an actionable review-requesting-changes repair, since both re-enter the same repair loop from CI_FAILED. It does not bound NEEDS_INFO detours (an unresolvable merge conflict, ambiguous review feedback, an INCONCLUSIVE pre-commit Review, or a pre-commit Review that stays CHANGES_REQUIRED once its own counter is exhausted) — those require human input, not another repair attempt, so they are never retried against this budget and never fall through to FAILED on their own. The provider-limit counter (`retry.provider_limit`) bounds an external transient condition rather than the quality of the Agent's work, so it is independent of the other three: a provider rate limit must never spend the budget a real gate failure needs.
 
 **Review Override**:
 A persisted record that one pre-commit Review Finding is non-convergent: the reviewer raised the identical objection — same axis, severity, file, line, and message — against unchanged code on the very next retry. Forge escalates to NEEDS_INFO immediately when it detects this, without waiting for the review Retry Budget to exhaust, and stores the Finding's signature keyed by Issue ID. A later run of the same Issue, even in a new Execution, suppresses that exact Finding on sight instead of spending review retries on it again.
@@ -126,7 +126,10 @@ _Avoid_: Tool list, LSP tools (implies uniformity with Claude's native surface, 
 
 ## Issue states
 
-PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · NEEDS_REPLAN · FAILED · DONE · CANCELLED
+PENDING · BLOCKED_DEPENDENCY · READY · CLAIMED · PREPARING · IMPLEMENTING · VALIDATING · REVIEWING · COMMITTING · PR_CREATING · CI_PENDING · CI_FAILED · NEEDS_INFO · NEEDS_REPLAN · PROVIDER_LIMIT · FAILED · DONE · CANCELLED
+
+**Provider Limit**:
+The response to a Worker stopping because the model provider applied a rate or quota limit. The Agent returns `PROVIDER_LIMIT`, and the Issue enters **PROVIDER_LIMIT**. This is not a defect in the Agent's work, so Forge waits instead of repairing: the Workspace stays, the Worker claim is released, and the Issue gets a backoff deadline. The wait doubles from one minute and stops at thirty minutes. A background controller returns the Issue to READY once that time passes and redispatches its Execution. Each stop counts against `retry.provider_limit`, a counter independent of the gate, review, and CI counters. The stop that reaches that ceiling moves the Issue to FAILED at once, so Forge never schedules a wait it cannot spend. Detection of provider limit output inside the CLI adapters is separate work; this state defines only what happens once a provider limit is reported.
 
 ## Replan
 

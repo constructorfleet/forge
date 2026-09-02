@@ -89,7 +89,7 @@ func seedDependentPullRequest(t *testing.T, store *storage.SQLiteStore, executio
 func exhaustCIBudget(t *testing.T, store *storage.SQLiteStore, executionID, issueID string) {
 	t.Helper()
 	limits := domain.RetryLimits{Gate: 1, Review: 1, CI: 3}
-	budget := domain.NewRetryBudgetFrom(limits, 0, 0, limits.CI)
+	budget := domain.NewRetryBudgetFrom(limits, 0, 0, limits.CI, 0)
 	if err := store.UpdateRetryBudget(context.Background(), executionID, issueID, budget); err != nil {
 		t.Fatalf("UpdateRetryBudget: %v", err)
 	}

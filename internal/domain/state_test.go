@@ -46,6 +46,10 @@ func legalTransitions() []struct {
 		{domain.StateCommitting, domain.StateNeedsReplan},
 		{domain.StateNeedsReplan, domain.StateReady},
 		{domain.StateNeedsReplan, domain.StateCancelled},
+		{domain.StateImplementing, domain.StateProviderLimit},
+		{domain.StateProviderLimit, domain.StateReady},
+		{domain.StateProviderLimit, domain.StateFailed},
+		{domain.StateProviderLimit, domain.StateCancelled},
 		{domain.StateFailed, domain.StateReady},
 		// Manual cancellation is reachable from every non-terminal state.
 		{domain.StatePending, domain.StateCancelled},
@@ -84,16 +88,17 @@ func allStates() []domain.IssueState {
 		domain.StateCIFailed,
 		domain.StateNeedsInfo,
 		domain.StateNeedsReplan,
+		domain.StateProviderLimit,
 		domain.StateFailed,
 		domain.StateDone,
 		domain.StateCancelled,
 	}
 }
 
-func TestAllSeventeenStatesAreDefined(t *testing.T) {
+func TestAllEighteenStatesAreDefined(t *testing.T) {
 	want := allStates()
-	if len(want) != 17 {
-		t.Fatalf("test setup error: expected 17 states, got %d", len(want))
+	if len(want) != 18 {
+		t.Fatalf("test setup error: expected 18 states, got %d", len(want))
 	}
 	seen := make(map[domain.IssueState]bool)
 	for _, s := range want {
@@ -227,6 +232,50 @@ func TestNeedsReplanIsReachableOnlyFromImplementingAndCommitting(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatalf("%s -> NEEDS_REPLAN should be rejected", from)
+		}
+	}
+}
+
+// TestProviderLimitOnlyExitsAreReadyFailedAndCancelled pins the exits of the
+// PROVIDER_LIMIT state. The controller returns the Issue to READY when the
+// backoff time passes and the provider-limit retry budget still has room. The
+// Issue moves to FAILED when that budget is exhausted. CANCELLED is the
+// generic manual exit every non-terminal state has.
+func TestProviderLimitOnlyExitsAreReadyFailedAndCancelled(t *testing.T) {
+	allowed := map[domain.IssueState]bool{
+		domain.StateReady:     true,
+		domain.StateFailed:    true,
+		domain.StateCancelled: true,
+	}
+	for _, to := range allStates() {
+		err := domain.ValidateTransition(domain.StateProviderLimit, to)
+		if allowed[to] {
+			if err != nil {
+				t.Fatalf("PROVIDER_LIMIT -> %s should be legal, got %v", to, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("PROVIDER_LIMIT -> %s should be rejected", to)
+		}
+	}
+}
+
+// TestProviderLimitIsReachableOnlyFromImplementing pins the one entry point:
+// the Agent reports a provider limit during the IMPLEMENTING stage. No gate,
+// review, or CI path enters this state.
+func TestProviderLimitIsReachableOnlyFromImplementing(t *testing.T) {
+	allowed := map[domain.IssueState]bool{domain.StateImplementing: true}
+	for _, from := range allStates() {
+		err := domain.ValidateTransition(from, domain.StateProviderLimit)
+		if allowed[from] {
+			if err != nil {
+				t.Fatalf("%s -> PROVIDER_LIMIT should be legal, got %v", from, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s -> PROVIDER_LIMIT should be rejected", from)
 		}
 	}
 }

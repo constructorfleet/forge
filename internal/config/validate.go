@@ -110,6 +110,9 @@ func validate(cfg Config) error {
 	if cfg.Retry.CI < 0 {
 		errs = append(errs, fieldErr("retry.ci", fmt.Sprint(cfg.Retry.CI), "must be >= 0"))
 	}
+	if cfg.Retry.ProviderLimit < 0 {
+		errs = append(errs, fieldErr("retry.provider_limit", fmt.Sprint(cfg.Retry.ProviderLimit), "must be >= 0"))
+	}
 
 	if cfg.Workflow.Implementation != "tdd" {
 		errs = append(errs, fieldErr("workflow.implementation", cfg.Workflow.Implementation, "unsupported implementation mode; supported: tdd"))
