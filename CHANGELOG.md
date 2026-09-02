@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/constructorfleet/forge/compare/forge-v0.29.0...forge-v0.29.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* Detect non-convergent review findings and escalate without burning the full retry budget ([#424](https://github.com/constructorfleet/forge/issues/424)) ([ee34e74](https://github.com/constructorfleet/forge/commit/ee34e748c0f4f9e583dcd5663b039d8a9be843bb)), closes [#375](https://github.com/constructorfleet/forge/issues/375)
+
 ## [0.29.0](https://github.com/constructorfleet/forge/compare/forge-v0.28.0...forge-v0.29.0) (2026-09-02)
 
 
