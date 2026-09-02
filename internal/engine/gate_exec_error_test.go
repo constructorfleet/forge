@@ -9,6 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/gate/gatetest"
+	"github.com/Teagan42/forge/internal/storage"
 )
 
 // TestExecute_QualityGateExecError_RoutesThroughFailOut proves a Quality
@@ -51,5 +52,62 @@ func TestExecute_QualityGateExecError_RoutesThroughFailOut(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("got %d GateRuns, want 0 — an Exec error is infrastructure failure, not a recorded gate run", len(runs))
+	}
+}
+
+// TestRepairCIFailure_QualityGateExecError_RoutesThroughFailOut proves
+// RepairCIFailure's runRepairLoop call site routes an Exec error through
+// failOut exactly like Execute's equivalent call site, rather than
+// returning the raw error and leaving the Issue and Workspace uncleaned
+// (constructorfleet/forge#420).
+func TestRepairCIFailure_QualityGateExecError_RoutesThroughFailOut(t *testing.T) {
+	te := approvedTestEngine(t, "92", domain.Issue{ID: "92", Title: "CI repair gate exec error"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := gatetest.NewFakeCommandRunner()
+	runner.ProgramResult("make test", 0, "ok", "")
+	te.gates.Set(runner)
+
+	ctx := context.Background()
+	initial, err := te.eng.Execute(ctx, "92", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if initial.Issue.State != domain.StateCIPending {
+		t.Fatalf("initial state = %s, want CI_PENDING", initial.Issue.State)
+	}
+
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "92",
+		Status:      storage.CIRunStatusFailed,
+		CheckName:   "build",
+		Details:     "stacktrace line 1\nstacktrace line 2",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "92", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	runner.ProgramError("make test", errors.New("container: exec: container exited unexpectedly"))
+	te.fake.ProgramResult("92", agent.AgentResult{Status: agent.StatusImplemented, Summary: "ci repaired"})
+
+	if _, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "92"); err == nil {
+		t.Fatal("RepairCIFailure: want error when a Quality Gate command fails to run, got nil")
+	}
+
+	issue, getErr := te.store.GetIssue(ctx, initial.ExecutionID, "92")
+	if getErr != nil {
+		t.Fatalf("GetIssue: %v", getErr)
+	}
+	if issue.State != domain.StateFailed {
+		t.Fatalf("issue.State = %s, want FAILED (Exec error must route through failOut, not the raw error)", issue.State)
 	}
 }
