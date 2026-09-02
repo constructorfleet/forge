@@ -274,8 +274,10 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 // pins the ticket-336 acceptance criterion that selecting backend: container
 // fails at wiring, with a clear error, rather than reaching Prepare and
 // failing mid-run. buildContainerRuntime (issue #385) probes docker and
-// podman for a real, reachable daemon; a CI sandbox with neither running
-// fails this preflight exactly as it did before a concrete adapter existed.
+// podman for a real, reachable daemon through the real ExecCommandRunner, so
+// this test points PATH at an empty directory: neither binary resolves,
+// regardless of whether the host running the test (e.g. a CI runner with
+// its own Docker daemon) has a live docker or podman itself.
 func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *testing.T) {
 	root, _ := newTempRepo(t)
 	wsMgr, err := workspace.NewManager(root)
@@ -284,6 +286,9 @@ func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *
 	}
 	ag := agent.NewFakeAgent()
 	store := openPlanningStore(t)
+
+	emptyPath := t.TempDir()
+	t.Setenv("PATH", emptyPath)
 
 	cfg := config.Default()
 	cfg.Execution.Backend = config.BackendContainer
