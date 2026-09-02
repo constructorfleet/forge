@@ -104,8 +104,10 @@ func (e *fakeEnvironment) Workspace() domain.Workspace {
 }
 
 // Execute runs cmd through the test's gateCommandSwitch, rooted at the
-// Workspace (or cmd.WorkDir below it). A runner error folds into a failing
-// Result with ExitCode -1, exactly as the real environments do.
+// Workspace (or cmd.WorkDir below it). A runner error reports ExitCode -1
+// and is returned as an error, exactly as the real environments do (a
+// command that cannot run at all, e.g. a lost container, is not the same
+// as a command that ran and exited non-zero).
 func (e *fakeEnvironment) Execute(ctx context.Context, cmd execution.Command) (execution.Result, error) {
 	dir := e.workspace.Path
 	if cmd.WorkDir != "" {
@@ -119,11 +121,11 @@ func (e *fakeEnvironment) Execute(ctx context.Context, cmd execution.Command) (e
 	result.FinishedAt = time.Now()
 	result.Stdout = stdout.String()
 	result.Stderr = stderr.String()
-	if err != nil {
-		exitCode = -1
-		result.Stderr += "\ngate runner: " + err.Error()
-	}
 	result.ExitCode = exitCode
+	if err != nil {
+		result.ExitCode = -1
+		return result, err
+	}
 
 	return result, nil
 }

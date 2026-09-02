@@ -1216,7 +1216,17 @@ func (c *reviewTranscriptCoordinator) finalize(coverage []review.AxisCoverage) {
 func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, issue domain.Issue) (_ domain.Issue, passed bool, _ []gate.Result, failed *gate.Result, _ error) {
 	var results []gate.Result
 	for _, g := range e.Config.Quality.Gates {
-		res := e.runQualityGate(ctx, env, g)
+		res, err := e.runQualityGate(ctx, env, g)
+		if err != nil {
+			// The command itself could not run (e.g. the container exited
+			// while it was running), not that it ran and failed. Retrying
+			// the same command in the same, now-gone container cannot
+			// succeed, so this is a deterministic infrastructure failure —
+			// the caller propagates it up to failOut exactly like an
+			// Agent-execution failure, instead of handing it to the normal
+			// gate repair/retry loop (constructorfleet/forge#391).
+			return domain.Issue{}, false, nil, nil, fmt.Errorf("engine: run quality gate %s for issue %s: %w", g.Name, issueID, err)
+		}
 		results = append(results, res)
 		if err := e.Store.RecordGateRun(ctx, storage.GateRun{
 			ExecutionID: executionID,
@@ -1271,13 +1281,18 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID strin
 // (constructorfleet/forge#327) — a real environment's wall-clock timing is
 // not itself meaningful to callers, which only ever compare these two
 // fields to derive a duration.
-func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEnvironment, g config.QualityGate) gate.Result {
+//
+// runQualityGate returns a non-nil error when env.Execute itself fails —
+// the command never ran to completion (e.g. the container exited
+// unexpectedly) — as distinct from a Result reporting a non-zero exit code,
+// which is an ordinary gate failure. The caller (runQualityGates) treats the
+// two differently (constructorfleet/forge#391).
+func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEnvironment, g config.QualityGate) (gate.Result, error) {
 	started := e.Now()
 	result, err := env.Execute(ctx, execbackend.Command{Name: g.Name, Command: g.Command})
 	finished := e.Now()
 	if err != nil {
-		result.ExitCode = -1
-		result.Stderr += "\ngate runner: " + err.Error()
+		return gate.Result{}, err
 	}
 	return gate.Result{
 		Name:       g.Name,
@@ -1288,7 +1303,7 @@ func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEn
 		Stdout:     capOutput(result.Stdout, e.Config.Quality.MaxOutputBytes),
 		Stderr:     capOutput(result.Stderr, e.Config.Quality.MaxOutputBytes),
 		Passed:     result.ExitCode == 0,
-	}
+	}, nil
 }
 
 // capOutput bounds s to maxBytes, keeping the tail (see
