@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/constructorfleet/forge/compare/forge-v0.28.0...forge-v0.29.0) (2026-09-02)
+
+
+### Features
+
+* Quality-gate command execution swallows container Exec errors instead of routing to failOut ([#421](https://github.com/constructorfleet/forge/issues/421)) ([cd98b14](https://github.com/constructorfleet/forge/commit/cd98b14a215e5cb0b99c5af10f4435d2c54c048e)), closes [#391](https://github.com/constructorfleet/forge/issues/391)
+
 ## [0.28.0](https://github.com/constructorfleet/forge/compare/forge-v0.27.0...forge-v0.28.0) (2026-09-01)
 
 
