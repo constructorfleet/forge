@@ -85,6 +85,9 @@ _Avoid_: Self-review, continuation review
 **Retry Budget**:
 Separate counters for gate failures, review rejections, and CI failures. Each has its own configurable ceiling. Every repair — whether from gate failure, review rejection, or CI failure — must rerun the full Quality Gate set before proceeding. The CI counter (`retry.ci`) is the post-PR repair budget: it bounds both a failed required check and an actionable review-requesting-changes repair, since both re-enter the same repair loop from CI_FAILED. It does not bound NEEDS_INFO detours (an unresolvable merge conflict, ambiguous review feedback, an INCONCLUSIVE pre-commit Review, or a pre-commit Review that stays CHANGES_REQUIRED once its own counter is exhausted) — those require human input, not another repair attempt, so they are never retried against this budget and never fall through to FAILED on their own.
 
+**Review Override**:
+A persisted record that one pre-commit Review Finding is non-convergent: the reviewer raised the identical objection — same axis, severity, file, line, and message — against unchanged code on the very next retry. Forge escalates to NEEDS_INFO immediately when it detects this, without waiting for the review Retry Budget to exhaust, and stores the Finding's signature keyed by Issue ID. A later run of the same Issue, even in a new Execution, suppresses that exact Finding on sight instead of spending review retries on it again.
+
 ### Issue tracker
 
 **Tracker Adapter**:
