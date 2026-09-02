@@ -1,13 +1,8 @@
-// Package gitlab implements the tracker.Tracker and tracker.DependencyStore
-// capabilities (see CONTEXT.md "Tracker Adapter") against the GitLab REST
-// API. It uses only the standard library's net/http and encoding/json — no
-// external GitLab SDK. All GitLab-specific JSON shapes are unexported and
-// never leave this package; every exported method returns a domain or
-// tracker type.
-//
-// The package implements the Tracker capability only. GitLab merge requests
-// (the SCM capability) and GitLab pipelines (the CI capability) are not part
-// of it.
+// Package gitlab implements the tracker.Tracker, tracker.DependencyStore,
+// tracker.SCM, and tracker.CI capabilities (see CONTEXT.md "Tracker Adapter")
+// against the GitLab REST API. It uses only the standard library's net/http
+// and encoding/json. All GitLab-specific JSON shapes are unexported and never
+// leave this package; every exported method returns a domain or tracker type.
 package gitlab
 
 import (
@@ -35,8 +30,7 @@ const defaultBaseURL = "https://gitlab.com/api/v4"
 // config package doc comment).
 const tokenEnvVar = "GITLAB_TOKEN"
 
-// Client is a GitLab REST API client scoped to a single project. It
-// implements tracker.Tracker and tracker.DependencyStore.
+// Client is a GitLab REST API client scoped to a single project.
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
@@ -86,6 +80,12 @@ func NewClient(httpClient *http.Client, baseURL, project string) *Client {
 var _ tracker.Tracker = (*Client)(nil)
 var _ tracker.DependencyStore = (*Client)(nil)
 var _ tracker.AuthPreflighter = (*Client)(nil)
+var _ tracker.SCM = (*Client)(nil)
+var _ tracker.CI = (*Client)(nil)
+var _ tracker.ReviewGetter = (*Client)(nil)
+var _ tracker.ReviewsGetter = (*Client)(nil)
+var _ tracker.MergeStatusGetter = (*Client)(nil)
+var _ tracker.PullRequestTargetBranchGetter = (*Client)(nil)
 
 // BaseURL returns the API root this Client sends requests to. It is
 // exported for diagnostics: an operator who configures a self-managed
@@ -157,6 +157,8 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 		return nil, &NotFoundError{Path: fullURL}
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return nil, &ValidationError{Path: fullURL, Body: string(respBody)}
+	case http.StatusConflict:
+		return nil, &ConflictError{Path: fullURL, Body: string(respBody)}
 	}
 
 	if resp.StatusCode >= 300 {
@@ -267,6 +269,21 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	return fmt.Sprintf("gitlab: validation failed: %s: %s", e.Path, e.Body)
+}
+
+// ConflictError is returned when the GitLab API answers 409 (Conflict) — the
+// request is valid, but the resource state does not permit it. GitLab answers
+// 409 when a caller creates a merge request that already exists for the same
+// source branch. Exported so a caller can tell that state apart from a
+// malformed request (ValidationError) and recover the existing resource
+// instead of failing (see createMergeRequest).
+type ConflictError struct {
+	Path string
+	Body string
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("gitlab: conflict: %s: %s", e.Path, e.Body)
 }
 
 // AuthenticationError is returned when the GitLab API answers 401

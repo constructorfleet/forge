@@ -654,11 +654,16 @@ func buildTracker(cfg config.Config, repoRoot string) (trackerCapability, error)
 
 // buildSCM constructs the SCM capability for repoRoot, composed
 // independently of buildTracker per cfg.SCM.Type (see config.Config.
-// Provider's doc comment on capability composition). Only "github" is
-// implemented today: the GitLab adapter implements the Tracker capability
-// only, so "gitlab" falls to resolveCapability's error case.
-func buildSCM(cfg config.Config, repoRoot string) (*github.Client, error) {
-	return resolveCapability("scm", cfg.SCM.Type, cfg, repoRoot)
+// Provider's doc comment on capability composition).
+func buildSCM(cfg config.Config, repoRoot string) (engine.PRCreator, error) {
+	switch cfg.SCM.Type {
+	case "github":
+		return buildGitHubClient(cfg, repoRoot)
+	case "gitlab":
+		return buildGitLabClient(cfg), nil
+	default:
+		return nil, fmt.Errorf("forge: unknown scm provider type %q", cfg.SCM.Type)
+	}
 }
 
 // buildCI constructs the CI capability for repoRoot, composed independently
@@ -666,10 +671,16 @@ func buildSCM(cfg config.Config, repoRoot string) (*github.Client, error) {
 // composition rule (config.validate) already guarantees cfg.CI.Type equals
 // cfg.SCM.Type (or names a recognized external-status observer) by the
 // time wiring runs, so this switch only needs to know how to construct
-// each recognized type, not re-check coherence. Only "github" is
-// implemented today, for the same reason buildSCM is.
-func buildCI(cfg config.Config, repoRoot string) (*github.Client, error) {
-	return resolveCapability("ci", cfg.CI.Type, cfg, repoRoot)
+// each recognized type, not re-check coherence.
+func buildCI(cfg config.Config, repoRoot string) (ci.Tracker, error) {
+	switch cfg.CI.Type {
+	case "github":
+		return buildGitHubClient(cfg, repoRoot)
+	case "gitlab":
+		return buildGitLabClient(cfg), nil
+	default:
+		return nil, fmt.Errorf("forge: unknown ci provider type %q", cfg.CI.Type)
+	}
 }
 
 // resolveCapability constructs the GitHub client for one capability

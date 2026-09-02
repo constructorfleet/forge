@@ -246,6 +246,11 @@ func TestTypedErrors_NameTheProblemAndTheTokenVariable(t *testing.T) {
 			want: []string{"not found", "/issues/42"},
 		},
 		{
+			name: "conflict error carries the response body",
+			err:  &gitlab.ConflictError{Path: "/projects/acme%2Fwidgets/merge_requests", Body: `{"message":"Another open merge request already exists"}`},
+			want: []string{"conflict", "Another open merge request already exists"},
+		},
+		{
 			name: "validation error carries the response body",
 			err:  &gitlab.ValidationError{Path: "/projects/acme%2Fwidgets/issues", Body: `{"message":"title is missing"}`},
 			want: []string{"validation failed", "title is missing"},

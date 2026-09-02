@@ -341,8 +341,7 @@ func TestLoad_GitLabTrackerTypeIsAccepted(t *testing.T) {
 	if cfg.Tracker.GitLab.Project != "acme/widgets" {
 		t.Errorf("Tracker.GitLab.Project = %q, want acme/widgets", cfg.Tracker.GitLab.Project)
 	}
-	// The GitLab tracker composes alongside the GitHub SCM and CI
-	// capabilities; the tracker type never cascades to them.
+	// An explicit tracker block does not cascade to SCM or CI.
 	if cfg.SCM.Type != "github" || cfg.CI.Type != "github" {
 		t.Errorf("SCM.Type = %q, CI.Type = %q, want github for both", cfg.SCM.Type, cfg.CI.Type)
 	}
@@ -519,15 +518,19 @@ func TestLoad_TrackerIndependentOfSCMAndCI(t *testing.T) {
 	}
 }
 
-func TestLoad_InvalidSCMType(t *testing.T) {
-	path := writeTemp(t, "scm:\n  type: gitlab\n")
+func TestLoad_GitLabSCMAndCICompositionIsAccepted(t *testing.T) {
+	path := writeTemp(t, "provider: gitlab\ntracker:\n  gitlab:\n    project: acme/widgets\n")
 
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load() error = nil, want validation error")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v, want coherent all-gitlab composition to validate", err)
 	}
-	if !strings.Contains(err.Error(), "scm.type") {
-		t.Errorf("Load() error = %v, want it to identify scm.type", err)
+	if cfg.Tracker.Type != "gitlab" || cfg.SCM.Type != "gitlab" || cfg.CI.Type != "gitlab" {
+		t.Fatalf("Tracker/SCM/CI = %q/%q/%q, want gitlab/gitlab/gitlab",
+			cfg.Tracker.Type, cfg.SCM.Type, cfg.CI.Type)
+	}
+	if cfg.Tracker.GitLab.Project != "acme/widgets" {
+		t.Fatalf("Tracker.GitLab.Project = %q, want acme/widgets", cfg.Tracker.GitLab.Project)
 	}
 }
 
@@ -561,11 +564,11 @@ func TestLoad_CIProviderMustMatchSCMProvider(t *testing.T) {
 }
 
 func TestLoad_CIMatchingSCMProviderIsCoherent(t *testing.T) {
-	path := writeTemp(t, "provider: github\n")
+	path := writeTemp(t, "provider: gitlab\ntracker:\n  gitlab:\n    project: acme/widgets\n")
 
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load: %v, want a coherent all-github composition to validate", err)
+		t.Fatalf("Load: %v, want a coherent all-gitlab composition to validate", err)
 	}
 	if cfg.CI.Type != cfg.SCM.Type {
 		t.Errorf("CI.Type = %q, SCM.Type = %q, want them equal", cfg.CI.Type, cfg.SCM.Type)
