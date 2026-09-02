@@ -9,12 +9,7 @@ import (
 // CreatePullRequest adapts the legacy PR creation seam to GitLab merge
 // requests. Engine still uses this seam while SCM is split out.
 func (c *Client) CreatePullRequest(ctx context.Context, req tracker.PullRequestRequest) (tracker.PullRequest, error) {
-	cr, err := c.CreateChangeRequest(ctx, tracker.ChangeRequestRequest{
-		Base:  req.Base,
-		Head:  req.Head,
-		Title: req.Title,
-		Body:  req.Body,
-	})
+	cr, err := c.CreateChangeRequest(ctx, tracker.ChangeRequestRequest(req))
 	if err != nil {
 		return tracker.PullRequest{}, err
 	}
@@ -41,12 +36,7 @@ func (c *Client) GetPullRequestMergeStatus(ctx context.Context, number int) (tra
 	if err != nil {
 		return tracker.PullRequestMergeStatus{}, err
 	}
-	return tracker.PullRequestMergeStatus{
-		Merged:     status.Merged,
-		Conflicted: status.Conflicted,
-		Behind:     status.Behind,
-		RawDetail:  status.RawDetail,
-	}, nil
+	return tracker.PullRequestMergeStatus(status), nil
 }
 
 // GetPullRequestReviews adapts the legacy review seam to GitLab approvals.
