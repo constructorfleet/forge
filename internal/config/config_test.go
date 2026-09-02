@@ -49,7 +49,7 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Execution.Backend != BackendLocal {
 		t.Errorf("Execution.Backend = %q, want %q", cfg.Execution.Backend, BackendLocal)
 	}
-	wantRetry := domain.RetryLimits{Gate: 3, Review: 2, CI: 3}
+	wantRetry := domain.RetryLimits{Gate: 3, Review: 2, CI: 3, ProviderLimit: 3}
 	if cfg.Retry != wantRetry {
 		t.Errorf("Retry = %+v, want %+v", cfg.Retry, wantRetry)
 	}
@@ -116,6 +116,7 @@ retry:
   gate: 5
   review: 4
   ci: 6
+  provider_limit: 2
 workflow:
   implementation: tdd
   review: true
@@ -158,7 +159,7 @@ dependencies:
 	if cfg.Tracker.Provider != "github" {
 		t.Errorf("Tracker.Provider = %q, want github", cfg.Tracker.Provider)
 	}
-	wantRetry := domain.RetryLimits{Gate: 5, Review: 4, CI: 6}
+	wantRetry := domain.RetryLimits{Gate: 5, Review: 4, CI: 6, ProviderLimit: 2}
 	if cfg.Retry != wantRetry {
 		t.Errorf("Retry = %+v, want %+v", cfg.Retry, wantRetry)
 	}
@@ -638,6 +639,18 @@ func TestLoad_NegativeRetryLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "retry.gate") {
 		t.Errorf("Load() error = %v, want it to identify retry.gate", err)
+	}
+}
+
+func TestLoad_NegativeProviderLimitRetryLimit(t *testing.T) {
+	path := writeTemp(t, "retry:\n  provider_limit: -1\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "retry.provider_limit") {
+		t.Errorf("Load() error = %v, want it to identify retry.provider_limit", err)
 	}
 }
 

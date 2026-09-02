@@ -190,6 +190,17 @@ const (
 	// This is a structural escalation: Forge freezes the Feature and
 	// reopens the planning decision rather than repairing the Issue.
 	StatusReplanRequired AgentStatus = "REPLAN_REQUIRED"
+
+	// StatusProviderLimit means the Agent stopped because the model provider
+	// applied a rate or quota limit. It is distinct from StatusFailed: the
+	// work itself has no defect, and the same attempt can succeed later. The
+	// Engine parks the Issue in domain.StateProviderLimit and retries it
+	// automatically after a bounded backoff (issue 423).
+	//
+	// The CLI adapters do not yet produce this status. Adapter-level
+	// detection of provider limit output is tracked separately, in issue
+	// 416.
+	StatusProviderLimit AgentStatus = "PROVIDER_LIMIT"
 )
 
 // NeedsInfoDetail describes, in structured form, what a StatusNeedsInfo
@@ -254,8 +265,8 @@ type FollowUpReport struct {
 
 // AgentResult is the structured outcome of one Agent.Execute call.
 type AgentResult struct {
-	// Status is one of StatusImplemented, StatusNeedsInfo, StatusFailed, or
-	// StatusReplanRequired.
+	// Status is one of StatusImplemented, StatusNeedsInfo, StatusFailed,
+	// StatusReplanRequired, or StatusProviderLimit.
 	Status AgentStatus
 
 	// Summary is a human-readable description of what the Agent did or why

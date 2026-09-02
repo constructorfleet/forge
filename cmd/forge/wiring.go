@@ -286,12 +286,14 @@ func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot str
 type executeRuntime struct {
 	Scheduler               *scheduler.Scheduler
 	LostExecutionController *engine.LostExecutionController
+	ProviderLimitController *engine.ProviderLimitController
 }
 
 // buildExecuteRuntime wires the long-running components that a `forge
 // execute` invocation owns. The Scheduler drives requested Issues. The lost
 // Execution controller runs only for the remote backend, where a Worker has
-// a lease that can lapse.
+// a lease that can lapse. The provider-limit controller always runs: a model
+// provider can apply a rate or quota limit under every backend.
 //
 // An Issue with no Dependencies (or only External ones) resolves to
 // cfg.Git.Base's current tip, as before. An Issue with one or more
@@ -359,6 +361,7 @@ func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string
 	if lostRecoveryEnabled(cfg) {
 		runtime.LostExecutionController = engine.NewLostExecutionController(store, store, eng, time.Now)
 	}
+	runtime.ProviderLimitController = engine.NewProviderLimitController(store, eng, time.Now)
 	return runtime, nil
 }
 
@@ -847,6 +850,19 @@ func lostRecoveryEnabled(cfg config.Config) bool {
 // keeps running after a failed pass.
 func reportLostExecutionControllerError(err error) {
 	fmt.Fprintf(os.Stderr, "forge execute: lost-execution recovery: %v\n", err)
+}
+
+// providerLimitPollInterval is how often `forge execute` checks for Issues
+// parked in PROVIDER_LIMIT whose backoff time has passed. It is shorter than
+// domain.ProviderLimitBackoffBase, so a due Issue starts again promptly after
+// its wait ends.
+const providerLimitPollInterval = 15 * time.Second
+
+// reportProviderLimitControllerError writes provider-limit reconciliation
+// failures beside the other `forge execute` diagnostics. The controller keeps
+// running after a failed pass.
+func reportProviderLimitControllerError(err error) {
+	fmt.Fprintf(os.Stderr, "forge execute: provider-limit retry: %v\n", err)
 }
 
 // buildRemoteRecoverFunc adapts engine.RecoverLostExecution to

@@ -2,7 +2,7 @@ package domain
 
 import "fmt"
 
-// IssueState is one of the 17 states an Issue moves through over its
+// IssueState is one of the 18 states an Issue moves through over its
 // lifetime. See CONTEXT.md "Issue states" and IDEATION.md §15-16.
 type IssueState string
 
@@ -21,6 +21,7 @@ const (
 	StateCIFailed          IssueState = "CI_FAILED"
 	StateNeedsInfo         IssueState = "NEEDS_INFO"
 	StateNeedsReplan       IssueState = "NEEDS_REPLAN"
+	StateProviderLimit     IssueState = "PROVIDER_LIMIT"
 	StateFailed            IssueState = "FAILED"
 	StateDone              IssueState = "DONE"
 	StateCancelled         IssueState = "CANCELLED"
@@ -78,13 +79,31 @@ func (e *InvalidTransitionError) Error() string {
 // Its only workflow exit is back to READY (plus the generic CANCELLED edge
 // every non-terminal state has, which is how an Issue absent from the newly
 // approved plan is closed as superseded).
+//
+// PROVIDER_LIMIT (issue 423) parks an Issue whose Agent stopped because the
+// model provider applied a rate or quota limit. It has one entry point:
+//
+//   - IMPLEMENTING, when the Agent reports agent.StatusProviderLimit — the
+//     one stage whose agent-status switch routes an Agent-reported outcome to
+//     an Issue state.
+//
+// A provider limit is an external transient condition, not a defect in the
+// Agent's work, so Forge waits rather than repairs. The state is not
+// terminal. It has two workflow exits (plus the generic CANCELLED edge):
+//
+//   - READY, when the backoff time passes and the provider-limit retry
+//     budget still has room. engine.ProviderLimitController takes this edge
+//     automatically.
+//   - FAILED, when the provider-limit retry budget is exhausted. The Issue
+//     then rests in the same terminal state every other exhausted budget
+//     reaches, and its state history shows the provider limit as the cause.
 var transitions = map[IssueState][]IssueState{
 	StatePending:           {StateBlockedDependency, StateReady},
 	StateBlockedDependency: {StateReady},
 	StateReady:             {StateClaimed},
 	StateClaimed:           {StatePreparing},
 	StatePreparing:         {StateImplementing},
-	StateImplementing:      {StateNeedsInfo, StateNeedsReplan, StateValidating, StateFailed},
+	StateImplementing:      {StateNeedsInfo, StateNeedsReplan, StateProviderLimit, StateValidating, StateFailed},
 	StateValidating:        {StateImplementing, StateReviewing, StateFailed},
 	// Reviewing -> NeedsInfo (issue #161, review degradation): a Review that
 	// cannot certify full axis coverage (review.VerdictInconclusive) or that
@@ -106,10 +125,11 @@ var transitions = map[IssueState][]IssueState{
 	// engine.Resume) — rather than to CI_FAILED, which is reserved for
 	// failures the existing repair loop can act on unsupervised (a failed
 	// check, or a single reviewer's actionable CHANGES_REQUESTED review).
-	StateCIPending:   {StateCIFailed, StateDone, StateNeedsInfo},
-	StateCIFailed:    {StateImplementing, StateFailed},
-	StateNeedsInfo:   {StateReady},
-	StateNeedsReplan: {StateReady},
+	StateCIPending:     {StateCIFailed, StateDone, StateNeedsInfo},
+	StateCIFailed:      {StateImplementing, StateFailed},
+	StateNeedsInfo:     {StateReady},
+	StateNeedsReplan:   {StateReady},
+	StateProviderLimit: {StateReady, StateFailed},
 }
 
 // ValidateTransition reports whether moving an Issue from `from` to `to` is

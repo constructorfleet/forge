@@ -553,7 +553,10 @@ func unresolvedDefault() Config {
 			WorktreeRoot:   ".forge/worktrees",
 		},
 		Execution: ExecutionConfig{MaxParallel: 4, Backend: BackendLocal},
-		Retry:     domain.RetryLimits{Gate: 3, Review: 2, CI: 3},
+		// ProviderLimit matches Gate's default of 3: Forge tolerates three
+		// provider rate or quota stops for one Issue, and the third is
+		// terminal. See docs/adr/0026-provider-limit-state-and-backoff-retry.md.
+		Retry: domain.RetryLimits{Gate: 3, Review: 2, CI: 3, ProviderLimit: 3},
 		Workflow: WorkflowConfig{
 			Implementation:        "tdd",
 			Review:                true,

@@ -68,8 +68,13 @@ func runExecute(args []string) int {
 	}
 
 	if runtime.LostExecutionController != nil {
-		stopLostRecovery := startLostExecutionController(ctx, runtime.LostExecutionController, reportLostExecutionControllerError)
+		stopLostRecovery := startBackgroundController(ctx, runtime.LostExecutionController, lostRecoveryPollInterval, reportLostExecutionControllerError)
 		defer stopLostRecovery()
+	}
+
+	if runtime.ProviderLimitController != nil {
+		stopProviderLimit := startBackgroundController(ctx, runtime.ProviderLimitController, providerLimitPollInterval, reportProviderLimitControllerError)
+		defer stopProviderLimit()
 	}
 
 	results, err := runtime.Scheduler.Run(ctx, issueIDs)
@@ -91,16 +96,22 @@ func runExecute(args []string) int {
 	return exitCode
 }
 
-type lostExecutionControllerRunner interface {
+// backgroundControllerRunner is the shape every reconciliation loop `forge
+// execute` runs in the background shares: engine.LostExecutionController and
+// engine.ProviderLimitController both satisfy it.
+type backgroundControllerRunner interface {
 	Run(ctx context.Context, interval time.Duration, onErr func(error)) error
 }
 
-func startLostExecutionController(ctx context.Context, controller lostExecutionControllerRunner, onErr func(error)) func() {
-	lostCtx, cancel := context.WithCancel(ctx)
+// startBackgroundController runs controller in its own goroutine on the given
+// poll interval. It returns a stop function that cancels the loop and waits
+// for it to finish, so `forge execute` never returns while a loop still runs.
+func startBackgroundController(ctx context.Context, controller backgroundControllerRunner, interval time.Duration, onErr func(error)) func() {
+	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := controller.Run(lostCtx, lostRecoveryPollInterval, onErr); err != nil && !errors.Is(err, context.Canceled) && onErr != nil {
+		if err := controller.Run(loopCtx, interval, onErr); err != nil && !errors.Is(err, context.Canceled) && onErr != nil {
 			onErr(err)
 		}
 	}()

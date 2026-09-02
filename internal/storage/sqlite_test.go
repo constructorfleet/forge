@@ -107,7 +107,7 @@ func TestExecutionRoundTrip(t *testing.T) {
 				DependsOnRef: domain.IssueRef{Provider: "linear", ID: "issue-0"},
 			},
 		},
-		RetryBudget: domain.NewRetryBudgetFrom(domain.RetryLimits{Gate: 2, Review: 2, CI: 2}, 1, 0, 0),
+		RetryBudget: domain.NewRetryBudgetFrom(domain.RetryLimits{Gate: 2, Review: 2, CI: 2, ProviderLimit: 2}, 1, 0, 0, 0),
 	}
 	if err := store.CreateIssue(ctx, issue); err != nil {
 		t.Fatalf("CreateIssue: %v", err)

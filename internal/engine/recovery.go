@@ -45,6 +45,13 @@ func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue d
 		return e.resumeNeedsInfoIssue(ctx, exec, issue)
 	case domain.StateNeedsReplan:
 		return e.resumeNeedsReplanIssue(ctx, exec, issue)
+	case domain.StateProviderLimit:
+		// The Issue waits out a provider-limit backoff.
+		// engine.ProviderLimitController owns the single exit back to READY,
+		// and it redispatches the Execution itself once it takes that exit.
+		// Resume therefore leaves the Issue exactly as it found it, and does
+		// not disturb its Worker claim.
+		return issue, nil
 	case domain.StateCIPending:
 		return e.resumeCIPending(ctx, exec.ID, issue.ID)
 	}

@@ -574,9 +574,9 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 			}
 		}
 	}
-	// A non-implemented, non-error outcome (NEEDS_INFO or FAILED) is already
-	// a resting state driven there by invokeAgent itself — nothing further
-	// to do.
+	// A non-implemented, non-error outcome (NEEDS_INFO, NEEDS_REPLAN,
+	// PROVIDER_LIMIT, or FAILED) is already a resting state driven there by
+	// invokeAgent itself — nothing further to do.
 
 	return ExecuteResult{ExecutionID: execution.ID, Issue: issue}, nil
 }
@@ -1076,6 +1076,9 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 		return issue, false, err
 	case agent.StatusReplanRequired:
 		issue, err := e.handleReplanRequired(ctx, executionID, issueID, workerRef(executionID, issueID), issue, result)
+		return issue, false, err
+	case agent.StatusProviderLimit:
+		issue, err := e.handleProviderLimit(ctx, executionID, issueID, workerRef(executionID, issueID), result)
 		return issue, false, err
 	case agent.StatusFailed:
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)

@@ -48,6 +48,13 @@ type Issue struct {
 	Scope        IssueScope
 	Dependencies []Dependency
 	RetryBudget  RetryBudget
+
+	// ProviderLimitRetryAt is the earliest time an Issue parked in
+	// PROVIDER_LIMIT may return to READY. engine.ProviderLimitController
+	// compares it against the clock on each pass. It is nil for every Issue
+	// that has no pending provider-limit backoff, which is every Issue in
+	// any other state.
+	ProviderLimitRetryAt *time.Time
 }
 
 // IsManaged reports whether the Issue is part of the Execution set and will
@@ -86,6 +93,11 @@ func (i *Issue) RecordReviewRejection() error { return i.RetryBudget.RecordRevie
 // RecordCIFailure records a CI failure against the Issue's retry budget.
 // See RecordGateFailure for why this must be a pointer receiver.
 func (i *Issue) RecordCIFailure() error { return i.RetryBudget.RecordCIFailure() }
+
+// RecordProviderLimitStop records a provider rate or quota limit against the
+// Issue's retry budget. See RecordGateFailure for why this must be a pointer
+// receiver.
+func (i *Issue) RecordProviderLimitStop() error { return i.RetryBudget.RecordProviderLimitStop() }
 
 // Workspace is the isolated environment associated with a single Issue
 // execution. Currently implemented as a Git worktree, but the domain

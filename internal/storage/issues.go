@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
@@ -44,12 +45,16 @@ func insertIssue(ctx context.Context, tx *sql.Tx, issue domain.Issue) error {
 			execution_id, issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
-			retry_ci_limit, retry_ci_used
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			retry_ci_limit, retry_ci_used,
+			retry_provider_limit_limit, retry_provider_limit_used,
+			provider_limit_retry_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ExecutionID, issue.ID, issue.Provider, issue.Title, issue.Body, string(issue.State), string(issue.Scope),
 		limits.Gate, issue.RetryBudget.GateFailures(),
 		limits.Review, issue.RetryBudget.ReviewFailures(),
 		limits.CI, issue.RetryBudget.CIFailures(),
+		limits.ProviderLimit, issue.RetryBudget.ProviderLimitFailures(),
+		issue.ProviderLimitRetryAt,
 	)
 	return err
 }
@@ -78,7 +83,9 @@ func (s *SQLiteStore) getIssue(ctx context.Context, q querier, executionID, issu
 		SELECT issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
-			retry_ci_limit, retry_ci_used
+			retry_ci_limit, retry_ci_used,
+			retry_provider_limit_limit, retry_provider_limit_used,
+			provider_limit_retry_at
 		FROM execution_issues WHERE execution_id = ? AND issue_id = ?`,
 		executionID, issueID,
 	)
@@ -108,6 +115,8 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 		state                                                         string
 		scope                                                         string
 		gateLimit, gateUsed, reviewLimit, reviewUsed, ciLimit, ciUsed int
+		providerLimitLimit, providerLimitUsed                         int
+		providerLimitRetryAt                                          sql.NullTime
 	)
 	issue := domain.Issue{ExecutionID: executionID}
 	if err := row.Scan(
@@ -115,15 +124,21 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 		&gateLimit, &gateUsed,
 		&reviewLimit, &reviewUsed,
 		&ciLimit, &ciUsed,
+		&providerLimitLimit, &providerLimitUsed,
+		&providerLimitRetryAt,
 	); err != nil {
 		return domain.Issue{}, err
 	}
 	issue.State = domain.IssueState(state)
 	issue.Scope = domain.IssueScope(scope)
 	issue.RetryBudget = domain.NewRetryBudgetFrom(
-		domain.RetryLimits{Gate: gateLimit, Review: reviewLimit, CI: ciLimit},
-		gateUsed, reviewUsed, ciUsed,
+		domain.RetryLimits{Gate: gateLimit, Review: reviewLimit, CI: ciLimit, ProviderLimit: providerLimitLimit},
+		gateUsed, reviewUsed, ciUsed, providerLimitUsed,
 	)
+	if providerLimitRetryAt.Valid {
+		retryAt := providerLimitRetryAt.Time.UTC()
+		issue.ProviderLimitRetryAt = &retryAt
+	}
 	return issue, nil
 }
 
@@ -187,7 +202,9 @@ func listIssueRows(ctx context.Context, q querier, executionID string) (map[stri
 		SELECT issue_id, provider, title, body, state, scope,
 			retry_gate_limit, retry_gate_used,
 			retry_review_limit, retry_review_used,
-			retry_ci_limit, retry_ci_used
+			retry_ci_limit, retry_ci_used,
+			retry_provider_limit_limit, retry_provider_limit_used,
+			provider_limit_retry_at
 		FROM execution_issues
 		WHERE execution_id = ?
 		ORDER BY issue_id`,
@@ -286,20 +303,106 @@ func (s *SQLiteStore) TransitionIssue(ctx context.Context, executionID, issueID 
 // executionID. See Store.UpdateRetryBudget's doc comment for why the
 // repair loop needs this: TransitionIssue always reloads the Issue fresh
 // from execution_issues, so an in-memory-only RecordGateFailure/
-// RecordReviewRejection/RecordCIFailure would otherwise be silently
-// discarded on the very next transition.
+// RecordReviewRejection/RecordCIFailure/RecordProviderLimitStop would
+// otherwise be silently discarded on the very next transition.
 func (s *SQLiteStore) UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE execution_issues
-		SET retry_gate_used = ?, retry_review_used = ?, retry_ci_used = ?
+		SET retry_gate_used = ?, retry_review_used = ?, retry_ci_used = ?,
+			retry_provider_limit_used = ?
 		WHERE execution_id = ? AND issue_id = ?`,
 		budget.GateFailures(), budget.ReviewFailures(), budget.CIFailures(),
+		budget.ProviderLimitFailures(),
 		executionID, issueID,
 	)
 	if err != nil {
 		return fmt.Errorf("storage: update retry budget for issue %s/%s: %w", executionID, issueID, err)
 	}
 	return nil
+}
+
+// ScheduleProviderLimitRetry persists the earliest time an Issue parked in
+// PROVIDER_LIMIT may return to READY. A nil retryAt clears the deadline,
+// which is what the controller does once it retries the Issue.
+//
+// This is a narrow method beside UpdateRetryBudget rather than another
+// parameter on it. The deadline is a scheduling fact, not a retry counter,
+// and the two are written by different callers at different times: the
+// engine schedules the deadline, and the controller clears it.
+func (s *SQLiteStore) ScheduleProviderLimitRetry(ctx context.Context, executionID, issueID string, retryAt *time.Time) error {
+	var value any
+	if retryAt != nil {
+		value = retryAt.UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE execution_issues
+		SET provider_limit_retry_at = ?
+		WHERE execution_id = ? AND issue_id = ?`,
+		value, executionID, issueID,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: schedule provider-limit retry for issue %s/%s: %w", executionID, issueID, err)
+	}
+	return nil
+}
+
+// ListDueProviderLimitIssues reloads every Issue that is in PROVIDER_LIMIT
+// and whose backoff deadline has passed as of now. The query crosses every
+// Execution, like ListActiveExecutionLeases, so the reconciliation loop finds
+// parked Issues without knowing their Execution IDs in advance.
+//
+// It returns an empty slice, never nil, when no Issue is due. Dependencies
+// are not loaded: the controller only transitions the Issue and redispatches
+// its Execution, and the Prepare/Execute path reloads the full Issue itself.
+func (s *SQLiteStore) ListDueProviderLimitIssues(ctx context.Context, now time.Time) ([]domain.Issue, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT execution_id, issue_id, provider, title, body, state, scope,
+			retry_gate_limit, retry_gate_used,
+			retry_review_limit, retry_review_used,
+			retry_ci_limit, retry_ci_used,
+			retry_provider_limit_limit, retry_provider_limit_used,
+			provider_limit_retry_at
+		FROM execution_issues
+		WHERE state = ? AND provider_limit_retry_at IS NOT NULL AND provider_limit_retry_at <= ?
+		ORDER BY execution_id, issue_id`,
+		string(domain.StateProviderLimit), now.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list due provider-limit issues: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	issues := make([]domain.Issue, 0)
+	for rows.Next() {
+		var executionID string
+		issue, err := scanIssueRow(prefixScanner{row: rows, prefix: []any{&executionID}}, "")
+		if err != nil {
+			return nil, fmt.Errorf("storage: list due provider-limit issues: %w", err)
+		}
+		issue.ExecutionID = executionID
+		issues = append(issues, issue)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: list due provider-limit issues: %w", err)
+	}
+	return issues, nil
+}
+
+// prefixScanner adapts a row that carries extra leading columns to the fixed
+// column list scanIssueRow expects. ListDueProviderLimitIssues selects
+// execution_id in front of those columns, because the query crosses every
+// Execution, and this wrapper consumes that one column before the shared scan
+// reads the rest.
+type prefixScanner struct {
+	row    scanner
+	prefix []any
+}
+
+func (p prefixScanner) Scan(dest ...any) error {
+	all := make([]any, 0, len(p.prefix)+len(dest))
+	all = append(all, p.prefix...)
+	all = append(all, dest...)
+	return p.row.Scan(all...)
 }
 
 // updateIssueStateCAS updates an Issue's state only if it still matches
