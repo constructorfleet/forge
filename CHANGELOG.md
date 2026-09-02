@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.3](https://github.com/constructorfleet/forge/compare/forge-v0.29.2...forge-v0.29.3) (2026-09-02)
+
+
+### Bug Fixes
+
+* Introduce a dedicated PROVIDER_LIMIT IssueState with automatic bounded backoff retry ([#430](https://github.com/constructorfleet/forge/issues/430)) ([b6d83f8](https://github.com/constructorfleet/forge/commit/b6d83f8717b8df0fc7cab28a75c100839854fd00)), closes [#423](https://github.com/constructorfleet/forge/issues/423)
+
 ## [0.29.2](https://github.com/constructorfleet/forge/compare/forge-v0.29.1...forge-v0.29.2) (2026-09-02)
 
 
