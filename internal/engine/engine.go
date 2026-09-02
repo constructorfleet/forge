@@ -659,12 +659,16 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 
 	issue, err = e.runRepairLoop(ctx, executionID, issueID, workerBase, env.Workspace().Path, env, repoCtx, issue)
 	if err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, e.failOut(ctx, executionID, issueID, env, err)
 	}
 	if issue.State != domain.StateCommitting {
 		return issue, nil
 	}
-	return e.runCommitAndPR(ctx, executionID, issueID, workerBase, env, issue)
+	issue, err = e.runCommitAndPR(ctx, executionID, issueID, workerBase, env, issue)
+	if err != nil {
+		return domain.Issue{}, e.failOut(ctx, executionID, issueID, env, err)
+	}
+	return issue, nil
 }
 
 // workerRef derives the Worker identity used both to claim an Issue
