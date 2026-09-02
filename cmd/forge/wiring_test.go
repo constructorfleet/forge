@@ -273,8 +273,9 @@ func TestBuildExecutionBackend_SelectsByBackend(t *testing.T) {
 // TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable
 // pins the ticket-336 acceptance criterion that selecting backend: container
 // fails at wiring, with a clear error, rather than reaching Prepare and
-// failing mid-run — today, before any concrete container-runtime adapter
-// exists, that means every container selection fails this way.
+// failing mid-run. buildContainerRuntime (issue #385) probes docker and
+// podman for a real, reachable daemon; a CI sandbox with neither running
+// fails this preflight exactly as it did before a concrete adapter existed.
 func TestBuildExecutionBackend_ContainerFailsPreflightWithNoRuntimeAvailable(t *testing.T) {
 	root, _ := newTempRepo(t)
 	wsMgr, err := workspace.NewManager(root)

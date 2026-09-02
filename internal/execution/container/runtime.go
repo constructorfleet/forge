@@ -32,9 +32,11 @@ type Mount struct {
 	ContainerPath string
 }
 
-// Resources gives a container coarse resource limits. Both fields are
-// passed through to the container runtime unparsed (e.g. CPU "2", Memory
-// "4Gi"); an empty field leaves that limit up to the runtime's own default.
+// Resources gives a container coarse resource limits, in Kubernetes-style
+// quantities (e.g. CPU "2", Memory "4Gi" or "512Mi"). CPU is passed through
+// to the container runtime unparsed; a CLIRuntime converts Memory to the
+// single-letter unit docker's and podman's `--memory` flag accepts. An
+// empty field leaves that limit up to the runtime's own default.
 type Resources struct {
 	CPU    string
 	Memory string

@@ -867,14 +867,22 @@ func buildRemoteRecoverFunc(store storage.Store) remote.RecoverFunc {
 	}
 }
 
+// containerPreflightTimeout bounds how long buildContainerRuntime waits for
+// a candidate CLI binary's daemon to answer, so an unreachable docker/podman
+// daemon fails preflight quickly rather than hanging wiring.
+const containerPreflightTimeout = 5 * time.Second
+
 // buildContainerRuntime constructs the container.ContainerRuntime the
-// Container backend drives. No concrete container-runtime adapter (docker,
-// podman, ...) exists in Forge yet — a later Container backend ticket adds
-// one — so selecting backend: container always fails this preflight today,
-// with container.ErrRuntimeUnavailable, rather than reaching Prepare and
-// failing mid-run against a nil runtime.
+// Container backend drives: container.DetectCLIRuntime probes docker, then
+// podman, and picks the first whose daemon actually answers, through
+// container.ExecCommandRunner (issue #385). A daemon that never answers
+// within containerPreflightTimeout, or no CLI binary that answers at all,
+// fails this preflight with container.ErrRuntimeUnavailable, rather than
+// reaching Prepare and failing mid-run against a nil runtime.
 func buildContainerRuntime(_ config.Config) (container.ContainerRuntime, error) {
-	return nil, container.ErrRuntimeUnavailable
+	ctx, cancel := context.WithTimeout(context.Background(), containerPreflightTimeout)
+	defer cancel()
+	return container.DetectCLIRuntime(ctx, container.ExecCommandRunner{})
 }
 
 // workerPreflightTimeout bounds how long buildWorkerClient waits for the
