@@ -50,8 +50,19 @@ func validate(cfg Config) error {
 			errs = append(errs, fieldErr("tracker.gitlab.project", cfg.Tracker.GitLab.Project,
 				"must not be empty when tracker.type is gitlab; give the path with namespace (group/project) or the numeric project ID"))
 		}
+	case "linear":
+		// Linear is tracker-only (CONTEXT.md): it supplies no SCM or CI
+		// capability, so a composition naming it there, or omitting an
+		// SCM/CI provider, is invalid — the scm.type/ci.type checks below
+		// already reject any scm.type/ci.type other than a real SCM/CI
+		// provider ("github" today), so "linear" there is rejected the same
+		// way as an unsupported value.
+		if strings.TrimSpace(cfg.Tracker.Linear.Team) == "" {
+			errs = append(errs, fieldErr("tracker.linear.team", cfg.Tracker.Linear.Team,
+				"must not be empty when tracker.type is linear; give the Linear team key (for example \"FOR\")"))
+		}
 	default:
-		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github, gitlab"))
+		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github, gitlab, linear"))
 	}
 	if strings.TrimSpace(cfg.Tracker.Provider) == "" {
 		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))

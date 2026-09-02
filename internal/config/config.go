@@ -23,7 +23,8 @@ import (
 // selects which provider implements the Tracker capability (see Config.
 // Provider's doc comment on capability composition); Provider is the
 // unrelated sidecar tag stamped onto every fetched domain.Issue (see
-// tracker/github.Client.Provider). Type accepts "github" and "gitlab".
+// tracker/github.Client.Provider). Type accepts "github", "gitlab", and
+// "linear".
 type TrackerConfig struct {
 	Type     string `yaml:"type"`
 	Provider string `yaml:"provider"`
@@ -39,6 +40,24 @@ type TrackerConfig struct {
 	// GitLab configures the GitLab Tracker. Forge reads it only when Type
 	// is "gitlab" and ignores it otherwise.
 	GitLab GitLabConfig `yaml:"gitlab"`
+
+	// Linear configures the Linear Tracker. Forge reads it only when Type
+	// is "linear" and ignores it otherwise.
+	Linear LinearConfig `yaml:"linear"`
+}
+
+// LinearConfig configures the Linear Tracker capability. It holds no
+// secrets: the Linear API key comes from the LINEAR_API_KEY environment
+// variable at the point of use (see the package doc comment and
+// internal/tracker/linear). Linear is a tracker-only provider (CONTEXT.md):
+// it supplies no SCM or CI capability, so scm.type/ci.type must name
+// another provider when tracker.type is "linear".
+type LinearConfig struct {
+	// Team is the Linear team key (for example "FOR") that prefixes every
+	// issue identifier Forge reads and writes. It is required when
+	// tracker.type is "linear": Forge does not infer it, because a
+	// workspace can hold more than one team.
+	Team string `yaml:"team"`
 }
 
 // GitLabConfig configures the GitLab Tracker capability. It holds no
