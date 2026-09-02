@@ -27,6 +27,7 @@ import (
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/tracker/gitlab"
+	"github.com/Teagan42/forge/internal/tracker/linear"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -276,10 +277,87 @@ func TestBuildTracker_UnknownTypeErrors(t *testing.T) {
 	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
 
 	cfg := config.Default()
-	cfg.Tracker.Type = "linear"
+	cfg.Tracker.Type = "bitbucket"
 
 	if _, err := buildTracker(cfg, root); err == nil {
 		t.Fatal("buildTracker: want error for unknown tracker type, got nil")
+	}
+}
+
+func TestBuildTracker_ComposesTheLinearTracker(t *testing.T) {
+	root, _ := newTempRepo(t)
+	// No "origin" remote is added on purpose: the Linear tracker names its
+	// team in config, so it must not need a GitHub remote URL.
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "linear"
+	cfg.Tracker.Provider = "linear"
+	cfg.Tracker.Linear.Team = "FOR"
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	lnClient, ok := trk.(*linear.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *linear.Client", trk)
+	}
+	if lnClient.Provider != "linear" {
+		t.Fatalf("buildTracker Provider = %q, want linear", lnClient.Provider)
+	}
+}
+
+func TestBuildTracker_LinearCarriesDependencyOverrides(t *testing.T) {
+	root, _ := newTempRepo(t)
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "linear"
+	cfg.Tracker.Linear.Team = "FOR"
+	cfg.Dependencies.Overrides = map[string][]string{"FOR-42": {"FOR-99"}}
+
+	trk, err := buildTracker(cfg, root)
+	if err != nil {
+		t.Fatalf("buildTracker: %v", err)
+	}
+	lnClient, ok := trk.(*linear.Client)
+	if !ok {
+		t.Fatalf("buildTracker returned %T, want *linear.Client", trk)
+	}
+	if got := lnClient.DependencyOverrides["FOR-42"]; len(got) != 1 || got[0] != "FOR-99" {
+		t.Fatalf("DependencyOverrides = %+v, want the configured overrides", lnClient.DependencyOverrides)
+	}
+}
+
+func TestBuildSCM_LinearIsNotImplemented(t *testing.T) {
+	// The Linear adapter implements the Tracker capability only. SCM and CI
+	// stay GitHub-only.
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	cfg := config.Default()
+	cfg.SCM.Type = "linear"
+
+	if _, err := buildSCM(cfg, root); err == nil {
+		t.Fatal("buildSCM: want error for the linear scm type, got nil")
+	}
+	cfg = config.Default()
+	cfg.CI.Type = "linear"
+	if _, err := buildCI(cfg, root); err == nil {
+		t.Fatal("buildCI: want error for the linear ci type, got nil")
+	}
+}
+
+func TestVerifyTrackerAuth_LinearReportsAMissingToken(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "")
+	root, _ := newTempRepo(t)
+
+	cfg := config.Default()
+	cfg.Tracker.Type = "linear"
+	cfg.Tracker.Linear.Team = "FOR"
+
+	err := verifyTrackerAuth(context.Background(), cfg, root)
+	if !errors.Is(err, linear.ErrMissingToken) {
+		t.Fatalf("verifyTrackerAuth error = %v, want linear.ErrMissingToken", err)
 	}
 }
 

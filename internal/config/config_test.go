@@ -314,7 +314,7 @@ func TestLoad_UnknownKeyRejected(t *testing.T) {
 }
 
 func TestLoad_InvalidTrackerType(t *testing.T) {
-	path := writeTemp(t, "tracker:\n  type: linear\n")
+	path := writeTemp(t, "tracker:\n  type: bitbucket\n")
 
 	_, err := Load(path)
 	if err == nil {
@@ -323,7 +323,7 @@ func TestLoad_InvalidTrackerType(t *testing.T) {
 	if !strings.Contains(err.Error(), "tracker.type") {
 		t.Errorf("Load() error = %v, want it to identify tracker.type", err)
 	}
-	if !strings.Contains(err.Error(), "linear") {
+	if !strings.Contains(err.Error(), "bitbucket") {
 		t.Errorf("Load() error = %v, want it to include the offending value", err)
 	}
 }
@@ -404,6 +404,50 @@ func TestLoad_ExplicitTrackerProviderTagWins(t *testing.T) {
 	}
 }
 
+func TestLoad_LinearTrackerTypeIsAccepted(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: linear\n  linear:\n    team: FOR\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Type != "linear" {
+		t.Errorf("Tracker.Type = %q, want linear", cfg.Tracker.Type)
+	}
+	if cfg.Tracker.Linear.Team != "FOR" {
+		t.Errorf("Tracker.Linear.Team = %q, want FOR", cfg.Tracker.Linear.Team)
+	}
+	// Linear is tracker-only: it composes alongside the GitHub SCM and CI
+	// capabilities, and the tracker type never cascades to them.
+	if cfg.SCM.Type != "github" || cfg.CI.Type != "github" {
+		t.Errorf("SCM.Type = %q, CI.Type = %q, want github for both", cfg.SCM.Type, cfg.CI.Type)
+	}
+}
+
+func TestLoad_LinearTrackerRequiresATeam(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: linear\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.linear.team") {
+		t.Errorf("Load() error = %v, want it to identify tracker.linear.team", err)
+	}
+}
+
+func TestLoad_TrackerProviderTagDefaultsToLinear(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: linear\n  linear:\n    team: FOR\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Provider != "linear" {
+		t.Errorf("Tracker.Provider = %q, want linear", cfg.Tracker.Provider)
+	}
+}
+
 func TestDefault_ComposesGithubForEveryCapability(t *testing.T) {
 	cfg := Default()
 
@@ -477,6 +521,20 @@ func TestLoad_TrackerIndependentOfSCMAndCI(t *testing.T) {
 
 func TestLoad_InvalidSCMType(t *testing.T) {
 	path := writeTemp(t, "scm:\n  type: gitlab\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "scm.type") {
+		t.Errorf("Load() error = %v, want it to identify scm.type", err)
+	}
+}
+
+func TestLoad_LinearCannotBeNamedAsSCM(t *testing.T) {
+	// Linear is tracker-only (CONTEXT.md): naming it as the SCM provider is
+	// rejected the same way any other non-SCM provider is.
+	path := writeTemp(t, "tracker:\n  type: linear\n  linear:\n    team: FOR\nscm:\n  type: linear\n")
 
 	_, err := Load(path)
 	if err == nil {

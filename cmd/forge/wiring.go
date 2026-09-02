@@ -40,6 +40,7 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/tracker/gitlab"
+	"github.com/Teagan42/forge/internal/tracker/linear"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -614,8 +615,8 @@ func (b *dependencyBaseResolver) CurrentBase(ctx context.Context, issueID string
 // trackerCapability is the Tracker capability as every caller in this
 // package consumes it: the neutral issue-domain interface plus the
 // dependency read/write capability. buildTracker returns this interface,
-// not a concrete client, because two providers implement it now —
-// *github.Client and *gitlab.Client.
+// not a concrete client, because three providers implement it now —
+// *github.Client, *gitlab.Client, and *linear.Client.
 //
 // The interface stays this narrow on purpose. A caller that needs a
 // provider-specific extra (github.Client's CheckExternal, for example)
@@ -644,6 +645,8 @@ func buildTracker(cfg config.Config, repoRoot string) (trackerCapability, error)
 	switch cfg.Tracker.Type {
 	case "gitlab":
 		return buildGitLabClient(cfg), nil
+	case "linear":
+		return buildLinearClient(cfg), nil
 	default:
 		return resolveCapability("tracker", cfg.Tracker.Type, cfg, repoRoot)
 	}
@@ -709,6 +712,20 @@ func externalCheckerFor(trk trackerCapability) tracker.ExternalChecker {
 // config package doc comment).
 func buildGitLabClient(cfg config.Config) *gitlab.Client {
 	trk := gitlab.NewClient(nil, gitlabAPIRoot(cfg.Tracker.GitLab.BaseURL), cfg.Tracker.GitLab.Project)
+	trk.Provider = cfg.Tracker.Provider
+	trk.DependencyOverrides = cfg.Dependencies.Overrides
+	return trk
+}
+
+// buildLinearClient constructs the linear.Client for buildTracker's
+// "linear" case. It needs no git remote: cfg.Tracker.Linear.Team names the
+// team, and config.validate already rejected an empty one.
+//
+// The Linear API key is not passed here. The client reads LINEAR_API_KEY
+// from the environment at call time, so no secret ever enters config (see
+// the config package doc comment).
+func buildLinearClient(cfg config.Config) *linear.Client {
+	trk := linear.NewClient(nil, "", cfg.Tracker.Linear.Team)
 	trk.Provider = cfg.Tracker.Provider
 	trk.DependencyOverrides = cfg.Dependencies.Overrides
 	return trk
