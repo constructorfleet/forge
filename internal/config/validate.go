@@ -39,17 +39,15 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("version", fmt.Sprint(cfg.Version), "must be >= 1"))
 	}
 
+	usesGitLab := false
 	switch cfg.Tracker.Type {
 	case "github":
 		// no further constraints
 	case "gitlab":
+		usesGitLab = true
 		// Forge does not infer a GitLab project from the "origin" remote,
 		// because a self-managed instance can use any host name. The
 		// project must therefore be named in the file.
-		if strings.TrimSpace(cfg.Tracker.GitLab.Project) == "" {
-			errs = append(errs, fieldErr("tracker.gitlab.project", cfg.Tracker.GitLab.Project,
-				"must not be empty when tracker.type is gitlab; give the path with namespace (group/project) or the numeric project ID"))
-		}
 	case "linear":
 		// Linear is tracker-only (CONTEXT.md): it supplies no SCM or CI
 		// capability, so a composition naming it there, or omitting an
@@ -68,8 +66,22 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))
 	}
 
-	if cfg.SCM.Type != "github" {
-		errs = append(errs, fieldErr("scm.type", cfg.SCM.Type, "unsupported scm type; supported: github"))
+	switch cfg.SCM.Type {
+	case "github":
+		// no further constraints
+	case "gitlab":
+		usesGitLab = true
+	default:
+		errs = append(errs, fieldErr("scm.type", cfg.SCM.Type, "unsupported scm type; supported: github, gitlab"))
+	}
+
+	switch cfg.CI.Type {
+	case "github":
+		// no further constraints
+	case "gitlab":
+		usesGitLab = true
+	default:
+		errs = append(errs, fieldErr("ci.type", cfg.CI.Type, "unsupported ci type; supported: github, gitlab"))
 	}
 
 	// Frozen composition rule: CI checks attach to the change request,
@@ -82,6 +94,10 @@ func validate(cfg Config) error {
 	if cfg.CI.Type != cfg.SCM.Type && !externalCIObservers[cfg.CI.Type] {
 		errs = append(errs, fieldErr("ci.type", cfg.CI.Type,
 			fmt.Sprintf("must match scm.type (%q) or be a recognized external-status observer", cfg.SCM.Type)))
+	}
+	if usesGitLab && strings.TrimSpace(cfg.Tracker.GitLab.Project) == "" {
+		errs = append(errs, fieldErr("tracker.gitlab.project", cfg.Tracker.GitLab.Project,
+			"must not be empty when a gitlab capability is selected; give the path with namespace (group/project) or the numeric project ID"))
 	}
 
 	if strings.TrimSpace(cfg.Git.Base) == "" {

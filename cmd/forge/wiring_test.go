@@ -239,22 +239,36 @@ func TestBuildTracker_GitLabCarriesDependencyOverrides(t *testing.T) {
 	}
 }
 
-func TestBuildSCM_GitLabIsNotImplemented(t *testing.T) {
-	// The GitLab adapter implements the Tracker capability only. SCM and CI
-	// stay GitHub-only.
+func TestBuildSCMAndCI_GitLabUseTheConfiguredProject(t *testing.T) {
 	root, _ := newTempRepo(t)
 	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
 
 	cfg := config.Default()
 	cfg.SCM.Type = "gitlab"
-
-	if _, err := buildSCM(cfg, root); err == nil {
-		t.Fatal("buildSCM: want error for the gitlab scm type, got nil")
-	}
-	cfg = config.Default()
 	cfg.CI.Type = "gitlab"
-	if _, err := buildCI(cfg, root); err == nil {
-		t.Fatal("buildCI: want error for the gitlab ci type, got nil")
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.Provider = "acme-gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+	cfg.Tracker.GitLab.BaseURL = "https://gitlab.example.com"
+
+	scm, err := buildSCM(cfg, root)
+	if err != nil {
+		t.Fatalf("buildSCM: %v", err)
+	}
+	glSCM, ok := scm.(*gitlab.Client)
+	if !ok {
+		t.Fatalf("buildSCM returned %T, want *gitlab.Client", scm)
+	}
+	if got := glSCM.BaseURL(); got != "https://gitlab.example.com/api/v4" {
+		t.Fatalf("SCM BaseURL = %q, want GitLab API root", got)
+	}
+
+	ciCap, err := buildCI(cfg, root)
+	if err != nil {
+		t.Fatalf("buildCI: %v", err)
+	}
+	if _, ok := ciCap.(*gitlab.Client); !ok {
+		t.Fatalf("buildCI returned %T, want *gitlab.Client", ciCap)
 	}
 }
 
@@ -374,6 +388,9 @@ func TestBuildSCM_ComposesTheConfiguredProvider(t *testing.T) {
 	if scm == nil {
 		t.Fatal("buildSCM: got nil client")
 	}
+	if _, ok := scm.(*github.Client); !ok {
+		t.Fatalf("buildSCM returned %T, want *github.Client", scm)
+	}
 }
 
 func TestBuildSCM_UnknownTypeErrors(t *testing.T) {
@@ -381,7 +398,7 @@ func TestBuildSCM_UnknownTypeErrors(t *testing.T) {
 	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
 
 	cfg := config.Default()
-	cfg.SCM.Type = "gitlab"
+	cfg.SCM.Type = "linear"
 
 	if _, err := buildSCM(cfg, root); err == nil {
 		t.Fatal("buildSCM: want error for unknown scm type, got nil")
@@ -401,6 +418,9 @@ func TestBuildCI_ComposesTheConfiguredProvider(t *testing.T) {
 	if ciCap == nil {
 		t.Fatal("buildCI: got nil client")
 	}
+	if _, ok := ciCap.(*github.Client); !ok {
+		t.Fatalf("buildCI returned %T, want *github.Client", ciCap)
+	}
 }
 
 func TestBuildCI_UnknownTypeErrors(t *testing.T) {
@@ -408,7 +428,7 @@ func TestBuildCI_UnknownTypeErrors(t *testing.T) {
 	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
 
 	cfg := config.Default()
-	cfg.CI.Type = "gitlab"
+	cfg.CI.Type = "linear"
 
 	if _, err := buildCI(cfg, root); err == nil {
 		t.Fatal("buildCI: want error for unknown ci type, got nil")
@@ -655,6 +675,40 @@ func TestComposition_ValidGithubConfigurationWiresEndToEnd(t *testing.T) {
 	}
 	if _, ok := eng.Backend.(*localhost.Backend); !ok {
 		t.Errorf("eng.Backend = %T, want *localhost.Backend (the default config.BackendLocal selection)", eng.Backend)
+	}
+}
+
+// TestComposition_ValidGitLabConfigurationWiresEndToEnd proves issue #290's
+// all-GitLab composition reaches the Engine seams that publish the merge
+// request and watch GitLab's pipeline gate.
+func TestComposition_ValidGitLabConfigurationWiresEndToEnd(t *testing.T) {
+	root, _ := newTempRepo(t)
+
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	store, err := openStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	cfg := config.Default()
+	cfg.Provider = "gitlab"
+	cfg.Tracker.Type = "gitlab"
+	cfg.SCM.Type = "gitlab"
+	cfg.CI.Type = "gitlab"
+	cfg.Tracker.Provider = "gitlab"
+	cfg.Tracker.GitLab.Project = "acme/widgets"
+	cfg.Agent.Provider = "fake"
+
+	eng, err := buildEngine(store, cfg, root)
+	if err != nil {
+		t.Fatalf("buildEngine: %v, want a coherent all-gitlab composition to wire end-to-end", err)
+	}
+	if _, ok := eng.PRTracker.(*gitlab.Client); !ok {
+		t.Fatalf("eng.PRTracker = %T, want *gitlab.Client", eng.PRTracker)
+	}
+	if eng.CIWaiter == nil {
+		t.Fatal("eng.CIWaiter not wired from the GitLab CI capability")
 	}
 }
 

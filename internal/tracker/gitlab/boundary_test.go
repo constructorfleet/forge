@@ -16,6 +16,12 @@ func TestClient_SatisfiesTheTrackerCapabilities(t *testing.T) {
 	var _ tracker.Tracker = (*gitlab.Client)(nil)
 	var _ tracker.DependencyStore = (*gitlab.Client)(nil)
 	var _ tracker.AuthPreflighter = (*gitlab.Client)(nil)
+	var _ tracker.SCM = (*gitlab.Client)(nil)
+	var _ tracker.CI = (*gitlab.Client)(nil)
+	var _ tracker.ReviewGetter = (*gitlab.Client)(nil)
+	var _ tracker.ReviewsGetter = (*gitlab.Client)(nil)
+	var _ tracker.MergeStatusGetter = (*gitlab.Client)(nil)
+	var _ tracker.PullRequestTargetBranchGetter = (*gitlab.Client)(nil)
 }
 
 // No GitLab-native shape may cross this package's boundary (see CONTEXT.md
