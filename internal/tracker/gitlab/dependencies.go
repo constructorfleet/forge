@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -30,9 +31,18 @@ const (
 // the reverse, "A blocks B". An entry with LinkType "relates_to" carries no
 // order. Forge reads only "is_blocked_by" entries.
 type glIssueLink struct {
-	IID       int    `json:"iid"`
-	ProjectID int    `json:"project_id"`
-	LinkType  string `json:"link_type"`
+	ID          int    `json:"id"`
+	IssueLinkID int    `json:"issue_link_id"`
+	IID         int    `json:"iid"`
+	ProjectID   int    `json:"project_id"`
+	LinkType    string `json:"link_type"`
+}
+
+func (l glIssueLink) relationshipID() int {
+	if l.IssueLinkID != 0 {
+		return l.IssueLinkID
+	}
+	return l.ID
 }
 
 // fetchBlockedBy reads the issue's native GitLab prerequisites — the issues
@@ -53,6 +63,22 @@ type glIssueLink struct {
 // Issue schedule as if it had none, so the adapter fails closed rather than
 // guess.
 func (c *Client) fetchBlockedBy(ctx context.Context, gl glIssue) (ids []string, ok bool, err error) {
+	links, ok, err := c.fetchIssueLinks(ctx, gl)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+
+	ids, err = blockedByIDs(gl, links)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, true, nil
+}
+
+func (c *Client) fetchIssueLinks(ctx context.Context, gl glIssue) ([]glIssueLink, bool, error) {
 	if c.linksKnownUnavailable() {
 		return nil, false, nil
 	}
@@ -70,8 +96,11 @@ func (c *Client) fetchBlockedBy(ctx context.Context, gl glIssue) (ids []string, 
 		return nil, false, e
 	}
 	c.recordLinksProbe(true)
+	return links, true, nil
+}
 
-	ids = make([]string, 0, len(links))
+func blockedByIDs(gl glIssue, links []glIssueLink) ([]string, error) {
+	ids := make([]string, 0, len(links))
 	for _, link := range links {
 		if link.LinkType != linkTypeIsBlockedBy {
 			continue
@@ -81,13 +110,13 @@ func (c *Client) fetchBlockedBy(ctx context.Context, gl glIssue) (ids []string, 
 		// Issue or dropping the prerequisite: cross-project links are out of
 		// scope (ADR 0027).
 		if link.ProjectID != 0 && gl.ProjectID != 0 && link.ProjectID != gl.ProjectID {
-			return nil, false, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"gitlab: issue #%d: cross-project prerequisite (project %d, issue #%d) is not supported",
 				gl.IID, link.ProjectID, link.IID)
 		}
 		ids = append(ids, strconv.Itoa(link.IID))
 	}
-	return ids, true, nil
+	return ids, nil
 }
 
 // linksKnownUnavailable reports whether an earlier probe already found that
@@ -164,9 +193,10 @@ func (c *Client) GetDependencies(ctx context.Context, id string) ([]tracker.Depe
 // back to reading. It then writes the new description back with a PUT.
 // Every other section of the description stays as it is.
 //
-// The write path uses the body block even when the instance exposes native
-// links. ADR 0027 records the reason: Forge writes one encoding that it can
-// always read back, on every tier.
+// When GitLab exposes native issue links, WriteDependencies also syncs
+// "is_blocked_by" links. This keeps the native-first read path consistent
+// with the write. It still writes the body block for tiers that do not expose
+// native links.
 func (c *Client) WriteDependencies(ctx context.Context, id string, dependsOn []string) error {
 	iid, err := parseIssueID(id)
 	if err != nil {
@@ -178,9 +208,86 @@ func (c *Client) WriteDependencies(ctx context.Context, id string, dependsOn []s
 		return fmt.Errorf("gitlab: fetch issue %s: %w", id, err)
 	}
 
+	links, linksOK, err := c.fetchIssueLinks(ctx, gl)
+	if err != nil {
+		return fmt.Errorf("gitlab: fetch dependencies for issue %s: %w", id, err)
+	}
+	if linksOK {
+		if err := c.syncNativeDependencies(ctx, gl, links, dependsOn); err != nil {
+			return fmt.Errorf("gitlab: sync native dependencies for issue %s: %w", id, err)
+		}
+	}
+
 	newBody := tracker.ReplaceDependencyBlock(gl.Description, dependsOn)
 	if err := c.UpdateIssue(ctx, id, tracker.UpdateIssueRequest{Body: newBody}); err != nil {
 		return fmt.Errorf("gitlab: write dependencies for issue %s: %w", id, err)
+	}
+	return nil
+}
+
+func (c *Client) syncNativeDependencies(ctx context.Context, gl glIssue, links []glIssueLink, dependsOn []string) error {
+	desired := make(map[int]struct{}, len(dependsOn))
+	for _, id := range dependsOn {
+		iid, err := parseIssueID(id)
+		if err != nil {
+			return err
+		}
+		desired[iid] = struct{}{}
+	}
+
+	present := make(map[int]struct{})
+	for _, link := range links {
+		if link.LinkType != linkTypeIsBlockedBy {
+			continue
+		}
+		if link.ProjectID != 0 && gl.ProjectID != 0 && link.ProjectID != gl.ProjectID {
+			return fmt.Errorf(
+				"issue #%d: cross-project prerequisite (project %d, issue #%d) is not supported",
+				gl.IID, link.ProjectID, link.IID)
+		}
+		if _, ok := desired[link.IID]; ok {
+			present[link.IID] = struct{}{}
+			continue
+		}
+		if err := c.deleteIssueLink(ctx, gl.IID, link.relationshipID()); err != nil {
+			return err
+		}
+	}
+
+	for _, id := range dependsOn {
+		iid, err := parseIssueID(id)
+		if err != nil {
+			return err
+		}
+		if _, ok := present[iid]; ok {
+			continue
+		}
+		if err := c.createBlockedByLink(ctx, gl.IID, iid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) createBlockedByLink(ctx context.Context, issueIID, dependsOnIID int) error {
+	q := url.Values{}
+	q.Set("target_project_id", c.project)
+	q.Set("target_issue_iid", strconv.Itoa(dependsOnIID))
+	q.Set("link_type", linkTypeIsBlockedBy)
+	path := c.issuePath(issueIID, "/links") + "?" + q.Encode()
+	if err := c.do(ctx, http.MethodPost, path, nil, nil); err != nil {
+		return fmt.Errorf("create native prerequisite #%d: %w", dependsOnIID, err)
+	}
+	return nil
+}
+
+func (c *Client) deleteIssueLink(ctx context.Context, issueIID, linkID int) error {
+	if linkID == 0 {
+		return fmt.Errorf("delete native prerequisite: missing issue link id")
+	}
+	path := c.issuePath(issueIID, "/links/"+strconv.Itoa(linkID))
+	if err := c.do(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("delete native prerequisite link %d: %w", linkID, err)
 	}
 	return nil
 }

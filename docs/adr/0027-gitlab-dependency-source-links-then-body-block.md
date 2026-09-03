@@ -1,6 +1,6 @@
 # The GitLab Dependency Source: typed issue links, then the body block
 
-The GitLab Tracker reads Dependencies from two tracker-local sources, in precedence order. This ADR records that order, the direction rule that maps a GitLab link onto a Forge edge, the tier probe that selects the source, and why the write path uses one encoding only.
+The GitLab Tracker reads Dependencies from two tracker-local sources, in precedence order. This ADR records that order, the direction rule that maps a GitLab link onto a Forge edge, and the tier probe that selects the source.
 
 ADR 0003 records the same two-source decision for GitHub. This ADR is its GitLab parallel: the two adapters make the same choice for the same reason, and neither one invents a third source.
 
@@ -33,11 +33,13 @@ A Forge Issue ID is a project-scoped GitLab `iid`. A typed link can name an issu
 
 Forge cannot use such a link. It also must not drop it: the Issue would then schedule as if the prerequisite did not exist. The adapter therefore returns an error that names the other project and issue. Cross-project and group-level links stay out of scope until Forge models a cross-project Issue reference.
 
-## The write path uses the body block only
+## The write path syncs the active source
 
-`WriteDependencies` writes the `## Dependencies` body block, on every tier, even when typed links are available. The read path falls back to that same block, so a write followed by a read round-trips.
+`WriteDependencies` writes the `## Dependencies` body block on every tier. This keeps a fallback source for instances that do not expose typed links.
 
-Writing typed links instead would split the adapter's encoding in two: a tier that accepts a typed-link write would read back a different source than a tier that does not, and Forge would hold two states of the same fact. One encoding for write keeps the adapter free of that split. The GitHub adapter makes the same choice for the same reason (ADR 0003).
+When GitLab exposes typed links, `WriteDependencies` also syncs the native `is_blocked_by` links. It creates missing prerequisite links and deletes stale prerequisite links. It does not touch `blocks`, `relates_to`, or other unordered links.
+
+This keeps the write path consistent with the native-first read path. Without this sync, a write can update the body block while a later read still returns stale native links.
 
 Configured overrides (`dependencies.overrides` in `.forge.yaml`) still take precedence over whichever tracker source the read path used.
 
