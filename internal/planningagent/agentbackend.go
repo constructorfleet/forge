@@ -112,6 +112,9 @@ func (b *AgentBackend) Invoke(ctx context.Context, req InvokeRequest) (string, e
 	}
 
 	result, execErr := b.agent.Execute(ctx, agentReq)
+	if sink, ok := agentReq.Transcript.(*persistingTranscriptSink); ok {
+		sink.Close()
+	}
 	if persisting {
 		b.finalizeRun(ctx, agentRunID, started, result, execErr)
 	}

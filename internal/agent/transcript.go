@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"sync"
 	"time"
 )
@@ -99,6 +98,7 @@ type TranscriptRecorder struct {
 	events  []TranscriptEvent
 	now     func() time.Time
 	max     int
+	seq     int // next stable ordinal to assign; equals total events emitted
 	dropped int
 }
 
@@ -110,12 +110,11 @@ func NewTranscriptRecorder() *TranscriptRecorder {
 
 // NewBoundedTranscriptRecorder returns an empty TranscriptRecorder that
 // retains at most max events (0 means unbounded): once max is exceeded, the
-// oldest retained event is dropped to make room for the newest, and
-// Events() prepends a single TranscriptEventTruncation marker reporting how
-// many events were dropped (issue 36) — so a bounded transcript is always
-// explicit about the drop rather than silently presenting an unlabelled
-// sliver. now defaults to time.Now when nil; tests inject a fixed/stepped
-// clock for deterministic assertions.
+// oldest retained event is dropped to make room for the newest. Seq is a
+// stable per-run arrival ordinal assigned once at Emit and never renumbered,
+// so eviction leaves gaps the reader can see (ADR 0030); FirstSeq reports the
+// lowest retained seq. now defaults to time.Now when nil; tests inject a
+// fixed/stepped clock for deterministic assertions.
 func NewBoundedTranscriptRecorder(max int, now func() time.Time) *TranscriptRecorder {
 	if now == nil {
 		now = time.Now
@@ -126,15 +125,19 @@ func NewBoundedTranscriptRecorder(max int, now func() time.Time) *TranscriptReco
 // Emit implements TranscriptSink. It assigns event.Timestamp from the
 // recorder's clock when the caller left it zero — an emitter with its own
 // per-event clock (e.g. the Claude adapter's stream-json timestamps) is
-// preserved as-is — and evicts the oldest event once max is exceeded.
-// event.Seq is ignored here; Events() assigns Seq from final arrival order
-// on every read, since eviction can shift what "first" means.
+// preserved as-is — and assigns a stable Seq (ADR 0030) if the caller left it
+// unset, then evicts the oldest event once max is exceeded (leaving a seq
+// gap). A caller that pre-assigns Seq keeps it.
 func (r *TranscriptRecorder) Emit(event TranscriptEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if event.Timestamp.IsZero() {
 		event.Timestamp = r.now()
 	}
+	if event.Seq == 0 {
+		event.Seq = r.seq
+	}
+	r.seq++
 	r.events = append(r.events, event)
 	if r.max > 0 && len(r.events) > r.max {
 		r.events = r.events[1:]
@@ -142,30 +145,32 @@ func (r *TranscriptRecorder) Emit(event TranscriptEvent) {
 	}
 }
 
-// Events returns every retained event, in arrival order, with Seq
-// (re)assigned 0..n-1 across this read. When events were dropped to stay
-// within max, the first event (Seq 0) is a synthetic
-// TranscriptEventTruncation marker reporting the drop count, and every
-// retained event is shifted to make room for it. The returned slice is a
-// fresh copy, safe to retain independent of further Emit calls.
+// Events returns every retained event, in arrival order, with the stable Seq
+// each was assigned at Emit — never renumbered, so eviction shows as a gap
+// rather than a synthetic trailer (ADR 0030; storage no longer persists
+// TRUNCATION). The returned slice is a fresh copy, safe to retain independent
+// of further Emit calls.
 func (r *TranscriptRecorder) Events() []TranscriptEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	out := make([]TranscriptEvent, 0, len(r.events)+1)
-	seq := 0
-	if r.dropped > 0 {
-		out = append(out, TranscriptEvent{
-			Seq:  seq,
-			Type: TranscriptEventTruncation,
-			Text: fmt.Sprintf("%d earlier event(s) dropped to keep this transcript bounded", r.dropped),
-		})
-		seq++
-	}
-	for _, event := range r.events {
-		event.Seq = seq
-		out = append(out, event)
-		seq++
-	}
+	out := make([]TranscriptEvent, len(r.events))
+	copy(out, r.events)
 	return out
+}
+
+// Emitted returns how many events have been Emitted (0-based: the next Seq an
+// Emit without a caller-supplied Seq would receive).
+func (r *TranscriptRecorder) Emitted() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seq
+}
+
+// FirstSeq returns the lowest Seq currently retained. With front eviction
+// this equals how many events were dropped, doubling as the eviction floor a
+// reader uses to see that history was cut.
+func (r *TranscriptRecorder) FirstSeq() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.dropped
 }

@@ -6,11 +6,21 @@ import (
 	"fmt"
 )
 
-// RecordTranscriptEvents persists every event captured during one AgentRun
-// (agentRunID, as returned by RecordAgentRun), in a single transaction. A
-// no-op when events is empty, so callers can always call it unconditionally
-// after an Agent invocation regardless of whether anything was captured.
+// MaxTranscriptEventsPerRun caps how many transcript_events rows one AgentRun
+// may retain (ADR 0030). The cap is enforced in SQL on the append path:
+// inserting past it deletes the oldest seqs in the same transaction, leaving
+// seq gaps. Mirrors the in-memory recorder window but bounds reattach
+// backfill at the store.
+const MaxTranscriptEventsPerRun = 5000
+
+// RecordTranscriptEvents appends every event captured during one AgentRun
+// (agentRunID, as returned by RecordAgentRun), in a single transaction,
+// enforcing MaxTranscriptEventsPerRun by deleting the oldest rows in the
+// same transaction as the append. TRUNCATION-marker events are filtered here
+// so storage never persists them (ADR 0030); a reader sees seq gaps instead.
+// A no-op when events is empty.
 func (s *SQLiteStore) RecordTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error {
+	events = filterTruncationEvents(events)
 	if len(events) == 0 {
 		return nil
 	}
@@ -24,40 +34,39 @@ func (s *SQLiteStore) RecordTranscriptEvents(ctx context.Context, executionID, i
 	if err := insertTranscriptEvents(ctx, tx, executionID, issueID, agentRunID, events); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM transcript_events
+		WHERE agent_run_id = ?
+		  AND id NOT IN (
+			SELECT id FROM transcript_events
+			WHERE agent_run_id = ?
+			ORDER BY seq DESC
+			LIMIT ?)`,
+		agentRunID, agentRunID, MaxTranscriptEventsPerRun,
+	); err != nil {
+		return fmt.Errorf("storage: enforce transcript retention for issue %s/%s: %w", executionID, issueID, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("storage: record transcript events for issue %s/%s: %w", executionID, issueID, err)
 	}
 	return nil
 }
 
-// ReplaceTranscriptEvents overwrites the persisted transcript for one
-// AgentRun with events (issue 36's incremental capture flush): it deletes
-// every row already stored for agentRunID, then inserts events in order,
-// all in one transaction. Unlike RecordTranscriptEvents, an empty events
-// slice is meaningful — it clears the run's transcript — so this is not a
-// no-op on empty input.
-func (s *SQLiteStore) ReplaceTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("storage: replace transcript events for issue %s/%s: %w", executionID, issueID, err)
+// filterTruncationEvents drops synthetic TRUNCATION-marker events so they are
+// never persisted (ADR 0030).
+func filterTruncationEvents(events []TranscriptEvent) []TranscriptEvent {
+	out := events[:0]
+	for _, event := range events {
+		if event.Type == "TRUNCATION" {
+			continue
+		}
+		out = append(out, event)
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM transcript_events WHERE agent_run_id = ?`, agentRunID); err != nil {
-		return fmt.Errorf("storage: replace transcript events for issue %s/%s: %w", executionID, issueID, err)
-	}
-	if err := insertTranscriptEvents(ctx, tx, executionID, issueID, agentRunID, events); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("storage: replace transcript events for issue %s/%s: %w", executionID, issueID, err)
-	}
-	return nil
+	return out
 }
 
-// insertTranscriptEvents inserts events for one AgentRun using tx, shared by
-// RecordTranscriptEvents (append) and ReplaceTranscriptEvents (delete then
-// insert). An empty slice inserts nothing.
+// insertTranscriptEvents inserts events for one AgentRun using tx. An empty
+// slice inserts nothing.
 func insertTranscriptEvents(ctx context.Context, tx *sql.Tx, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -81,6 +90,26 @@ func insertTranscriptEvents(ctx context.Context, tx *sql.Tx, executionID, issueI
 		}
 	}
 	return nil
+}
+
+// TranscriptEventsAfter returns up to limit TranscriptEvents recorded for one
+// AgentRun whose Seq is strictly greater than afterSeq, in Seq order — the
+// bounded tail API a live reader polls to follow a run (ADR 0030). A cursor
+// into an eviction gap still reads correctly: eviction only removes old seqs,
+// never the ordering, so afterSeq can point at a seq that no longer exists.
+func (s *SQLiteStore) TranscriptEventsAfter(ctx context.Context, agentRunID, afterSeq, limit int64) ([]TranscriptEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT execution_id, issue_id, agent_run_id, seq, type, role, text, tool_name, tool_input, tool_output, tool_call_id, occurred_at, phase, subagent
+		FROM transcript_events
+		WHERE agent_run_id = ? AND seq > ?
+		ORDER BY seq
+		LIMIT ?`,
+		agentRunID, afterSeq, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: transcript events after %d for run %d: %w", afterSeq, agentRunID, err)
+	}
+	return scanTranscriptEvents(rows, fmt.Sprintf("storage: transcript events after %d for run %d", afterSeq, agentRunID))
 }
 
 // TranscriptEventsByAgentRun returns every TranscriptEvent recorded for one

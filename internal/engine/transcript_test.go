@@ -145,12 +145,12 @@ func (a *cancelableTranscriptAgent) Execute(ctx context.Context, req agent.Agent
 var _ agent.Agent = (*cancelableTranscriptAgent)(nil)
 
 // TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation is issue
-// 36's core durability requirement: transcript events are persisted
-// incrementally as the Agent emits them, so a killed/timed-out run's
-// transcript survives up to the moment of the kill rather than being lost
-// with an end-of-run batch write that never gets to run. This asserts the
-// events are already durable in storage before the run is even cancelled —
-// not merely recoverable afterward because Execute happened to return.
+// 36's core durability requirement: a killed/timed-out run's transcript must
+// survive up to the moment of the kill. With batched, debounced append-only
+// flushing (issue 489), the tail is guaranteed by the sink's final Close,
+// which runs on a cancel-immune context when Execute returns — so a run
+// cancelled mid-stream still persists everything it emitted before the wedge,
+// rather than losing it to an end-of-run batch that never gets to run.
 func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing.T) {
 	repoRoot, base := gittest.NewTempRepo(t)
 	store := openTestStore(t)
@@ -182,20 +182,10 @@ func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing
 		t.Fatal("timed out waiting for the agent to emit its scripted events")
 	}
 
-	transcript, err := engine.LoadTranscript(context.Background(), store, execution.ID, "42")
-	if err != nil {
-		t.Fatalf("LoadTranscript (pre-cancellation): %v", err)
-	}
-	if len(transcript) != 2 {
-		t.Fatalf("got %d transcript events before cancellation, want 2 (persisted incrementally, not batched at run end): %+v", len(transcript), transcript)
-	}
-	if transcript[0].Text != "starting work" {
-		t.Fatalf("transcript[0] = %+v, want the first emitted message", transcript[0])
-	}
-	if transcript[1].ToolName != "Bash" || transcript[1].ToolCallID != "tool-1" {
-		t.Fatalf("transcript[1] = %+v, want the emitted tool call", transcript[1])
-	}
-
+	// Batching defers persistence to ~250ms intervals; the guarantee that
+	// guards a cancelled run's tail is the final Close on Execute's return
+	// (issue 489), asserted below, not synchronous per-emit writes. Cancel
+	// now so Execute returns and its cancel-immune Close runs.
 	cancel()
 	if execErr := <-done; execErr == nil {
 		t.Fatalf("ExecuteInExecution err = nil, want non-nil (the run was cancelled mid-stream)")
@@ -207,6 +197,12 @@ func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing
 	}
 	if len(final) != 2 {
 		t.Fatalf("got %d transcript events after cancellation, want 2 — the last recorded event must be the one immediately before the wedge, not lost", len(final))
+	}
+	if final[0].Text != "starting work" {
+		t.Fatalf("final[0] = %+v, want the first emitted message", final[0])
+	}
+	if final[1].ToolName != "Bash" || final[1].ToolCallID != "tool-1" {
+		t.Fatalf("final[1] = %+v, want the emitted tool call", final[1])
 	}
 }
 

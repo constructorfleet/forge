@@ -7,7 +7,10 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 )
 
-func TestTranscriptRecorder_AssignsSeqInArrivalOrder(t *testing.T) {
+// TestTranscriptRecorder_AssignsStableSeqAtEmit verifies Seq is a stable
+// per-run arrival ordinal assigned once at Emit (ADR 0030) and never
+// renumbered on read: Events() returns the exact seqs assigned at emit.
+func TestTranscriptRecorder_AssignsStableSeqAtEmit(t *testing.T) {
 	r := agent.NewTranscriptRecorder()
 	r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Text: "first"})
 	r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventToolCall, ToolName: "Bash"})
@@ -99,13 +102,13 @@ func TestTranscriptRecorder_PreservesCallerSuppliedTimestamp(t *testing.T) {
 	}
 }
 
-// TestTranscriptRecorder_BoundedRecorderDropsOldestAndMarksTruncation is
-// issue 36's bounded-truncation requirement: exceeding max must not
-// silently keep an unlabelled sliver — it evicts the oldest event and
-// Events() must lead with an explicit TranscriptEventTruncation marker
-// reporting the drop count, followed by the most-recent max events in
-// order.
-func TestTranscriptRecorder_BoundedRecorderDropsOldestAndMarksTruncation(t *testing.T) {
+// TestTranscriptRecorder_StableSeqLeavesEvictionGaps verifies the ADR 0030
+// stable-seq contract under a bounded recorder: when events are evicted the
+// retained events keep their original emit-time seqs (never renumbered), so
+// the reader sees a gap where eviction happened rather than a dense
+// re-sequenced window. No synthetic TRUNCATION row is synthesized: storage
+// no longer persists it (the drop is implicit in the gap).
+func TestTranscriptRecorder_StableSeqLeavesEvictionGaps(t *testing.T) {
 	r := agent.NewBoundedTranscriptRecorder(2, func() time.Time { return time.Now() })
 	r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Text: "one"})
 	r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Text: "two"})
@@ -113,17 +116,39 @@ func TestTranscriptRecorder_BoundedRecorderDropsOldestAndMarksTruncation(t *test
 	r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Text: "four"})
 
 	events := r.Events()
-	if len(events) != 3 {
-		t.Fatalf("got %d events, want 3 (1 truncation marker + 2 retained): %+v", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 retained: %+v", len(events), events)
 	}
-	if events[0].Type != agent.TranscriptEventTruncation || events[0].Seq != 0 {
-		t.Fatalf("events[0] = %+v, want a leading TranscriptEventTruncation marker at Seq 0", events[0])
+	// The two most recent events keep their original stable seqs (2, 3),
+	// leaving an eviction gap at seqs 0 and 1.
+	if events[0].Text != "three" || events[0].Seq != 2 {
+		t.Fatalf("events[0] = %+v, want 'three' at stable seq 2", events[0])
 	}
-	if events[1].Text != "three" || events[1].Seq != 1 {
-		t.Fatalf("events[1] = %+v, want the third emitted event at Seq 1", events[1])
+	if events[1].Text != "four" || events[1].Seq != 3 {
+		t.Fatalf("events[1] = %+v, want 'four' at stable seq 3", events[1])
 	}
-	if events[2].Text != "four" || events[2].Seq != 2 {
-		t.Fatalf("events[2] = %+v, want the fourth emitted event at Seq 2", events[2])
+	if events[0].Type == agent.TranscriptEventTruncation {
+		t.Fatalf("events[0] = %+v, want no synthesized TRUNCATION marker", events[0])
+	}
+}
+
+// TestTranscriptRecorder_EmitCountReportsDropFloor verifies the recorder
+// reports how many events were emitted versus how many are retained, so a
+// caller (the sink) knows the lowest retained seq — the eviction floor — and
+// that eviction happened, without a synthetic TRUNCATION row.
+func TestTranscriptRecorder_EmitCountReportsDropFloor(t *testing.T) {
+	r := agent.NewBoundedTranscriptRecorder(2, func() time.Time { return time.Now() })
+	for _, text := range []string{"a", "b", "c", "d", "e"} {
+		r.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Text: text})
+	}
+	if got := r.Emitted(); got != 5 {
+		t.Fatalf("Emitted() = %d, want 5", got)
+	}
+	if got := r.FirstSeq(); got != 3 {
+		t.Fatalf("FirstSeq() = %d, want 3 (eviction floor: seqs 0,1,2 dropped)", got)
+	}
+	if got := len(r.Events()); got != 2 {
+		t.Fatalf("len(Events()) = %d, want 2 retained", got)
 	}
 }
 
@@ -138,8 +163,5 @@ func TestTranscriptRecorder_UnboundedRecorderNeverTruncates(t *testing.T) {
 	events := r.Events()
 	if len(events) != 10 {
 		t.Fatalf("got %d events, want 10 (unbounded)", len(events))
-	}
-	if events[0].Type == agent.TranscriptEventTruncation {
-		t.Fatalf("events[0] = %+v, want no truncation marker for an unbounded recorder", events[0])
 	}
 }

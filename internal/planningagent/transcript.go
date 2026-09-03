@@ -2,6 +2,7 @@ package planningagent
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -23,12 +24,16 @@ const TranscriptPhase = "planning"
 const TranscriptBackendName = "planning"
 
 // maxTranscriptEvents bounds how many TranscriptEvents one planning
-// invocation retains and persists, mirroring internal/engine's identical
-// cap: a chatty agent must not force Forge to hold or persist an unbounded
-// transcript. Exceeding it evicts the oldest event and surfaces a single
-// TRUNCATION marker, so a reader sees explicitly that the persisted window
-// is the most recent N events.
+// invocation retains in memory, mirroring internal/engine's identical cap: a
+// chatty agent must not force Forge to hold an unbounded transcript.
+// Exceeding it evicts the oldest retained event, leaving a seq gap the
+// reader sees; the SQL retention cap is enforced separately at the store.
 const maxTranscriptEvents = 500
+
+// defaultFlushInterval is how long a batched transcript flush waits for more
+// emits, debouncing rapid events into a single write (issue 489), mirroring
+// internal/engine's sink.
+const defaultFlushInterval = 250 * time.Millisecond
 
 // TranscriptStore is the subset of storage.Store an AgentBackend needs to
 // record a planning invocation's agent_runs row and its transcript,
@@ -37,7 +42,7 @@ const maxTranscriptEvents = 500
 type TranscriptStore interface {
 	StartAgentRun(ctx context.Context, run storage.AgentRun) (int64, error)
 	FinalizeAgentRun(ctx context.Context, agentRunID int64, run storage.AgentRun) error
-	ReplaceTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []storage.TranscriptEvent) error
+	RecordTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []storage.TranscriptEvent) error
 }
 
 // toStorageTranscriptEvents translates agent.TranscriptEvents (the
@@ -85,28 +90,101 @@ type persistingTranscriptSink struct {
 	// InvokeRequest.Key naming which planning stage produced the event.
 	phase, subagent string
 	recorder        *agent.TranscriptRecorder
+	flushInterval   time.Duration
+
+	mu             sync.Mutex
+	lastFlushedSeq int
+	timer          *time.Timer
+	closed         bool
 }
 
 func newPersistingTranscriptSink(ctx context.Context, store TranscriptStore, executionID, issueID string, agentRunID int64, subagent string, now func() time.Time) *persistingTranscriptSink {
 	return &persistingTranscriptSink{
-		ctx:         ctx,
-		store:       store,
-		executionID: executionID,
-		issueID:     issueID,
-		agentRunID:  agentRunID,
-		phase:       TranscriptPhase,
-		subagent:    subagent,
-		recorder:    agent.NewBoundedTranscriptRecorder(maxTranscriptEvents, now),
+		ctx:            ctx,
+		store:          store,
+		executionID:    executionID,
+		issueID:        issueID,
+		agentRunID:     agentRunID,
+		phase:          TranscriptPhase,
+		subagent:       subagent,
+		recorder:       agent.NewBoundedTranscriptRecorder(maxTranscriptEvents, now),
+		lastFlushedSeq: -1,
 	}
 }
 
 // Emit implements agent.TranscriptSink. Persistence is best-effort, the
 // same contract internal/engine documents: a storage failure here is a
 // durability gap for this invocation's transcript, never a reason to fail
-// the planning call in progress.
+// the planning call in progress. Emit schedules a debounced batch flush on
+// its own goroutine; Close guarantees the final tail is flushed
+// synchronously.
 func (s *persistingTranscriptSink) Emit(event agent.TranscriptEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.recorder.Emit(event)
-	_ = s.store.ReplaceTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(s.recorder.Events(), s.phase, s.subagent))
+	interval := s.flushInterval
+	if interval <= 0 {
+		interval = defaultFlushInterval
+	}
+	if s.timer == nil {
+		s.timer = time.AfterFunc(interval, func() { s.flush() })
+	} else {
+		s.timer.Reset(interval)
+	}
+}
+
+// flush persists all events the recorder retains above the high-water mark,
+// appending only unflushed seqs. Best-effort: a storage error drops the batch
+// without advancing the watermark, so a later flush retries it.
+func (s *persistingTranscriptSink) flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.flushLocked()
+}
+
+func (s *persistingTranscriptSink) flushLocked() {
+	events := s.recorder.Events()
+	if len(events) == 0 {
+		return
+	}
+	var unflushed []agent.TranscriptEvent
+	highWater := s.lastFlushedSeq
+	for _, event := range events {
+		if event.Seq > s.lastFlushedSeq {
+			unflushed = append(unflushed, event)
+			if event.Seq > highWater {
+				highWater = event.Seq
+			}
+		}
+	}
+	if len(unflushed) == 0 {
+		return
+	}
+	if err := s.store.RecordTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(unflushed, s.phase, s.subagent)); err != nil {
+		return
+	}
+	s.lastFlushedSeq = highWater
+}
+
+// Close performs the run's final synchronous flush on context.WithoutCancel so
+// the tail survives a cancelled run. Barrier-synchronized with the debounced
+// async flush: the monotonic watermark prevents either from double-appending a
+// seq. Emit after Close is a no-op.
+func (s *persistingTranscriptSink) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	s.ctx = context.WithoutCancel(s.ctx)
+	s.flushLocked()
 }
 
 var _ agent.TranscriptSink = (*persistingTranscriptSink)(nil)

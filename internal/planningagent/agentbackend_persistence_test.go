@@ -184,7 +184,7 @@ func (failingTranscriptStore) FinalizeAgentRun(context.Context, int64, storage.A
 	return errors.New("store down")
 }
 
-func (failingTranscriptStore) ReplaceTranscriptEvents(context.Context, string, string, int64, []storage.TranscriptEvent) error {
+func (failingTranscriptStore) RecordTranscriptEvents(context.Context, string, string, int64, []storage.TranscriptEvent) error {
 	return errors.New("store down")
 }
 

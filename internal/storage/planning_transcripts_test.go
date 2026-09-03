@@ -56,7 +56,7 @@ func TestStartAgentRun_AcceptsPlanningScopedIdentifiers(t *testing.T) {
 	}
 }
 
-func TestReplaceTranscriptEvents_AcceptsPlanningScopedIdentifiers(t *testing.T) {
+func TestRecordTranscriptEvents_AcceptsPlanningScopedIdentifiers(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
@@ -80,8 +80,8 @@ func TestReplaceTranscriptEvents_AcceptsPlanningScopedIdentifiers(t *testing.T) 
 		Phase:      "planning",
 		Subagent:   "specification-review",
 	}}
-	if err := store.ReplaceTranscriptEvents(ctx, "feature-planning", "feature-planning", runID, want); err != nil {
-		t.Fatalf("ReplaceTranscriptEvents with planning identifiers: %v", err)
+	if err := store.RecordTranscriptEvents(ctx, "feature-planning", "feature-planning", runID, want); err != nil {
+		t.Fatalf("RecordTranscriptEvents with planning identifiers: %v", err)
 	}
 
 	got, err := store.TranscriptEventsByIssue(ctx, "feature-planning", "feature-planning")
@@ -106,12 +106,12 @@ func TestTranscriptEvents_StillRequireAnAgentRun(t *testing.T) {
 	// transcript_events.agent_run_id -> agent_runs(id) survives migration
 	// 0020: planning agent_runs rows live in agent_runs too, so that FK
 	// stays meaningful and must still reject an orphan transcript.
-	err := store.ReplaceTranscriptEvents(ctx, "feature-planning", "feature-planning", 4242, []storage.TranscriptEvent{{
+	err := store.RecordTranscriptEvents(ctx, "feature-planning", "feature-planning", 4242, []storage.TranscriptEvent{{
 		Seq:        1,
 		Type:       "MESSAGE",
 		OccurredAt: time.Now(),
 	}})
 	if err == nil {
-		t.Fatal("ReplaceTranscriptEvents against an unknown agent_run_id: want error, got nil")
+		t.Fatal("RecordTranscriptEvents against an unknown agent_run_id: want error, got nil")
 	}
 }

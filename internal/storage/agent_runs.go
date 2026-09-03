@@ -142,9 +142,35 @@ func appendAgentRunEvent(ctx context.Context, tx *sql.Tx, run AgentRun) error {
 
 // AgentRunsByExecution returns every AgentRun recorded for executionID in
 // insertion order.
+func (s *SQLiteStore) LiveRuns(ctx context.Context) ([]LiveRun, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, execution_id, issue_id
+		FROM agent_runs
+		ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("storage: live runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var runs []LiveRun
+	for rows.Next() {
+		var run LiveRun
+		if err := rows.Scan(&run.AgentRunID, &run.ExecutionID, &run.IssueID); err != nil {
+			return nil, fmt.Errorf("storage: live runs: scan: %w", err)
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: live runs: %w", err)
+	}
+	return runs, nil
+}
+
+// AgentRunsByExecution returns every AgentRun recorded for executionID in
+// insertion order.
 func (s *SQLiteStore) AgentRunsByExecution(ctx context.Context, executionID string) ([]AgentRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens
+		SELECT id, execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens
 		FROM agent_runs
 		WHERE execution_id = ?
 		ORDER BY id`,
@@ -160,7 +186,7 @@ func (s *SQLiteStore) AgentRunsByExecution(ctx context.Context, executionID stri
 // Execution, ordered by insertion.
 func (s *SQLiteStore) AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]AgentRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens
+		SELECT id, execution_id, issue_id, backend, started_at, finished_at, result, context_bytes, input_tokens, output_tokens
 		FROM agent_runs
 		WHERE execution_id = ? AND issue_id = ?
 		ORDER BY id`,
@@ -184,7 +210,7 @@ func scanAgentRuns(rows *sql.Rows, contextMsg string) ([]AgentRun, error) {
 			outputTokens          sql.NullInt64
 		)
 		if err := rows.Scan(
-			&run.ExecutionID, &run.IssueID, &run.Backend, &startedAt, &finishedAt,
+			&run.ID, &run.ExecutionID, &run.IssueID, &run.Backend, &startedAt, &finishedAt,
 			&run.Result, &run.ContextBytes, &inputTokens, &outputTokens,
 		); err != nil {
 			return nil, fmt.Errorf("%s: scan agent run: %w", contextMsg, err)
