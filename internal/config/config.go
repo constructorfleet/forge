@@ -344,6 +344,19 @@ type AgentConfig struct {
 	// non-streaming response, which has no output stream to reset a
 	// deadline against, so there the value bounds the whole request.
 	Timeout time.Duration `yaml:"timeout"`
+
+	// EnvPassthrough lists additional environment variable NAMES to forward
+	// to a CLI Agent subprocess, on top of each Adapter's base allowlist and
+	// default auth variables. Forwarding is opt-in because the Adapters
+	// sanitize the subprocess environment, so a secret such as a tracker
+	// token never reaches the Agent by accident. Without this knob an
+	// operator who authenticates by a non-default path — Bedrock or Vertex,
+	// which need AWS_PROFILE, AWS_REGION, CLAUDE_CODE_USE_BEDROCK, or the
+	// GOOGLE equivalents — cannot run any CLI Adapter at all.
+	//
+	// Each entry is a name, not an assignment: Forge reads the value from
+	// its own environment. An entry that names an unset variable is skipped.
+	EnvPassthrough []string `yaml:"env_passthrough"`
 }
 
 // AgentPermissionMode selects the Claude Code CLI's `--permission-mode`

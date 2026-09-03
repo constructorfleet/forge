@@ -208,7 +208,8 @@ execution:
 	if cfg.Retry != def.Retry {
 		t.Errorf("Retry = %+v, want default %+v", cfg.Retry, def.Retry)
 	}
-	if cfg.Agent != def.Agent {
+	if cfg.Agent.Provider != def.Agent.Provider || cfg.Agent.PermissionMode != def.Agent.PermissionMode ||
+		cfg.Agent.Timeout != def.Agent.Timeout || !slices.Equal(cfg.Agent.EnvPassthrough, def.Agent.EnvPassthrough) {
 		t.Errorf("Agent = %+v, want default %+v", cfg.Agent, def.Agent)
 	}
 }
@@ -629,6 +630,46 @@ func TestLoad_InvalidAgentTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agent.timeout") {
 		t.Errorf("Load() error = %v, want it to identify agent.timeout", err)
+	}
+}
+
+func TestLoad_AgentEnvPassthroughParsesList(t *testing.T) {
+	path := writeTemp(t, "agent:\n  env_passthrough: [AWS_PROFILE, CLAUDE_CODE_USE_BEDROCK]\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"AWS_PROFILE", "CLAUDE_CODE_USE_BEDROCK"}
+	if !slices.Equal(cfg.Agent.EnvPassthrough, want) {
+		t.Fatalf("Agent.EnvPassthrough = %v, want %v", cfg.Agent.EnvPassthrough, want)
+	}
+}
+
+func TestDefault_AgentEnvPassthroughIsEmpty(t *testing.T) {
+	if got := Default().Agent.EnvPassthrough; len(got) != 0 {
+		t.Fatalf("Default().Agent.EnvPassthrough = %v, want empty", got)
+	}
+}
+
+func TestLoad_InvalidAgentEnvPassthrough(t *testing.T) {
+	// Rejects a name that is empty, holds a value, or holds whitespace:
+	// SanitizedEnv looks up names only, so such an entry never matches.
+	tests := map[string]string{
+		"empty":      "agent:\n  env_passthrough: [\"\"]\n",
+		"assignment": "agent:\n  env_passthrough: [AWS_PROFILE=engUsers]\n",
+		"whitespace": "agent:\n  env_passthrough: [\"AWS PROFILE\"]\n",
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(writeTemp(t, body))
+			if err == nil {
+				t.Fatal("Load() error = nil, want validation error")
+			}
+			if !strings.Contains(err.Error(), "agent.env_passthrough") {
+				t.Errorf("Load() error = %v, want it to identify agent.env_passthrough", err)
+			}
+		})
 	}
 }
 
