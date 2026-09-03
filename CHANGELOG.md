@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.1](https://github.com/constructorfleet/forge/compare/forge-v0.30.0...forge-v0.30.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* sync GitLab native dependency links ([#440](https://github.com/constructorfleet/forge/issues/440)) ([dc34e7c](https://github.com/constructorfleet/forge/commit/dc34e7c3ffa55c8fb843040e655cb61fd65ab95b))
+
 ## [0.30.0](https://github.com/constructorfleet/forge/compare/forge-v0.29.4...forge-v0.30.0) (2026-09-03)
 
 
