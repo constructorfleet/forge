@@ -292,6 +292,32 @@ func TestExecute_ReviewModeReturnsRawFinalTextAsSummary(t *testing.T) {
 	}
 }
 
+// TestExecute_ReviewModeFindingAboutRateLimitingIsNotMisclassified is the
+// regression test for issue #416's review fix: a legitimate bugs-axis
+// finding whose message happens to discuss rate limiting/quota concepts
+// must not be misclassified as a provider limit and discarded — detection
+// is scoped to stdout/stderr, and stdout here carries only the ordinary
+// findings envelope, not a provider error.
+func TestExecute_ReviewModeFindingAboutRateLimitingIsNotMisclassified(t *testing.T) {
+	var calls []recordedCall
+	envelope := `{"axis":"bugs","findings":[{"severity":"HIGH","confidence":0.9,"file":"main.go","line":42,"message":"Missing rate limit handling could allow too many requests"}],"assurances":[]}`
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":` + mustJSONString(t, envelope) + "}\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	req := baseRequest()
+	req.Mode = agent.ModeReview
+	result, err := a.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED for a legitimate finding that merely discusses rate limiting", result.Status)
+	}
+	if strings.TrimSpace(result.Summary) != envelope {
+		t.Fatalf("Summary = %q, want the raw findings envelope %q preserved", result.Summary, envelope)
+	}
+}
+
 // TestExecute_ReviewModeEmptyOutputFails covers the one failure review mode
 // can detect on its own: an empty final message means the axis produced no
 // reviewable output, which must surface as FAILED (so the reviewer's
@@ -507,6 +533,45 @@ func TestExecute_NonZeroExitWithoutStructuredResultIsFailed(t *testing.T) {
 	}
 	if !strings.Contains(result.Summary, "some partial output") {
 		t.Fatalf("Summary = %q, want stdout captured", result.Summary)
+	}
+}
+
+func TestExecute_ProviderLimitStderrIsProviderLimit(t *testing.T) {
+	var calls []recordedCall
+	a := &Adapter{Runner: newFakeRunner(&calls, "", "Error: rate limit exceeded, please retry later", 1, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusProviderLimit {
+		t.Fatalf("Status = %q, want PROVIDER_LIMIT", result.Status)
+	}
+	if !strings.Contains(result.Summary, "provider limit reached") {
+		t.Fatalf("Summary = %q, want it to name the provider limit", result.Summary)
+	}
+}
+
+func TestExecute_ImplementedSummaryAboutRateLimitingIsNotMisclassified(t *testing.T) {
+	// A completed implementation can legitimately describe rate-limiting
+	// work in its own summary without that being the provider's own error
+	// (issue #416 review fix): detection must not scan finalText when a
+	// valid {status, summary} result already parsed.
+	var calls []recordedCall
+	stdout := "```json\n" +
+		`{"status": "IMPLEMENTED", "summary": "Implemented a 429 too many requests response for the rate limiter."}` +
+		"\n```\n"
+	a := &Adapter{Runner: newFakeRunner(&calls, stdout, "", 0, nil)}
+
+	result, err := a.Execute(context.Background(), baseRequest())
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %q, want IMPLEMENTED for a legitimate summary that merely discusses rate limiting", result.Status)
+	}
+	if result.Summary != "Implemented a 429 too many requests response for the rate limiter." {
+		t.Fatalf("Summary = %q, unexpected", result.Summary)
 	}
 }
 

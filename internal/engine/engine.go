@@ -83,6 +83,13 @@ type WorkspaceRebaser interface {
 	Rebase(ctx context.Context, executionID, issueID, newBase string) (conflictPaths []string, err error)
 }
 
+// WorkspaceDiscarder is an optional capability of a WorkspaceCreator. It
+// discards uncommitted changes in an existing Workspace without removing
+// the Workspace.
+type WorkspaceDiscarder interface {
+	DiscardChanges(ctx context.Context, executionID, issueID string) error
+}
+
 // TargetTipResolver resolves the current tip of the target branch Workers
 // open pull requests against. RetryIssue uses it to refresh a retried
 // Issue's Worker base forward to that tip (ticket 29) instead of reusing
@@ -1092,6 +1099,25 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	}
 }
 
+func (e *Engine) discardWorkspaceChanges(ctx context.Context, executionID, issueID string) {
+	discarder, ok := e.Workspaces.(WorkspaceDiscarder)
+	if !ok {
+		return
+	}
+	if err := discarder.DiscardChanges(ctx, executionID, issueID); err != nil {
+		_ = e.appendEvent(ctx, executionID, issueID, "workspace.discard_failed", map[string]string{"error": err.Error()})
+	}
+}
+
+func providerLimitCoverageSummary(coverage []review.AxisCoverage) (string, bool) {
+	for _, c := range coverage {
+		if !c.Ran && c.ProviderLimit {
+			return c.Reason, true
+		}
+	}
+	return "", false
+}
+
 // toStorageTranscriptEvents translates agent.TranscriptEvents (this
 // package's Agent-facing capture type) into storage.TranscriptEvents (the
 // persisted shape), the same translation convention GateRun/ReviewRun
@@ -1529,6 +1555,13 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 		// RetryBudget.Review: operator-driven `forge retry`, not the repair
 		// loop, owns recovery here. The review.run Event recorded above carries
 		// the coverage gap for diagnosis (surfaced by status's latestFailure).
+		if summary, ok := providerLimitCoverageSummary(result.Coverage); ok {
+			issue, err := e.handleProviderLimit(ctx, executionID, issueID, workerRef(executionID, issueID), agent.AgentResult{
+				Status:  agent.StatusProviderLimit,
+				Summary: summary,
+			})
+			return issue, review.VerdictInconclusive, nil, err
+		}
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
 		return issue, review.VerdictInconclusive, nil, err
 	default:

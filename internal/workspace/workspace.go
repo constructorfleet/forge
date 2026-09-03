@@ -412,6 +412,41 @@ func (m *Manager) Validate(ctx context.Context, executionID, issueID string) (do
 	return domain.Workspace{IssueID: issueID, Path: path, Branch: entry.branch}, nil
 }
 
+// DiscardChanges resets the Workspace for executionID/issueID's working tree
+// to HEAD and removes untracked files, discarding any uncommitted changes an
+// Agent left behind (issue #416). A Worker that stops mid-attempt — for
+// example on a provider limit reached after the Agent had already written
+// files but before Forge committed them — leaves the worktree dirty; without
+// this, a later `forge retry` fails at its rebase precondition
+// ("cannot rebase: you have unstaged changes") instead of proceeding.
+//
+// Discarding an Issue with no Workspace (never created, or already cleaned
+// up) is not an error, matching Cleanup's own tolerance for a missing
+// Workspace.
+func (m *Manager) DiscardChanges(ctx context.Context, executionID, issueID string) error {
+	if err := validateIDs(executionID, issueID); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	path := m.path(executionID, issueID)
+	if _, ok, err := m.lookupWorktree(ctx, path); err != nil {
+		return err
+	} else if !ok {
+		return nil
+	}
+
+	if _, err := m.runGit(ctx, path, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("workspace: discard changes for issue %s: reset: %w", issueID, err)
+	}
+	if _, err := m.runGit(ctx, path, "clean", "-fd"); err != nil {
+		return fmt.Errorf("workspace: discard changes for issue %s: clean: %w", issueID, err)
+	}
+	return nil
+}
+
 // Cleanup removes the Workspace for executionID/issueID: its directory, its
 // `git worktree` registration, and its branch. Cleaning up a Workspace that
 // does not exist is not an error (any leftover directory at its path is

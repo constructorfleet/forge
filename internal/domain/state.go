@@ -80,12 +80,13 @@ func (e *InvalidTransitionError) Error() string {
 // every non-terminal state has, which is how an Issue absent from the newly
 // approved plan is closed as superseded).
 //
-// PROVIDER_LIMIT (issue 423) parks an Issue whose Agent stopped because the
-// model provider applied a rate or quota limit. It has one entry point:
+// PROVIDER_LIMIT parks an Issue whose Agent stopped because the model
+// provider applied a rate or quota limit. It has two entry points:
 //
 //   - IMPLEMENTING, when the Agent reports agent.StatusProviderLimit — the
-//     one stage whose agent-status switch routes an Agent-reported outcome to
-//     an Issue state.
+//     implementation Agent stopped before validation.
+//   - REVIEWING, when one Review axis reports agent.StatusProviderLimit and
+//     the Review cannot certify complete coverage.
 //
 // A provider limit is an external transient condition, not a defect in the
 // Agent's work, so Forge waits rather than repairs. The state is not
@@ -112,7 +113,7 @@ var transitions = map[IssueState][]IssueState{
 	// IMPLEMENTING and CIPending already use, since neither case is
 	// something an automated repair attempt should improvise past. See
 	// engine.escalateReviewToNeedsInfo.
-	StateReviewing:  {StateImplementing, StateCommitting, StateNeedsInfo, StateFailed},
+	StateReviewing:  {StateImplementing, StateCommitting, StateNeedsInfo, StateProviderLimit, StateFailed},
 	StateCommitting: {StatePRCreating, StateNeedsReplan, StateNeedsInfo, StateFailed},
 	StatePRCreating: {StateCIPending},
 	// CIPending -> NeedsInfo (issue 109, "PR supervision"): the CI

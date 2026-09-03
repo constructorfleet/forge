@@ -32,12 +32,13 @@ import (
 // A ceiling of N therefore tolerates N provider-limit stops for one Issue,
 // and the Nth stop is terminal.
 //
-// The Workspace is never removed here (the caller, Execute, simply does not
-// call Workspaces.Cleanup on this path), so the retried attempt starts from
-// the work the stopped attempt already produced. The Worker claim is
-// released, the same way handleNeedsInfo releases it, so the retry can claim
-// the Issue again.
+// The Workspace is not removed here. Uncommitted changes are discarded first
+// so the automatic retry can refresh the base without a dirty worktree
+// precondition failure. The Worker claim is released, the same way
+// handleNeedsInfo releases it, so the retry can claim the Issue again.
 func (e *Engine) handleProviderLimit(ctx context.Context, executionID, issueID, workerRef string, result agent.AgentResult) (domain.Issue, error) {
+	e.discardWorkspaceChanges(ctx, executionID, issueID)
+
 	issue, err := e.transition(ctx, executionID, issueID, domain.StateProviderLimit)
 	if err != nil {
 		return domain.Issue{}, err

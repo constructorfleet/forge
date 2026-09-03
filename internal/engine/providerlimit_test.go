@@ -3,6 +3,9 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +59,50 @@ func providerLimitEventData(t *testing.T, store *storage.SQLiteStore, executionI
 	}
 	t.Fatalf("no %s event found in %+v", eventType, events)
 	return nil
+}
+
+type dirtyProviderLimitAgent struct{}
+
+func (dirtyProviderLimitAgent) Execute(_ context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+	if err := os.WriteFile(filepath.Join(req.WorkspacePath, "partial.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		return agent.AgentResult{}, err
+	}
+	return agent.AgentResult{Status: agent.StatusProviderLimit, Summary: "codex adapter: provider limit reached: rate limit exceeded"}, nil
+}
+
+var _ agent.Agent = dirtyProviderLimitAgent{}
+
+func TestExecute_ProviderLimit_DiscardsUncommittedChangesBeforeParking(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	eng, store, _, base := newProviderLimitTestEngine(t,
+		domain.RetryLimits{Gate: 3, Review: 2, CI: 3, ProviderLimit: 3}, now)
+	eng.Agent = dirtyProviderLimitAgent{}
+
+	ctx := context.Background()
+	result, err := eng.Execute(ctx, "7", base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateProviderLimit {
+		t.Fatalf("final state = %s, want PROVIDER_LIMIT", result.Issue.State)
+	}
+
+	ws, err := eng.Workspaces.Validate(ctx, result.ExecutionID, "7")
+	if err != nil {
+		t.Fatalf("Validate workspace: %v", err)
+	}
+	status := gittest.RunGit(t, ws.Path, "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("git status --porcelain after provider-limit parking = %q, want clean", status)
+	}
+
+	issue, err := store.GetIssue(ctx, result.ExecutionID, "7")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.ProviderLimitRetryAt == nil {
+		t.Fatal("ProviderLimitRetryAt = nil, want a scheduled retry")
+	}
 }
 
 // TestExecute_ProviderLimit_ParksAndSchedulesBackoff is the headline test:

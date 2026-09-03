@@ -8,6 +8,47 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 )
 
+func TestModeResult_ReviewProviderLimitOutputIsProviderLimit(t *testing.T) {
+	finalText := "Error: rate limit exceeded, please retry later"
+	res, handled := ModeResult("codex", agent.ModeReview, finalText, finalText, "", 1)
+	if !handled {
+		t.Fatalf("ModeResult: handled = false, want true for ModeReview")
+	}
+	if res.Status != agent.StatusProviderLimit {
+		t.Fatalf("Status = %v, want PROVIDER_LIMIT", res.Status)
+	}
+	if !strings.Contains(res.Summary, ProviderLimitReason) {
+		t.Errorf("Summary = %q, want it to name %q", res.Summary, ProviderLimitReason)
+	}
+}
+
+func TestModeResult_ReviewFindingAboutRateLimitingIsNotMisclassified(t *testing.T) {
+	// A legitimate bugs-axis finding can discuss rate limiting as its
+	// subject without that being the provider's own error (issue #416
+	// review fix): detection must not scan finalText, only stdout/stderr.
+	finalText := "```json\n{\"findings\":[{\"severity\":\"warning\",\"message\":\"Missing rate limit handling could allow too many requests\"}]}\n```"
+	res, handled := ModeResult("codex", agent.ModeReview, finalText, "", "", 0)
+	if !handled {
+		t.Fatalf("ModeResult: handled = false, want true for ModeReview")
+	}
+	if res.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %v, want IMPLEMENTED for a legitimate finding that merely discusses rate limiting", res.Status)
+	}
+	if res.Summary != finalText {
+		t.Errorf("Summary = %q, want the findings envelope preserved verbatim", res.Summary)
+	}
+}
+
+func TestModeResult_ReviewOrdinaryOutputIsImplemented(t *testing.T) {
+	res, handled := ModeResult("codex", agent.ModeReview, "```json\n{\"findings\":[]}\n```", "", "", 0)
+	if !handled {
+		t.Fatalf("ModeResult: handled = false, want true for ModeReview")
+	}
+	if res.Status != agent.StatusImplemented {
+		t.Fatalf("Status = %v, want IMPLEMENTED for ordinary review output", res.Status)
+	}
+}
+
 func TestBuildPrompt_IncludesIssueAndResultContract(t *testing.T) {
 	req := agent.AgentRequest{
 		Issue: domain.Issue{ID: "42", Title: "Do the thing", State: domain.StateReady, Body: "Body text"},
