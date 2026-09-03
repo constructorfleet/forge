@@ -7,8 +7,8 @@ no store access, fake data only.
 
 ## Run
 
-    go run . -dump running -compact     # the decided frame
-    go run . -dump <scenario> [-compact]
+    go run . -dump running -twoline     # the decided frame
+    go run . -dump <scenario> [-twoline]
     go run . -bench                     # synthetic high-rate load over the ring buffer
 
 Scenarios: `running`, `expanded`, `paused`, `reattach`, `wedged`, `planning`, `empty`, `dead`.

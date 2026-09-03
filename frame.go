@@ -13,10 +13,10 @@ type worker struct {
 	Group    string // canonical grouping (#453): Working | Blocked | Finished
 	Elapsed  time.Duration
 	Attempt  int
-	Tool     string // current tool, "" when none
+	Tool     string        // current tool, "" when none
 	Live     bool          // heartbeat within 15s (#453)
 	BeatAge  time.Duration // since last heartbeat -- a different clock from Elapsed
-	Attn     bool   // needs the operator
+	Attn     bool          // needs the operator
 	Planning bool
 }
 
@@ -34,16 +34,13 @@ type frame struct {
 }
 
 // attnGlyph draws the eye to the Worker that needs attention (question 4).
+// Liveness is a separate column, so this one never reports it.
 // Colour is not load-bearing: the glyph carries the signal so the frame
 // survives a no-colour terminal.
 func attnGlyph(w worker) string {
 	switch {
 	case w.Attn:
 		return "!"
-	case w.Planning:
-		return " " // planning has no liveness claim at all (#443)
-	case !w.Live:
-		return "?"
 	case w.Tool != "":
 		return "*"
 	default:

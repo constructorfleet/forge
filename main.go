@@ -17,7 +17,7 @@ const (
 
 func main() {
 	dump := flag.String("dump", "", "render one named scenario and exit")
-	compact := flag.Bool("compact", false, "one line per worker")
+	twoline := flag.Bool("twoline", false, "render the REJECTED two-lines-per-worker variant for comparison")
 	bench := flag.Bool("bench", false, "synthetic high-rate load over the ring buffer")
 	flag.Parse()
 
@@ -25,7 +25,7 @@ func main() {
 	case *bench:
 		runBench()
 	case *dump != "":
-		fmt.Println(scenario(*dump, *compact))
+		fmt.Println(scenario(*dump, !*twoline))
 	default:
 		fmt.Fprintln(os.Stderr, "usage: proto -dump <scenario> | -bench")
 		os.Exit(2)

@@ -17,11 +17,11 @@ type event struct {
 }
 
 const (
-	glyphMessage  = " " // prose carries no glyph; the divider is enough
-	glyphCall     = "▸" // right triangle: invocation
-	glyphResult   = "└" // corner: pairs back to its call
-	glyphTrunc    = "░" // shade: a window boundary, not an error
-	glyphEvicted  = "░"
+	glyphMessage = " " // prose carries no glyph; the divider is enough
+	glyphCall    = "▸" // right triangle: invocation
+	glyphResult  = "└" // corner: pairs back to its call
+	glyphTrunc   = "░" // shade: a window boundary, not an error
+	glyphEvicted = "░"
 )
 
 // renderEvent maps one event to display lines. Tool calls collapse to a
