@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.30.0](https://github.com/constructorfleet/forge/compare/forge-v0.29.4...forge-v0.30.0) (2026-09-03)
+
+
+### Features
+
+* add GitLab SCM and CI adapter ([#435](https://github.com/constructorfleet/forge/issues/435)) ([9d790b8](https://github.com/constructorfleet/forge/commit/9d790b8b2ed866fb728373f836528c47726d00f8))
+* add remote worker pool placement ([#438](https://github.com/constructorfleet/forge/issues/438)) ([cbbefeb](https://github.com/constructorfleet/forge/commit/cbbefebdb7096c6803f5e91f3907a71688423aa4)), closes [#292](https://github.com/constructorfleet/forge/issues/292)
+
+
+### Bug Fixes
+
+* handle provider limits from CLI adapters ([#439](https://github.com/constructorfleet/forge/issues/439)) ([06b3923](https://github.com/constructorfleet/forge/commit/06b39238145e2bea978b0b4ca2f5b3c3bb82875e))
+
 ## [0.29.4](https://github.com/constructorfleet/forge/compare/forge-v0.29.3...forge-v0.29.4) (2026-09-02)
 
 
