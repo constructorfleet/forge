@@ -13,11 +13,13 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/clicommon"
@@ -79,6 +81,29 @@ func postJSON(ctx context.Context, client httpDoer, url, apiKeyEnvVar string, re
 		return resp.StatusCode, nil, fmt.Errorf("openai: read response %s: %w", url, err)
 	}
 	return resp.StatusCode, body, nil
+}
+
+// requestContext bounds one whole request to d (issue #455). Both Adapters
+// read a complete, non-streaming response, so there is no output stream to
+// reset an idle deadline against — unlike the CLI Adapters' idle timeout,
+// the bound here is the total request duration. d <= 0 disables the bound.
+func requestContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
+// timedOutResult reports the timeout of a request bounded by requestContext
+// as an ordinary FAILED outcome (err == nil), matching every other Agent
+// Adapter: a stalled provider is what the retry budget exists to recover
+// from, while an operator-driven cancellation aborts the run instead. It
+// returns handled == false when reqCtx did not exceed its own deadline.
+func timedOutResult(backendName string, reqCtx context.Context, d time.Duration) (res agent.AgentResult, handled bool) {
+	if !errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+		return agent.AgentResult{}, false
+	}
+	return failedResult(fmt.Sprintf("%s adapter: agent timed out after %s", backendName, d), ""), true
 }
 
 // buildResult resolves backendName's extracted response text into an

@@ -337,6 +337,12 @@ type AgentConfig struct {
 	// resets on every line of subprocess output, so a long-but-progressing
 	// run is never killed by it — only a genuine stall trips it. Must be
 	// positive; see Default for the shipped value.
+	//
+	// It applies to every provider. The CLI providers (claude-code, codex,
+	// opencode, pi) get the liveness timeout above. The HTTP providers
+	// (openai-responses, openai-chat-completions) read one complete,
+	// non-streaming response, which has no output stream to reset a
+	// deadline against, so there the value bounds the whole request.
 	Timeout time.Duration `yaml:"timeout"`
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/clicommon"
@@ -38,6 +39,11 @@ type ChatCompletionsAdapter struct {
 	// bearer credential from at call time. Defaults to defaultAPIKeyEnvVar
 	// ("OPENAI_API_KEY") when empty.
 	APIKeyEnvVar string
+
+	// Timeout bounds one whole request (see requestContext). Zero or less
+	// disables the bound; the default http.Client has no timeout of its own,
+	// so an unbounded Adapter hangs forever on a stalled endpoint.
+	Timeout time.Duration
 }
 
 // chatMessage is one entry of a Chat Completions request's messages array.
@@ -112,13 +118,18 @@ func (a *ChatCompletionsAdapter) Execute(ctx context.Context, req agent.AgentReq
 	}
 
 	reqBody := chatCompletionsRequest{Model: model, Messages: []chatMessage{{Role: "user", Content: prompt}}}
-	status, body, err := postJSON(ctx, client, baseURL+"/chat/completions", a.APIKeyEnvVar, reqBody)
+	reqCtx, cancel := requestContext(ctx, a.Timeout)
+	defer cancel()
+	status, body, err := postJSON(reqCtx, client, baseURL+"/chat/completions", a.APIKeyEnvVar, reqBody)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return agent.AgentResult{
 			Status:  agent.StatusFailed,
 			Summary: clicommon.DiagnosticSummary(fmt.Sprintf("openai-chat-completions adapter: cancelled: %v", ctxErr), string(body), ""),
 		}, fmt.Errorf("openai-chat-completions adapter: cancelled: %w", ctxErr)
+	}
+	if timeoutRes, handled := timedOutResult("openai-chat-completions", reqCtx, a.Timeout); handled {
+		return timeoutRes, nil
 	}
 	if err != nil {
 		return failedResult(fmt.Sprintf("openai-chat-completions adapter: request error: %v", err), ""), nil

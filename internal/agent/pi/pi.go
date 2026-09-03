@@ -8,6 +8,7 @@ package pi
 
 import (
 	"context"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/clicommon"
@@ -66,6 +67,11 @@ type Adapter struct {
 	// "pi" if empty.
 	Executable string
 
+	// Timeout bounds one agent invocation as an idle timeout: each line of
+	// output resets the deadline, so only a run that produces no output for
+	// Timeout is killed. Zero or less disables the bound.
+	Timeout time.Duration
+
 	// ExtraEnvPassthrough lists additional environment variable NAMES to
 	// forward to the subprocess beyond the base allowlist and
 	// defaultAuthEnvVars.
@@ -87,6 +93,7 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 		AllowedEnvVars:      allowedEnvVars,
 		AuthEnvVars:         defaultAuthEnvVars,
 		ExtraEnvPassthrough: a.ExtraEnvPassthrough,
+		Timeout:             a.Timeout,
 	}
 	return clicommon.ExecuteCLI(ctx, cfg, req)
 }
