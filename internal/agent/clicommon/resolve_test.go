@@ -1,6 +1,7 @@
 package clicommon
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -13,6 +14,16 @@ func TestResolve_NoStructuredResultIsFailed(t *testing.T) {
 	}
 	if res.Summary == "" {
 		t.Fatalf("Summary is empty, want diagnostics")
+	}
+}
+
+func TestResolve_NoStructuredResultWithProviderLimitStderrIsProviderLimit(t *testing.T) {
+	res := Resolve("codex", StructuredResult{}, false, 1, "", "Error: rate limit exceeded, retry after 60s")
+	if res.Status != agent.StatusProviderLimit {
+		t.Fatalf("Status = %v, want PROVIDER_LIMIT", res.Status)
+	}
+	if !strings.Contains(res.Summary, ProviderLimitReason) {
+		t.Errorf("Summary = %q, want it to name %q", res.Summary, ProviderLimitReason)
 	}
 }
 

@@ -16,6 +16,15 @@ import (
 // diagnostic messages.
 func Resolve(backendName string, structured StructuredResult, ok bool, exitCode int, stdout, stderr string) agent.AgentResult {
 	if !ok {
+		// A missing structured result is often not a genuine Agent failure:
+		// the provider CLI may have exited early on its own rate limit,
+		// quota, or usage-cap error before ever emitting the result envelope
+		// (issue #416). Detecting that here, before degrading to FAILED,
+		// keeps the true cause visible instead of hiding it behind "no
+		// structured result found".
+		if limited, line := DetectProviderLimit(stdout, stderr); limited {
+			return ProviderLimitResult(backendName, line, stdout, stderr)
+		}
 		return agent.AgentResult{
 			Status: agent.StatusFailed,
 			Summary: DiagnosticSummary(

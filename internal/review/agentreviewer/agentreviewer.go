@@ -41,11 +41,13 @@ package agentreviewer
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/agent/clicommon"
 	"github.com/Teagan42/forge/internal/review"
 )
 
@@ -261,7 +263,13 @@ func (r *Reviewer) Review(ctx context.Context, req review.Request) (review.Resul
 	var failedAxes []string
 	for i, ax := range axesList {
 		if unrecoverable[i] {
-			coverage[i] = review.AxisCoverage{Axis: ax.name, Ran: false, Reason: axisErrs[i].Error()}
+			var limitErr *providerLimitAxisError
+			coverage[i] = review.AxisCoverage{
+				Axis:          ax.name,
+				Ran:           false,
+				Reason:        axisErrs[i].Error(),
+				ProviderLimit: errors.As(axisErrs[i], &limitErr),
+			}
 			failedAxes = append(failedAxes, ax.name)
 			continue
 		}
@@ -328,6 +336,20 @@ func (r *Reviewer) runAxisWithRetry(ctx context.Context, req review.Request, ax 
 	return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: unrecoverable after %d attempt(s): %w", ax.name, axisMaxAttempts, lastErr)
 }
 
+// providerLimitAxisError marks one axis's unrecoverable error as caused by a
+// coding-agent provider rate-limit, quota, or usage-cap error, distinct from
+// a genuine Agent or code defect (issue #416). Review recognizes it via
+// errors.As to set review.AxisCoverage.ProviderLimit from this typed value
+// rather than matching Reason's free-text wording.
+type providerLimitAxisError struct {
+	axis    string
+	summary string
+}
+
+func (e *providerLimitAxisError) Error() string {
+	return fmt.Sprintf("agentreviewer: axis %s: %s: %s", e.axis, clicommon.ProviderLimitReason, e.summary)
+}
+
 // runAxis runs one axis as a single fresh Agent.Execute call and parses its
 // JSON findings envelope, returning the AgentResult's token usage alongside
 // it (issue #162) for Result.Envelopes.
@@ -349,6 +371,19 @@ func (r *Reviewer) runAxis(ctx context.Context, req review.Request, ax axis, par
 	result, err := r.Agent.Execute(ctx, agentReq)
 	if err != nil {
 		return envelope{}, nil, fmt.Errorf("agentreviewer: axis %s: execute: %w", ax.name, err)
+	}
+
+	// A provider limit (rate limit, quota, or usage cap) surfaces here as an
+	// AgentResult whose Summary only looks like a findings envelope — e.g.
+	// codex's raw error body — and would otherwise fail parseEnvelope with an
+	// opaque JSON error (issue #416, execution 7a4c56fc's reviewer path: "axis
+	// bugs: parse findings envelope: invalid character '{' after top-level
+	// value"). Returning the typed providerLimitAxisError, rather than a
+	// plain fmt.Errorf, lets Review recognize this case via errors.As and
+	// set AxisCoverage.ProviderLimit without depending on the wrapped
+	// error chain's exact wording.
+	if result.Status == agent.StatusProviderLimit {
+		return envelope{}, result.Usage, &providerLimitAxisError{axis: ax.name, summary: result.Summary}
 	}
 
 	env, err := parseEnvelope(result.Summary)

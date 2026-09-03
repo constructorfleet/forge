@@ -147,6 +147,15 @@ func (a *axisRoutingAgent) programError(marker string, err error) {
 	a.errs[marker] = err
 }
 
+// programResult programs marker's axis to return result verbatim on every
+// call, letting tests exercise a Status other than StatusImplemented (e.g.
+// StatusProviderLimit) without an Execute-level error.
+func (a *axisRoutingAgent) programResult(marker string, result agent.AgentResult) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.programmed[marker] = result
+}
+
 // programFlaky programs marker's axis to fail its first failTimes calls
 // with err, then succeed with an AgentResult whose Summary is thenEnvelope
 // on every call after that.
@@ -534,6 +543,9 @@ func TestReview_OneAxisUnrecoverable_CleanSurvivors_Inconclusive(t *testing.T) {
 	if !strings.Contains(qualityCoverage.Reason, "boom") {
 		t.Errorf("quality Coverage.Reason = %q, want it to mention the underlying error", qualityCoverage.Reason)
 	}
+	if qualityCoverage.ProviderLimit {
+		t.Errorf("quality Coverage.ProviderLimit = true, want false (an ordinary Execute error is not a provider limit)")
+	}
 	if bugsCoverage == nil || !bugsCoverage.Ran {
 		t.Fatalf("bugs Coverage = %+v, want Ran=true", bugsCoverage)
 	}
@@ -563,6 +575,51 @@ func TestReview_OneAxisUnrecoverable_SurvivingBlocker_ChangesRequired(t *testing
 	}
 	if len(result.Findings) != 1 || result.Findings[0].Axis != "bugs" {
 		t.Fatalf("Findings = %+v, want the surviving bugs axis's blocker", result.Findings)
+	}
+}
+
+// TestReview_AxisReportsProviderLimit_ClearlyNamedInCoverageReason is issue
+// #416's reviewer-path acceptance criterion: an axis whose Agent.Execute
+// call returns StatusProviderLimit (a coding-agent provider's own rate
+// limit, quota, or usage-cap error) must degrade with a Coverage.Reason that
+// names the provider limit as the cause, not an opaque envelope-parse error
+// like execution 7a4c56fc's "invalid character '{' after top-level value".
+func TestReview_AxisReportsProviderLimit_ClearlyNamedInCoverageReason(t *testing.T) {
+	fake := newAxisRoutingAgent()
+	fake.programResult(bugsAxisMarker, agent.AgentResult{
+		Status:  agent.StatusProviderLimit,
+		Summary: "codex adapter: provider limit reached: Error: rate limit exceeded",
+	})
+	reviewer := agentreviewer.New(fake, 0.7)
+
+	result, err := reviewer.Review(context.Background(), review.Request{
+		Diff:  "diff",
+		Issue: newIssue(),
+	})
+	if err != nil {
+		t.Fatalf("Review() error = %v, want nil (axis failures degrade, never error the call)", err)
+	}
+	if result.Verdict != review.VerdictInconclusive {
+		t.Fatalf("Verdict = %q, want %q", result.Verdict, review.VerdictInconclusive)
+	}
+
+	var bugsCoverage *review.AxisCoverage
+	for i := range result.Coverage {
+		if result.Coverage[i].Axis == "bugs" {
+			bugsCoverage = &result.Coverage[i]
+		}
+	}
+	if bugsCoverage == nil || bugsCoverage.Ran {
+		t.Fatalf("bugs Coverage = %+v, want Ran=false", bugsCoverage)
+	}
+	if !strings.Contains(bugsCoverage.Reason, "provider limit reached") {
+		t.Errorf("bugs Coverage.Reason = %q, want it to name the provider limit", bugsCoverage.Reason)
+	}
+	if strings.Contains(bugsCoverage.Reason, "invalid character") {
+		t.Errorf("bugs Coverage.Reason = %q, want the provider-limit cause, not a raw JSON parse error", bugsCoverage.Reason)
+	}
+	if !bugsCoverage.ProviderLimit {
+		t.Errorf("bugs Coverage.ProviderLimit = false, want true (typed marker, not just Reason wording)")
 	}
 }
 

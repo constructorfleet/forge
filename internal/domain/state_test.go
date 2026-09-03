@@ -47,6 +47,7 @@ func legalTransitions() []struct {
 		{domain.StateNeedsReplan, domain.StateReady},
 		{domain.StateNeedsReplan, domain.StateCancelled},
 		{domain.StateImplementing, domain.StateProviderLimit},
+		{domain.StateReviewing, domain.StateProviderLimit},
 		{domain.StateProviderLimit, domain.StateReady},
 		{domain.StateProviderLimit, domain.StateFailed},
 		{domain.StateProviderLimit, domain.StateCancelled},
@@ -261,11 +262,14 @@ func TestProviderLimitOnlyExitsAreReadyFailedAndCancelled(t *testing.T) {
 	}
 }
 
-// TestProviderLimitIsReachableOnlyFromImplementing pins the one entry point:
-// the Agent reports a provider limit during the IMPLEMENTING stage. No gate,
-// review, or CI path enters this state.
-func TestProviderLimitIsReachableOnlyFromImplementing(t *testing.T) {
-	allowed := map[domain.IssueState]bool{domain.StateImplementing: true}
+// TestProviderLimitIsReachableOnlyFromAgentStages pins the entry points. The
+// Agent can report a provider limit during IMPLEMENTING. A review axis can
+// report one during REVIEWING.
+func TestProviderLimitIsReachableOnlyFromAgentStages(t *testing.T) {
+	allowed := map[domain.IssueState]bool{
+		domain.StateImplementing: true,
+		domain.StateReviewing:    true,
+	}
 	for _, from := range allStates() {
 		err := domain.ValidateTransition(from, domain.StateProviderLimit)
 		if allowed[from] {

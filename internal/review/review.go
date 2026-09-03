@@ -256,4 +256,11 @@ type AxisCoverage struct {
 	// Reason explains why Ran is false (e.g. the wrapped Execute/parse
 	// error after exhausting in-place retries). Empty when Ran is true.
 	Reason string
+
+	// ProviderLimit is true when Reason's cause is a coding-agent provider
+	// rate-limit, quota, or usage-cap error (agent.StatusProviderLimit),
+	// not a genuine Agent or code defect (issue #416). Callers use this
+	// typed field, not a Reason substring match, to decide whether to
+	// treat the axis's failure as transient.
+	ProviderLimit bool
 }

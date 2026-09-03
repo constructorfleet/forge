@@ -421,6 +421,58 @@ func TestCreate_ConcurrentDistinctIssuesAllSucceed(t *testing.T) {
 // retried Worker's branch has one commit of its own, the target branch
 // advanced with an unrelated commit in the meantime, and Rebase moves the
 // Workspace's branch onto that new tip without conflict.
+func TestDiscardChanges_RemovesUncommittedAndUntrackedFiles(t *testing.T) {
+	root, base := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	ws, err := mgr.Create(context.Background(), "exec1", "issue-42", base)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	trackedPath := filepath.Join(ws.Path, "README.md")
+	if _, err := os.Stat(trackedPath); err != nil {
+		t.Fatalf("expected README.md from base commit: %v", err)
+	}
+	if err := os.WriteFile(trackedPath, []byte("dirty edit\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	untrackedPath := filepath.Join(ws.Path, "untracked.txt")
+	if err := os.WriteFile(untrackedPath, []byte("new file\n"), 0o644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
+
+	if err := mgr.DiscardChanges(context.Background(), "exec1", "issue-42"); err != nil {
+		t.Fatalf("DiscardChanges: %v", err)
+	}
+
+	status := runGit(t, ws.Path, "status", "--porcelain")
+	if strings.TrimSpace(status) != "" {
+		t.Fatalf("git status --porcelain after DiscardChanges = %q, want clean", status)
+	}
+	if _, err := os.Stat(untrackedPath); !os.IsNotExist(err) {
+		t.Fatalf("untracked.txt still exists after DiscardChanges: err = %v", err)
+	}
+}
+
+func TestDiscardChanges_MissingWorkspaceIsNotAnError(t *testing.T) {
+	root, _ := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if err := mgr.DiscardChanges(context.Background(), "exec1", "no-such-issue"); err != nil {
+		t.Fatalf("DiscardChanges: %v, want nil for a Workspace that was never created", err)
+	}
+}
+
+func TestDiscardChanges_RejectsPathTraversalIDs(t *testing.T) {
+	root, _ := newTempRepo(t)
+	mgr := newManager(t, root)
+
+	if err := mgr.DiscardChanges(context.Background(), "..", "issue-1"); err == nil {
+		t.Fatalf("DiscardChanges: err = nil, want a validation error for a path-traversal executionID")
+	}
+}
+
 func TestRebase_MovesForwardCleanly(t *testing.T) {
 	root, base := newTempRepo(t)
 	mgr := newManager(t, root)

@@ -335,6 +335,49 @@ func TestExecute_ReviewInconclusive_RoutesToRetryableFailedWithoutConsumingRevie
 	}
 }
 
+func TestExecute_ReviewProviderLimit_RoutesToProviderLimitBackoff(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"36": {ID: "36"},
+	})
+	te.fake.ProgramResult("36", agent.AgentResult{Status: agent.StatusImplemented})
+
+	reviewer := review.NewFakeReviewer()
+	reviewer.ProgramResult("36", review.Result{
+		Verdict: review.VerdictInconclusive,
+		Summary: "review incomplete: bugs axis hit a provider limit",
+		Coverage: []review.AxisCoverage{
+			{Axis: "bugs", Ran: false, Reason: "agentreviewer: axis bugs: provider limit reached: rate limit exceeded", ProviderLimit: true},
+			{Axis: "quality", Ran: true},
+			{Axis: "docs", Ran: true},
+		},
+	})
+	te.eng.Reviewer = reviewer
+	te.eng.Diff = &stubDiff{diff: "diff --git a/main.go b/main.go"}
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "36", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateProviderLimit {
+		t.Fatalf("final state = %s, want PROVIDER_LIMIT", result.Issue.State)
+	}
+
+	issue, err := te.store.GetIssue(ctx, result.ExecutionID, "36")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.RetryBudget.ProviderLimitFailures() != 1 {
+		t.Fatalf("provider-limit stops = %d, want 1", issue.RetryBudget.ProviderLimitFailures())
+	}
+	if issue.RetryBudget.ReviewFailures() != 0 {
+		t.Fatalf("review failures = %d, want 0", issue.RetryBudget.ReviewFailures())
+	}
+	if issue.ProviderLimitRetryAt == nil {
+		t.Fatal("ProviderLimitRetryAt = nil, want a scheduled retry")
+	}
+}
+
 // TestExecute_QualityGateFails_ReviewerNeverInvoked guards against a
 // regression that would run Review even though Quality Gates failed: the
 // engine must only reach REVIEWING (and therefore only invoke Reviewer) via

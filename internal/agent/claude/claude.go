@@ -352,6 +352,21 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (outRes a
 		}, nil
 	}
 
+	// A provider limit (rate limit, quota, or usage cap) is detected before
+	// any other content-level classification below, since Claude Code may
+	// surface it as a CLI-level error result (issue #416, execution
+	// 7a4c56fc). Detection is scoped to stderr — the raw provider signal —
+	// not finalText: finalText is the model's own reconstructed output, and
+	// a completed implementation or review may legitimately discuss rate
+	// limiting/quotas as content, which scanning finalText unconditionally
+	// would misclassify as PROVIDER_LIMIT and discard (issue #416 review
+	// fix). finalText is scanned separately, below, only once a mode's own
+	// parse of it has already failed — i.e. only once it is known not to be
+	// a legitimate deliverable.
+	if limited, line := clicommon.DetectProviderLimit(stderr); limited {
+		return clicommon.ProviderLimitResult("claude", line, finalText, stderr), nil
+	}
+
 	// A CLI-level error result (a non-conforming request, permission-request
 	// the unattended run couldn't satisfy, etc.) is diagnosed distinctly
 	// from "the output didn't decode", since in that case there was never a
@@ -379,9 +394,14 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (outRes a
 	// verbatim as Summary via the shared clicommon.ModeResult — the one place
 	// every backend applies these modes' result semantics (a findings
 	// envelope, or a caller-schema-conforming result; empty output -> FAILED).
-	// finalText doubles as the diagnostic body, matching claude's earlier
-	// per-mode wording.
-	if modeRes, handled := clicommon.ModeResult("claude", req.Mode, finalText, finalText, stderr, exitCode); handled {
+	// finalText is passed for the diagnostic body (matching claude's earlier
+	// per-mode wording) and is one of the texts clicommon.ModeResult scans
+	// for a provider limit. The safeguard against misclassifying a
+	// review/structured deliverable that merely discusses rate limiting is
+	// not which text is passed here — it is ModeResult's
+	// looksLikeJSONDeliverable check, which skips the provider-limit scan
+	// once finalText already parses as a valid deliverable (issue #416).
+	if modeRes, handled := clicommon.ModeResult("claude", req.Mode, finalText, stdout, stderr, exitCode); handled {
 		return modeRes, nil
 	}
 
@@ -394,6 +414,15 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (outRes a
 		res, ok = parseStructuredResult(finalText)
 	}
 	if !ok {
+		// finalText is only scanned for a provider limit once it is known
+		// not to be a legitimate {status, summary} deliverable — parsing it
+		// as one has already failed above — so a completed implementation
+		// that legitimately discusses rate limiting/quotas in its own
+		// output is never misclassified as PROVIDER_LIMIT (issue #416
+		// review fix).
+		if limited, line := clicommon.DetectProviderLimit(finalText); limited {
+			return clicommon.ProviderLimitResult("claude", line, finalText, stderr), nil
+		}
 		return agent.AgentResult{
 			Status: agent.StatusFailed,
 			Summary: diagnosticSummary(

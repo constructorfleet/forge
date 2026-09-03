@@ -1,6 +1,7 @@
 package clicommon
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -78,7 +79,15 @@ func ModeResult(backendName string, mode agent.AgentMode, finalText, stdout, std
 	if mode != agent.ModeReview && mode != agent.ModeStructured {
 		return agent.AgentResult{}, false
 	}
-	if strings.TrimSpace(finalText) == "" {
+	trimmed := strings.TrimSpace(finalText)
+	if trimmed == "" {
+		// No deliverable was produced at all. A provider limit is one
+		// possible cause, checked here against stdout/stderr — the raw
+		// transport signal — before degrading to a generic "no output"
+		// FAILED.
+		if limited, line := DetectProviderLimit(stdout, stderr); limited {
+			return ProviderLimitResult(backendName, line, stdout, stderr), true
+		}
 		label := "review"
 		if mode == agent.ModeStructured {
 			label = "structured"
@@ -88,7 +97,36 @@ func ModeResult(backendName string, mode agent.AgentMode, finalText, stdout, std
 			Summary: DiagnosticSummary(fmt.Sprintf("%s adapter: %s produced no output (exit code %d)", backendName, label, exitCode), stdout, stderr),
 		}, true
 	}
+	// finalText is only scanned for a provider limit when it does not
+	// itself look like a parseable JSON deliverable (a review findings
+	// envelope, or a caller-schema result) — e.g. a raw, non-JSON error
+	// body a provider printed instead of ever producing one (issue #416,
+	// execution 7a4c56fc's reviewer path: codex's malformed envelope). A
+	// legitimate deliverable that merely discusses rate limiting or quotas
+	// as content parses as valid JSON and is never scanned, so it is never
+	// misclassified as PROVIDER_LIMIT and discarded.
+	if !looksLikeJSONDeliverable(trimmed) {
+		if limited, line := DetectProviderLimit(finalText, stdout, stderr); limited {
+			return ProviderLimitResult(backendName, line, stdout, stderr), true
+		}
+	}
 	return agent.AgentResult{Status: agent.StatusImplemented, Summary: finalText}, true
+}
+
+// looksLikeJSONDeliverable reports whether trimmed is plausibly a review
+// findings envelope or caller-schema result — as opposed to raw, non-JSON
+// text a provider printed instead (issue #416) — by extracting a fenced
+// ```json block when present, repairing the one cosmetic malformation
+// ParseStructuredResult also tolerates (a trailing comma before a closing
+// brace/bracket), and checking the result is syntactically valid JSON. This
+// is a structural heuristic, not a schema check: any well-formed JSON value
+// counts as a deliverable.
+func looksLikeJSONDeliverable(trimmed string) bool {
+	candidate := trimmed
+	if m := fencedJSONBlock.FindStringSubmatch(trimmed); m != nil {
+		candidate = strings.TrimSpace(m[1])
+	}
+	return json.Valid([]byte(repairTrailingCommas(candidate)))
 }
 
 // reviewRules is implement-mode Rules' read-only counterpart for
