@@ -767,6 +767,78 @@ func TestLoad_RemoteBackendParsesWorkerEndpoint(t *testing.T) {
 	}
 }
 
+func TestLoad_RemoteBackendParsesWorkerPool(t *testing.T) {
+	path := writeTemp(t, `execution:
+  backend: remote
+  worker:
+    pool:
+      enabled: true
+      auth_token_env: FORGE_WORKER_POOL_TOKEN
+      workers:
+        - id: worker-a
+          endpoint: https://worker-a.example.com:9090
+          agent_backends: [codex, opencode]
+          container_capable: true
+          capacity:
+            cpu: 8
+            memory_mb: 16384
+            slots: 4
+          load:
+            cpu: 1
+            memory_mb: 1024
+            slots: 1
+          labels:
+            region: us-west
+            gpu: "true"
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	pool := cfg.Execution.Worker.Pool
+	if !pool.Enabled {
+		t.Fatal("Execution.Worker.Pool.Enabled = false, want true")
+	}
+	if pool.AuthTokenEnv != "FORGE_WORKER_POOL_TOKEN" {
+		t.Errorf("Execution.Worker.Pool.AuthTokenEnv = %q, want FORGE_WORKER_POOL_TOKEN", pool.AuthTokenEnv)
+	}
+	if len(pool.Workers) != 1 {
+		t.Fatalf("Execution.Worker.Pool.Workers = %+v, want one worker", pool.Workers)
+	}
+	worker := pool.Workers[0]
+	if worker.ID != "worker-a" || worker.Endpoint != "https://worker-a.example.com:9090" {
+		t.Fatalf("pool worker = %+v, want worker-a endpoint", worker)
+	}
+	if !slices.Equal(worker.AgentBackends, []string{"codex", "opencode"}) {
+		t.Errorf("AgentBackends = %+v, want codex/opencode", worker.AgentBackends)
+	}
+	if !worker.ContainerCapable {
+		t.Error("ContainerCapable = false, want true")
+	}
+	if worker.Capacity.CPU != 8 || worker.Capacity.MemoryMB != 16384 || worker.Capacity.Slots != 4 {
+		t.Errorf("Capacity = %+v, want 8 CPU, 16384 MB, 4 slots", worker.Capacity)
+	}
+	if worker.Load.CPU != 1 || worker.Load.MemoryMB != 1024 || worker.Load.Slots != 1 {
+		t.Errorf("Load = %+v, want 1 CPU, 1024 MB, 1 slot", worker.Load)
+	}
+	if worker.Labels["region"] != "us-west" || worker.Labels["gpu"] != "true" {
+		t.Errorf("Labels = %+v, want region and gpu labels", worker.Labels)
+	}
+}
+
+func TestLoad_RemoteBackendRejectsPoolWorkerWithoutEndpoint(t *testing.T) {
+	path := writeTemp(t, "execution:\n  backend: remote\n  worker:\n    pool:\n      enabled: true\n      auth_token_env: FORGE_WORKER_POOL_TOKEN\n      workers:\n        - id: worker-a\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "execution.worker.pool.workers[0].endpoint") {
+		t.Errorf("Load() error = %v, want it to identify worker endpoint", err)
+	}
+}
+
 func TestLoad_NegativeRetryLimit(t *testing.T) {
 	path := writeTemp(t, "retry:\n  gate: -1\n")
 

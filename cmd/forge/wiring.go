@@ -922,6 +922,17 @@ func buildExecutionBackend(cfg config.Config, wsMgr *workspace.Manager, ag agent
 		resources := container.Resources{CPU: cfg.Execution.Container.CPU, Memory: cfg.Execution.Container.Memory}
 		return container.NewBackend(wsMgr, runtime, cfg.Execution.Container.Image, resources, nil), nil
 	case config.BackendRemote:
+		if cfg.Execution.Worker.Pool.Enabled {
+			registry, err := buildWorkerRegistry(cfg)
+			if err != nil {
+				return nil, err
+			}
+			requirements := remote.StaticRequirements(remote.ExecutionRequirements{
+				AgentBackend: cfg.Agent.Provider,
+				Resources:    remote.ResourceCapacity{Slots: 1},
+			})
+			return remote.NewPoolBackend(registry, requirements, buildRemoteRecoverFunc(store), store), nil
+		}
 		worker, err := buildWorkerClient(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("forge: remote worker preflight: %w", err)
@@ -1025,6 +1036,57 @@ func buildWorkerClient(cfg config.Config) (remote.WorkerClient, error) {
 		return nil, fmt.Errorf("%w: %s: %v", remote.ErrWorkerUnreachable, cfg.Execution.Worker.Endpoint, err)
 	}
 	return client, nil
+}
+
+func buildWorkerRegistry(cfg config.Config) (*remote.WorkerRegistry, error) {
+	authToken := os.Getenv(cfg.Execution.Worker.Pool.AuthTokenEnv)
+	if authToken == "" {
+		return nil, fmt.Errorf("forge: remote worker pool auth token env %s is empty", cfg.Execution.Worker.Pool.AuthTokenEnv)
+	}
+	registry := remote.NewWorkerRegistry(remote.RegistryConfig{AuthToken: authToken})
+	for _, workerCfg := range cfg.Execution.Worker.Pool.Workers {
+		client := httpworker.NewClient(workerCfg.Endpoint, &http.Client{Timeout: workerPreflightTimeout})
+		ctx, cancel := context.WithTimeout(context.Background(), workerPreflightTimeout)
+		err := client.Ping(ctx)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("forge: remote worker pool preflight: %w: %s: %v", remote.ErrWorkerUnreachable, workerCfg.Endpoint, err)
+		}
+		if err := registry.Register(context.Background(), remote.WorkerRegistration{
+			ID:        workerCfg.ID,
+			AuthToken: authToken,
+			Client:    client,
+			Capabilities: remote.WorkerCapabilities{
+				AgentBackends:    append([]string(nil), workerCfg.AgentBackends...),
+				ContainerCapable: workerCfg.ContainerCapable,
+				Capacity: remote.ResourceCapacity{
+					CPU:      workerCfg.Capacity.CPU,
+					MemoryMB: workerCfg.Capacity.MemoryMB,
+					Slots:    workerCfg.Capacity.Slots,
+				},
+				Labels: cloneStringMap(workerCfg.Labels),
+			},
+			Load: remote.ResourceLoad{
+				CPU:      workerCfg.Load.CPU,
+				MemoryMB: workerCfg.Load.MemoryMB,
+				Slots:    workerCfg.Load.Slots,
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("forge: register remote worker %s: %w", workerCfg.ID, err)
+		}
+	}
+	return registry, nil
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // buildPlanningBackend selects the planning Backend `forge plan` runs

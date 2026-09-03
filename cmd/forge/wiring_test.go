@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/agent"
@@ -563,6 +564,76 @@ func TestBuildExecutionBackend_RemoteWiresRealClientAgainstReachableWorker(t *te
 	}
 	if _, ok := backend.(*remote.Backend); !ok {
 		t.Fatalf("buildExecutionBackend = %T, want *remote.Backend", backend)
+	}
+}
+
+func TestBuildExecutionBackend_RemotePoolSelectsReachableWorker(t *testing.T) {
+	root, originPath, base := gittest.NewTempRepoWithOrigin(t)
+	wsMgr, err := workspace.NewManager(root)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	store := openPlanningStore(t)
+	ctx := context.Background()
+	if err := store.CreateExecution(ctx, domain.Execution{ID: "exec1", BaseRevision: base}); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := store.CreateIssue(ctx, domain.Issue{ExecutionID: "exec1", ID: "issue-42"}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+
+	workerARoot := t.TempDir()
+	runGit(t, workerARoot, "clone", "-q", originPath, ".")
+	workerAServer, err := httpworker.NewServer(workerARoot, "origin", agent.NewFakeAgent())
+	if err != nil {
+		t.Fatalf("httpworker.NewServer worker-a: %v", err)
+	}
+	workerATS := httptest.NewServer(workerAServer)
+	defer workerATS.Close()
+
+	workerBRoot := t.TempDir()
+	runGit(t, workerBRoot, "clone", "-q", originPath, ".")
+	workerBServer, err := httpworker.NewServer(workerBRoot, "origin", agent.NewFakeAgent())
+	if err != nil {
+		t.Fatalf("httpworker.NewServer worker-b: %v", err)
+	}
+	workerBTS := httptest.NewServer(workerBServer)
+	defer workerBTS.Close()
+
+	cfg := config.Default()
+	cfg.Agent.Provider = "codex"
+	cfg.Execution.Backend = config.BackendRemote
+	cfg.Execution.Worker.Pool.Enabled = true
+	cfg.Execution.Worker.Pool.AuthTokenEnv = "FORGE_WORKER_POOL_TOKEN"
+	t.Setenv("FORGE_WORKER_POOL_TOKEN", "secret")
+	cfg.Execution.Worker.Pool.Workers = []config.PoolWorkerConfig{
+		{
+			ID:            "worker-b",
+			Endpoint:      workerBTS.URL,
+			AgentBackends: []string{"codex"},
+			Capacity:      config.ResourceConfig{CPU: 8, MemoryMB: 8192, Slots: 4},
+			Load:          config.ResourceLoadConfig{Slots: 2},
+		},
+		{
+			ID:            "worker-a",
+			Endpoint:      workerATS.URL,
+			AgentBackends: []string{"codex"},
+			Capacity:      config.ResourceConfig{CPU: 8, MemoryMB: 8192, Slots: 4},
+		},
+	}
+
+	backend, err := buildExecutionBackend(cfg, wsMgr, agent.NewFakeAgent(), store)
+	if err != nil {
+		t.Fatalf("buildExecutionBackend: %v", err)
+	}
+	env, err := backend.Prepare(ctx, execution.WorkspaceRequest{ExecutionID: "exec1", IssueID: "issue-42", Base: base})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = env.Cleanup(context.Background()) })
+
+	if env.Workspace().Path == "" || !strings.Contains(env.Workspace().Path, workerARoot) {
+		t.Fatalf("Workspace path = %q, want selected worker-a root %q", env.Workspace().Path, workerARoot)
 	}
 }
 
