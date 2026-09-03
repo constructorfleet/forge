@@ -41,6 +41,50 @@ var terminalStates = map[IssueState]bool{
 // transitions.
 func (s IssueState) IsTerminal() bool { return terminalStates[s] }
 
+// StateGroup is the canonical coarse grouping of IssueState, shared by the
+// TUI's Worker roster and the status display so both read a state alike.
+// LOST is not an IssueState and has no group here.
+type StateGroup string
+
+const (
+	// GroupPending: not yet started.
+	GroupPending StateGroup = "pending"
+	// GroupWorking: Forge is actively working the Issue.
+	GroupWorking StateGroup = "working"
+	// GroupWaiting: a pull request exists; Forge waits on CI or repairs it.
+	GroupWaiting StateGroup = "waiting"
+	// GroupBlocked: parked until human input or a provider backoff clears.
+	GroupBlocked StateGroup = "blocked"
+	// GroupFailed: terminal, reached via retry-budget exhaustion.
+	GroupFailed StateGroup = "failed"
+	// GroupDone: terminal, successful or aborted.
+	GroupDone StateGroup = "done"
+)
+
+// Group returns the canonical coarse bucket for the state. Every IssueState
+// maps to exactly one bucket.
+func (s IssueState) Group() StateGroup {
+	switch s {
+	case StatePending, StateBlockedDependency, StateReady:
+		return GroupPending
+	case StateClaimed, StatePreparing, StateImplementing, StateValidating,
+		StateReviewing, StateCommitting, StatePRCreating:
+		return GroupWorking
+	case StateCIPending, StateCIFailed:
+		return GroupWaiting
+	case StateNeedsInfo, StateNeedsReplan, StateProviderLimit:
+		return GroupBlocked
+	case StateFailed:
+		return GroupFailed
+	case StateDone, StateCancelled:
+		return GroupDone
+	default:
+		// Zero value or an unknown state never group; keep it explicit so a
+		// future state that omits a bucket is caught by the table test.
+		return StateGroup("")
+	}
+}
+
 // InvalidTransitionError describes a rejected state transition attempt.
 type InvalidTransitionError struct {
 	From IssueState
