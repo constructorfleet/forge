@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
@@ -286,5 +287,98 @@ func TestExecuteCLI_ModeReviewEmptyOutputIsFailed(t *testing.T) {
 	res, _ := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{Mode: agent.ModeReview})
 	if res.Status != agent.StatusFailed {
 		t.Fatalf("Status = %v, want FAILED on empty review output", res.Status)
+	}
+}
+
+// wedgedRunner blocks until ctx is canceled, modelling an agent subprocess
+// that produces no output and never exits.
+func wedgedRunner() Runner {
+	return func(ctx context.Context, _ string, _ []string, _ string, _ []string, _ func(string)) (string, string, int, error) {
+		<-ctx.Done()
+		return "", "", -1, ctx.Err()
+	}
+}
+
+func TestExecuteCLI_TimeoutBoundsWedgedRun(t *testing.T) {
+	cfg := CLIConfig{
+		BackendName: "codex",
+		Runner:      wedgedRunner(),
+		Timeout:     20 * time.Millisecond,
+	}
+	res, err := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{})
+	if err != nil {
+		t.Fatalf("ExecuteCLI returned error %v, want nil (a timeout is an ordinary FAILED outcome)", err)
+	}
+	if res.Status != agent.StatusFailed {
+		t.Fatalf("Status = %v, want FAILED", res.Status)
+	}
+	if !strings.Contains(res.Summary, "timed out") {
+		t.Fatalf("Summary = %q, want it to report a timeout", res.Summary)
+	}
+}
+
+// The idle-reset tests keep progressInterval far below progressTimeout so a
+// slow scheduler cannot turn a progressing run into a false timeout, and run
+// for longer than progressTimeout so the reset is what keeps the run alive.
+const (
+	progressInterval = 25 * time.Millisecond
+	progressTimeout  = 500 * time.Millisecond
+	progressRunFor   = 2 * progressTimeout
+)
+
+// progressingRunner emits a line every progressInterval for progressRunFor,
+// then succeeds. requireOnLine asserts the touch hook exists at all.
+func progressingRunner(t *testing.T, requireOnLine bool) Runner {
+	t.Helper()
+	return func(ctx context.Context, _ string, _ []string, _ string, _ []string, onLine func(string)) (string, string, int, error) {
+		if requireOnLine && onLine == nil {
+			t.Error("onLine = nil, want a touch hook so a parser-less backend resets the deadline")
+			return "", "", -1, errors.New("no onLine hook")
+		}
+		for deadline := time.Now().Add(progressRunFor); time.Now().Before(deadline); {
+			select {
+			case <-ctx.Done():
+				return "", "", -1, ctx.Err()
+			case <-time.After(progressInterval):
+			}
+			onLine("progress")
+		}
+		return "```json\n{\"status\":\"IMPLEMENTED\",\"summary\":\"done\"}\n```\n", "", 0, nil
+	}
+}
+
+func TestExecuteCLI_TimeoutResetsWhileOutputArrives(t *testing.T) {
+	cfg := CLIConfig{BackendName: "codex", Runner: progressingRunner(t, false), Timeout: progressTimeout}
+	res, err := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{})
+	if err != nil {
+		t.Fatalf("ExecuteCLI: %v", err)
+	}
+	if res.Status != agent.StatusImplemented {
+		t.Fatalf("res = %+v, want IMPLEMENTED (a progressing run must not time out)", res)
+	}
+}
+
+// A backend with no StreamParser still resets the idle deadline per line.
+func TestExecuteCLI_TimeoutTouchesEvenWithoutStreamParser(t *testing.T) {
+	cfg := CLIConfig{BackendName: "opencode", Runner: progressingRunner(t, true), Timeout: progressTimeout}
+	res, err := ExecuteCLI(context.Background(), cfg, agent.AgentRequest{})
+	if err != nil {
+		t.Fatalf("ExecuteCLI: %v", err)
+	}
+	if res.Status != agent.StatusImplemented {
+		t.Fatalf("res = %+v, want IMPLEMENTED", res)
+	}
+}
+
+func TestExecuteCLI_ZeroTimeoutDoesNotBound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	cfg := CLIConfig{BackendName: "pi", Runner: wedgedRunner()}
+	res, err := ExecuteCLI(ctx, cfg, agent.AgentRequest{})
+	if err == nil {
+		t.Fatalf("ExecuteCLI: want the parent cancellation surfaced as an error, got nil")
+	}
+	if strings.Contains(res.Summary, "timed out") {
+		t.Fatalf("Summary = %q, want a cancellation, not an adapter timeout", res.Summary)
 	}
 }

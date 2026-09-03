@@ -876,16 +876,19 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 			PermissionMode: string(cfg.Agent.PermissionMode),
 			Timeout:        cfg.Agent.Timeout,
 		}, nil
+	// agent.timeout is provider-neutral, so every Adapter receives it: an
+	// operator who sets it must get a bounded run whichever provider runs
+	// (issue #455).
 	case "codex":
-		return &codex.Adapter{}, nil
+		return &codex.Adapter{Timeout: cfg.Agent.Timeout}, nil
 	case "opencode":
-		return &opencode.Adapter{}, nil
+		return &opencode.Adapter{Timeout: cfg.Agent.Timeout}, nil
 	case "pi":
-		return &pi.Adapter{}, nil
+		return &pi.Adapter{Timeout: cfg.Agent.Timeout}, nil
 	case "openai-responses":
-		return &openai.ResponsesAdapter{}, nil
+		return &openai.ResponsesAdapter{Timeout: cfg.Agent.Timeout}, nil
 	case "openai-chat-completions":
-		return &openai.ChatCompletionsAdapter{}, nil
+		return &openai.ChatCompletionsAdapter{Timeout: cfg.Agent.Timeout}, nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}

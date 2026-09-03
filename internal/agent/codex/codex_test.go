@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
@@ -185,5 +186,28 @@ func TestAdapter_SemanticProfileDeclaresNoNativeCapabilitiesViaMCP(t *testing.T)
 	}
 	if got != want {
 		t.Fatalf("SemanticProfile() = %+v, want %+v", got, want)
+	}
+}
+
+// TestAdapterTimeoutBoundsWedgedRun asserts the configured agent timeout
+// reaches this adapter, so a wedged, output-free run cannot hang forever
+// (issue #455).
+func TestAdapterTimeoutBoundsWedgedRun(t *testing.T) {
+	a := &Adapter{
+		Timeout: 20 * time.Millisecond,
+		Runner: func(ctx context.Context, _ string, _ []string, _ string, _ []string, _ func(string)) (string, string, int, error) {
+			<-ctx.Done()
+			return "", "", -1, ctx.Err()
+		},
+	}
+	res, err := a.Execute(context.Background(), agent.AgentRequest{})
+	if err != nil {
+		t.Fatalf("Execute returned error %v, want nil (a timeout is an ordinary FAILED outcome)", err)
+	}
+	if res.Status != agent.StatusFailed {
+		t.Fatalf("Status = %v, want FAILED", res.Status)
+	}
+	if !strings.Contains(res.Summary, "timed out") {
+		t.Fatalf("Summary = %q, want it to report a timeout", res.Summary)
 	}
 }

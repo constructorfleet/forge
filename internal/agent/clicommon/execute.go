@@ -3,6 +3,7 @@ package clicommon
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 )
@@ -52,6 +53,11 @@ type CLIConfig struct {
 	// the full stdout) for a CLI without a structured stream.
 	NewStreamParser func() StreamParser
 
+	// Timeout bounds one invocation as an idle timeout (see IdleTimeout):
+	// each stdout line resets the deadline, so only a run that produces no
+	// output for Timeout is killed. Zero or less disables the bound.
+	Timeout time.Duration
+
 	// AllowedEnvVars, AuthEnvVars, and ExtraEnvPassthrough together form the
 	// subprocess environment allowlist (see SanitizedEnv).
 	AllowedEnvVars      []string
@@ -96,21 +102,36 @@ func ExecuteCLI(ctx context.Context, cfg CLIConfig, req agent.AgentRequest) (age
 	// can tell whether the transcript is already non-blank before falling
 	// back to a coarse diagnostic emit.
 	streamed := 0
-	var onLine func(string)
-	if parser != nil {
-		onLine = func(line string) {
-			events := parser.Line(line)
-			if req.Transcript == nil {
-				return
-			}
-			for _, ev := range events {
-				req.Transcript.Emit(ev)
-				streamed++
-			}
+	consume := func(line string) {
+		if parser == nil {
+			return
+		}
+		events := parser.Line(line)
+		if req.Transcript == nil {
+			return
+		}
+		for _, ev := range events {
+			req.Transcript.Emit(ev)
+			streamed++
 		}
 	}
 
-	stdout, stderr, exitCode, err := runner(ctx, req.WorkspacePath, cfg.Args, prompt, env, onLine)
+	// runCtx bounds a wedged run (issue #455): touch resets the idle
+	// deadline on every stdout line, so only a stall cancels runCtx, which
+	// is distinct from ctx itself being canceled by its parent. A backend
+	// without a StreamParser still needs onLine, purely for touch.
+	runCtx, timedOut, touch, stop := IdleTimeout(ctx, cfg.Timeout)
+	defer stop()
+
+	var onLine func(string)
+	if parser != nil || cfg.Timeout > 0 {
+		onLine = func(line string) {
+			touch()
+			consume(line)
+		}
+	}
+
+	stdout, stderr, exitCode, err := runner(runCtx, req.WorkspacePath, cfg.Args, prompt, env, onLine)
 
 	// resultText is what the result envelope is parsed from: the parser's
 	// reconstructed final message when streaming, else the raw stdout.
@@ -144,6 +165,22 @@ func ExecuteCLI(ctx context.Context, cfg CLIConfig, req agent.AgentRequest) (age
 			Status:  agent.StatusFailed,
 			Summary: DiagnosticSummary(fmt.Sprintf("%s adapter: cancelled: %v", cfg.BackendName, ctxErr), stdout, stderr),
 		}, fmt.Errorf("%s adapter: cancelled: %w", cfg.BackendName, ctxErr)
+	}
+
+	// A timeout is an ordinary FAILED outcome (err == nil), not the wrapped
+	// ctx.Err() the cancellation path above returns: an operator-driven
+	// cancellation must abort without counting against the retry budget, but
+	// a wedged agent is exactly what the retry budget exists to recover
+	// from, so it flows through the normal StatusFailed handling.
+	if timedOut() {
+		emitFallback()
+		return agent.AgentResult{
+			Status: agent.StatusFailed,
+			Summary: DiagnosticSummary(
+				fmt.Sprintf("%s adapter: agent timed out after %s with no output", cfg.BackendName, cfg.Timeout),
+				stdout, stderr,
+			),
+		}, nil
 	}
 
 	if err != nil {

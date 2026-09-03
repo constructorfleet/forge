@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/agent/claude"
@@ -834,6 +835,38 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 			}
 			if adapter, ok := ag.(*claude.Adapter); ok && adapter.PermissionMode != string(cfg.Agent.PermissionMode) {
 				t.Errorf("buildAgent(%q).PermissionMode = %q, want %q", tc.provider, adapter.PermissionMode, cfg.Agent.PermissionMode)
+			}
+		})
+	}
+}
+
+// TestBuildAgent_PlumbsTimeoutToEveryProvider asserts agent.timeout is not
+// silently ignored for the non-default providers (issue #455).
+func TestBuildAgent_PlumbsTimeoutToEveryProvider(t *testing.T) {
+	const want = 7 * time.Minute
+	// timeoutOf reads the Timeout field every real Adapter now carries.
+	timeoutOf := func(ag agent.Agent) time.Duration {
+		field := reflect.ValueOf(ag).Elem().FieldByName("Timeout")
+		if !field.IsValid() {
+			t.Fatalf("%T has no Timeout field", ag)
+		}
+		return time.Duration(field.Int())
+	}
+	providers := []string{
+		"claude-code", "", "codex", "opencode", "pi",
+		"openai-responses", "openai-chat-completions",
+	}
+	for _, provider := range providers {
+		t.Run(provider, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Agent.Provider = provider
+			cfg.Agent.Timeout = want
+			ag, err := buildAgent(cfg)
+			if err != nil {
+				t.Fatalf("buildAgent: %v", err)
+			}
+			if got := timeoutOf(ag); got != want {
+				t.Fatalf("buildAgent(%q).Timeout = %s, want %s", provider, got, want)
 			}
 		})
 	}
