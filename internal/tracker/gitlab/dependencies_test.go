@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -379,6 +381,91 @@ func TestDependencyEdges_RoundTripThroughWriteThenRead(t *testing.T) {
 	}
 }
 
+// WriteDependencies must update native GitLab blockers when GitLab exposes
+// them. Otherwise a write followed by a read still returns the old native
+// links and ignores the body block that WriteDependencies just wrote.
+func TestWriteDependencies_SyncsNativeLinksWhenAvailable(t *testing.T) {
+	type nativeLink struct {
+		IssueLinkID int    `json:"issue_link_id"`
+		IID         int    `json:"iid"`
+		ProjectID   int    `json:"project_id"`
+		LinkType    string `json:"link_type"`
+	}
+
+	native := []nativeLink{
+		{IssueLinkID: 101, IID: 1, ProjectID: 4, LinkType: "is_blocked_by"},
+		{IssueLinkID: 202, IID: 99, ProjectID: 4, LinkType: "blocks"},
+	}
+	var storedBody string
+	var deleted []string
+	var created []string
+
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/links/"):
+			if r.Method != http.MethodDelete {
+				t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+			}
+			deleted = append(deleted, path.Base(r.URL.Path))
+			for i, link := range native {
+				if path.Base(r.URL.Path) == "101" && link.IssueLinkID == 101 {
+					native = append(native[:i], native[i+1:]...)
+					break
+				}
+			}
+			_, _ = w.Write([]byte(`{}`))
+		case isLinksPath(r):
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(native)
+			case http.MethodPost:
+				target := r.URL.Query().Get("target_issue_iid")
+				created = append(created, target)
+				native = append(native, nativeLink{
+					IssueLinkID: 300 + len(created),
+					IID:         mustAtoi(t, target),
+					ProjectID:   4,
+					LinkType:    r.URL.Query().Get("link_type"),
+				})
+				_, _ = w.Write([]byte(`{}`))
+			default:
+				t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+			}
+		case r.Method == http.MethodGet:
+			body, _ := json.Marshal(storedBody)
+			_, _ = w.Write([]byte(`{"iid":42,"project_id":4,"description":` + string(body) + `}`))
+		case r.Method == http.MethodPut:
+			var req struct {
+				Description string `json:"description"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode PUT body: %v", err)
+			}
+			storedBody = req.Description
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+	})
+
+	if err := c.WriteDependencies(context.Background(), "42", []string{"7", "8"}); err != nil {
+		t.Fatalf("WriteDependencies: %v", err)
+	}
+	got, err := c.GetDependencies(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("GetDependencies: %v", err)
+	}
+	if len(got) != 2 || got[0].DependsOn.ID != "7" || got[1].DependsOn.ID != "8" {
+		t.Fatalf("edges = %+v, want dependencies [7 8]", got)
+	}
+	if len(deleted) != 1 || deleted[0] != "101" {
+		t.Fatalf("deleted native links = %v, want [101]", deleted)
+	}
+	if len(created) != 2 || created[0] != "7" || created[1] != "8" {
+		t.Fatalf("created native links = %v, want [7 8]", created)
+	}
+}
+
 // Overrides take precedence over the body block through GetDependencies too.
 func TestGetDependencies_OverridesBeatBodyBlock(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -397,4 +484,13 @@ func TestGetDependencies_OverridesBeatBodyBlock(t *testing.T) {
 	if len(edges) != 1 || edges[0].DependsOn.ID != "99" {
 		t.Fatalf("edges = %+v, want the override [99]", edges)
 	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatalf("strconv.Atoi(%q): %v", s, err)
+	}
+	return n
 }
