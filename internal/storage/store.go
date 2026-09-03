@@ -79,8 +79,13 @@ type GateRun struct {
 }
 
 // AgentRun is one persisted implementation-agent invocation for an Issue.
-// Review remains a separate first-class record via ReviewRun.
+// Review remains a separate first-class record via ReviewRun. ID is the
+// storage-assigned agent_runs row id, populated by AgentRunsByExecution/
+// AgentRunsByIssue so a run is addressable by an exposed id (ADR 0030);
+// callers that create a run already hold the id returned by Record/Start
+// AgentRun and need not set it.
 type AgentRun struct {
+	ID           int64
 	ExecutionID  string
 	IssueID      string
 	Backend      string
@@ -90,6 +95,17 @@ type AgentRun struct {
 	ContextBytes int
 	InputTokens  *int
 	OutputTokens *int
+}
+
+// LiveRun identifies one AgentRun a live reader can tail (ADR 0030): its
+// storage-assigned id plus the Execution and Issue it belongs to, so the TUI
+// can find runs without knowing their IDs in advance. Phase-agnostic — an
+// implementation (IMPLEMENTING), review (REVIEWING), or planning run all
+// appear here the same way.
+type LiveRun struct {
+	AgentRunID  int64
+	ExecutionID string
+	IssueID     string
 }
 
 // TranscriptEvent is one persisted step of an Agent's work on an Issue
@@ -414,6 +430,12 @@ type Store interface {
 	// an Execution, ordered by insertion.
 	AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]AgentRun, error)
 
+	// LiveRuns enumerates every AgentRun across all Executions, phases, and
+	// Issues (implementation, review, and planning runs alike), returning
+	// each run's id plus its Execution and Issue — the phase-agnostic
+	// enumeration a live reader uses to find runs to tail (ADR 0030).
+	LiveRuns(ctx context.Context) ([]LiveRun, error)
+
 	// RecordTranscriptEvents persists every TranscriptEvent captured during
 	// one AgentRun (ticket 28's transcript logging), keyed by the AgentRun
 	// id RecordAgentRun returned. Capture is best-effort by contract at the
@@ -421,14 +443,11 @@ type Store interface {
 	// Issue's run, only forfeit that attempt's transcript durability.
 	RecordTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error
 
-	// ReplaceTranscriptEvents overwrites the persisted transcript for one
-	// AgentRun with events, in a single transaction: it deletes any rows
-	// already stored for the run, then inserts events in order. Incremental
-	// capture (issue 36) flushes a bounded, most-recent window repeatedly as
-	// an Agent streams, so each flush must supersede the last rather than
-	// append — that is how the persisted transcript stays a faithful window
-	// (with its dropped-earlier marker) instead of accumulating stale rows.
-	ReplaceTranscriptEvents(ctx context.Context, executionID, issueID string, agentRunID int64, events []TranscriptEvent) error
+	// TranscriptEventsAfter returns up to limit TranscriptEvents recorded for
+	// one AgentRun whose Seq is strictly greater than afterSeq, in Seq order —
+	// the bounded tail API a live reader polls to follow a run (ADR 0030). A
+	// cursor into an eviction gap still reads correctly.
+	TranscriptEventsAfter(ctx context.Context, agentRunID, afterSeq, limit int64) ([]TranscriptEvent, error)
 
 	// TranscriptEventsByAgentRun returns every TranscriptEvent recorded for
 	// one AgentRun (attempt), ordered by Seq.

@@ -22,12 +22,15 @@ var _ Store = (*SQLiteStore)(nil)
 // appended, so both file paths and "file::memory:?cache=shared"-style DSNs
 // work; any query string already present in dsn is preserved.
 //
-// foreign_keys and busy_timeout are applied via the DSN's _pragma
-// parameters rather than a one-shot PRAGMA exec after Open: foreign_keys in
-// particular is per-connection and defaults OFF, so setting it against a
-// single already-open connection only holds as long as database/sql never
-// recycles that connection. DSN pragmas are re-applied by the driver on
-// every new connection it opens, so enforcement can't silently lapse.
+// foreign_keys, busy_timeout, journal_mode, and synchronous are applied via
+// the DSN's _pragma parameters rather than a one-shot PRAGMA exec after Open:
+// foreign_keys in particular is per-connection and defaults OFF, so setting
+// it against a single already-open connection only holds as long as
+// database/sql never recycles that connection, and WAL's journal_mode must
+// be re-declared per connection or it lapses to delete on a new handle. DSN
+// pragmas are re-applied by the driver on every new connection it opens, so
+// enforcement can't silently lapse. journal_mode=WAL on a memory DSN is a
+// no-op (ADR 0030).
 func Open(dsn string) (*SQLiteStore, error) {
 	db, err := sql.Open("sqlite", withPragmas(dsn))
 	if err != nil {
@@ -41,7 +44,7 @@ func Open(dsn string) (*SQLiteStore, error) {
 }
 
 func withPragmas(dsn string) string {
-	pragmas := "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	pragmas := "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	if strings.Contains(dsn, "?") {
 		return dsn + "&" + pragmas
 	}

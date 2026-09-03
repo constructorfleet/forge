@@ -873,18 +873,19 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 		return fake, nil
 	case "claude-code", "":
 		return &claude.Adapter{
-			PermissionMode: string(cfg.Agent.PermissionMode),
-			Timeout:        cfg.Agent.Timeout,
+			PermissionMode:      string(cfg.Agent.PermissionMode),
+			Timeout:             cfg.Agent.Timeout,
+			ExtraEnvPassthrough: cfg.Agent.EnvPassthrough,
 		}, nil
 	// agent.timeout is provider-neutral, so every Adapter receives it: an
 	// operator who sets it must get a bounded run whichever provider runs
 	// (issue #455).
 	case "codex":
-		return &codex.Adapter{Timeout: cfg.Agent.Timeout}, nil
+		return &codex.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "opencode":
-		return &opencode.Adapter{Timeout: cfg.Agent.Timeout}, nil
+		return &opencode.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "pi":
-		return &pi.Adapter{Timeout: cfg.Agent.Timeout}, nil
+		return &pi.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "openai-responses":
 		return &openai.ResponsesAdapter{Timeout: cfg.Agent.Timeout}, nil
 	case "openai-chat-completions":

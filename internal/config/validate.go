@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 )
 
 // FieldError identifies one invalid field in a Config, naming the offending
@@ -246,6 +247,18 @@ func validate(cfg Config) error {
 
 	if cfg.Agent.Timeout <= 0 {
 		errs = append(errs, fieldErr("agent.timeout", fmt.Sprint(cfg.Agent.Timeout), "must be > 0"))
+	}
+
+	for _, name := range cfg.Agent.EnvPassthrough {
+		switch {
+		case strings.TrimSpace(name) == "":
+			errs = append(errs, fieldErr("agent.env_passthrough", name, "environment variable name must not be empty"))
+		case strings.ContainsAny(name, "="):
+			errs = append(errs, fieldErr("agent.env_passthrough", name,
+				"must be a variable name, not an assignment; Forge reads the value from its own environment"))
+		case strings.ContainsFunc(name, unicode.IsSpace):
+			errs = append(errs, fieldErr("agent.env_passthrough", name, "environment variable name must not contain whitespace"))
+		}
 	}
 
 	if cfg.Quality.MaxOutputBytes < 1 {

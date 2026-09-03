@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -867,6 +868,34 @@ func TestBuildAgent_PlumbsTimeoutToEveryProvider(t *testing.T) {
 			}
 			if got := timeoutOf(ag); got != want {
 				t.Fatalf("buildAgent(%q).Timeout = %s, want %s", provider, got, want)
+			}
+		})
+	}
+}
+
+// TestBuildAgent_ThreadsEnvPassthroughToEveryCLIAdapter pins agent.env_passthrough
+// reaching all four CLI Adapters. Each Adapter sanitizes its subprocess
+// environment, so an Adapter that drops the list leaves a Bedrock- or
+// Vertex-authenticated operator unable to run at all.
+func TestBuildAgent_ThreadsEnvPassthroughToEveryCLIAdapter(t *testing.T) {
+	want := []string{"AWS_PROFILE", "AWS_REGION", "CLAUDE_CODE_USE_BEDROCK"}
+	extraOf := map[string]func(agent.Agent) []string{
+		"claude-code": func(a agent.Agent) []string { return a.(*claude.Adapter).ExtraEnvPassthrough },
+		"codex":       func(a agent.Agent) []string { return a.(*codex.Adapter).ExtraEnvPassthrough },
+		"opencode":    func(a agent.Agent) []string { return a.(*opencode.Adapter).ExtraEnvPassthrough },
+		"pi":          func(a agent.Agent) []string { return a.(*pi.Adapter).ExtraEnvPassthrough },
+	}
+	for provider, extra := range extraOf {
+		t.Run(provider, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Agent.Provider = provider
+			cfg.Agent.EnvPassthrough = want
+			ag, err := buildAgent(cfg)
+			if err != nil {
+				t.Fatalf("buildAgent: %v", err)
+			}
+			if got := extra(ag); !slices.Equal(got, want) {
+				t.Errorf("buildAgent(%q).ExtraEnvPassthrough = %v, want %v", provider, got, want)
 			}
 		})
 	}
