@@ -45,7 +45,7 @@ func TestReaderHandle_ReadsWhileWriterWrites(t *testing.T) {
 	// Write through the writer handle, read through the reader handle.
 	for i := 0; i < 20; i++ {
 		if err := writer.RecordTranscriptEvents(ctx, "exec-dual", "issue-dual", runID, []storage.TranscriptEvent{
-			{Seq: int(i), Type: "MESSAGE", Text: "during", OccurredAt: time.Now()},
+			{Seq: i, Type: "MESSAGE", Text: "during", OccurredAt: time.Now()},
 		}); err != nil {
 			t.Fatalf("writer RecordTranscriptEvents #%d: %v", i, err)
 		}
