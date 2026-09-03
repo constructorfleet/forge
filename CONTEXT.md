@@ -14,6 +14,10 @@ _Avoid_: Run, session, job
 Forge's normalized representation of an issue-tracker item. All internal code operates on Issues, never on tracker-specific models.
 _Avoid_: Ticket, task, item
 
+**IssueState**:
+The normalized state of an Issue within an Execution (the 18-value transition machine). Its coarse grouping — one canonical mapping — is shared by the TUI's Worker view and the status display, so both always agree on how a state reads. **LOST** is not an IssueState; it is a lease-lapse classification, not a state the Issue settles in.
+_Avoid_: Status (when referring to the Issue's normalized state), step
+
 **Dependency**:
 A directed relationship indicating that one Issue must complete before another can begin. Dependencies form a DAG; cycles are errors. A Dependency is satisfied only when the prerequisite Issue's PR is merged into the applicable base — not when implementation is locally complete, and not when CI goes green. A Dependency governs both *when* the dependent Issue may run and *what repository state* it runs against: a dependent with one or more Dependencies within the Execution set starts from its Dependencies' resulting branches (a single Dependency's branch directly, or an Integration Branch when there is more than one), pinned to a commit SHA, not the Execution's original base branch. See ADR 0018 for the pinned-base and restack model.
 
