@@ -21,6 +21,15 @@ import (
 type RosterStore interface {
 	LoadExecution(ctx context.Context, executionID string) (storage.ExecutionState, error)
 	WorkerClaim(ctx context.Context, executionID, issueID string) (storage.WorkerClaim, error)
+	// LatestReviewOutcome supplies the aggregate Review verdict for the detail
+	// strip, and tells the frame whether a stored diff exists to page. A poll
+	// pass calls it per Issue, so it must not carry the diff body.
+	LatestReviewOutcome(ctx context.Context, executionID, issueID string) (storage.ReviewOutcome, error)
+
+	// LatestReviewDiff serves the on-request diff read only (see diff.go). It
+	// reads the one diff column, so the pager path loads no finding and no axis
+	// envelope.
+	LatestReviewDiff(ctx context.Context, executionID, issueID string) (string, error)
 }
 
 // Roster fetches an Execution's Worker state into a ViewModel on demand.
@@ -81,6 +90,8 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 	}
 	row.Attempt, row.Budget = attemptBudget(issue.RetryBudget)
 
+	row.Verdict, row.HasDiff = r.lastReview(ctx, executionID, issue.ID)
+
 	claim, err := r.Store.WorkerClaim(ctx, executionID, issue.ID)
 	if err == nil && !claim.LastHeartbeat.IsZero() {
 		row.HasHeartbeat = true
@@ -90,6 +101,17 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 		row.HasHeartbeat = false
 	}
 	return row
+}
+
+// lastReview returns the Issue's current Review verdict plus whether that run
+// stored a diff. A read failure degrades to no verdict: the roster is an
+// observer and must not abort a pass.
+func (r *Roster) lastReview(ctx context.Context, executionID, issueID string) (verdict string, hasDiff bool) {
+	out, err := r.Store.LatestReviewOutcome(ctx, executionID, issueID)
+	if err != nil || !out.Recorded {
+		return "", false
+	}
+	return out.Verdict, out.HasDiff
 }
 
 // attemptBudget derives the frame's "attempt N/B" strip from the retry
