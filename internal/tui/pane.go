@@ -37,6 +37,17 @@ func TranscriptGlyph(e TranscriptEvent) string {
 // noSelection marks an empty pane, which has no selectable entry.
 const noSelection = -1
 
+// eventKey identifies one transcript event across a multi-attempt history.
+// Every AgentRun restarts Seq at 0, so the run must be part of the key.
+type eventKey struct {
+	runID int64
+	seq   int
+}
+
+// keyOf builds the scrollback anchor for one event. The tailer holds its
+// scrolled-back position with it.
+func keyOf(e TranscriptEvent) eventKey { return eventKey{runID: e.AgentRunID, seq: e.Seq} }
+
 // TranscriptEntry is one selectable timeline item. A tool call folds its
 // paired result into the same entry, so collapse, expand, and selection all
 // act on the call and its result together.
@@ -56,13 +67,14 @@ func (e TranscriptEntry) IsToolCall() bool { return e.Gate == nil && e.Event.Typ
 // IsGate reports that the entry is a synthetic quality-gate row.
 func (e TranscriptEntry) IsGate() bool { return e.Gate != nil }
 
-// key identifies an entry across polls. A gate row carries no Seq, so the two
-// kinds share one string namespace.
+// key identifies an entry across polls. Every AgentRun restarts Seq at 0, so an
+// event key carries its run as well. A gate row carries no Seq, so the two kinds
+// share one string namespace.
 func (e TranscriptEntry) key() string {
 	if e.Gate != nil {
 		return e.Gate.key
 	}
-	return "seq:" + strconv.Itoa(e.Event.Seq)
+	return "run:" + strconv.FormatInt(e.Event.AgentRunID, 10) + ":seq:" + strconv.Itoa(e.Event.Seq)
 }
 
 // TranscriptScroller is the window-anchor seam the pane needs to move the
@@ -219,10 +231,10 @@ func (p *TranscriptPane) Entries() []TranscriptEntry { return p.entries }
 
 // Select moves the selection to index i, clamped to the entries. An index is
 // valid only until the next SetView, which re-derives the selection by key: do
-// not hold an index across a poll. A move to a
-// different entry pins the selection, so the live tail no longer moves it, and
-// collapses the previously expanded entry. A call on an empty pane does
-// nothing, and a call that does not move the selection changes no state.
+// not hold an index across a poll. A move to a different entry pins the
+// selection, so the live tail no longer moves it, and collapses the previously
+// expanded entry. A call on an empty pane does nothing, and a call that does
+// not move the selection changes no state.
 func (p *TranscriptPane) Select(i int) {
 	if len(p.entries) == 0 {
 		p.selection = noSelection
@@ -378,17 +390,22 @@ func indexOfKey(entries []TranscriptEntry, key string) int {
 // eviction never hides work that did happen.
 func buildEntries(events []TranscriptEvent) []TranscriptEntry {
 	entries := make([]TranscriptEntry, 0, len(events))
-	callAt := make(map[string]int, len(events))
+	type callRef struct {
+		runID  int64
+		callID string
+	}
+	callAt := make(map[callRef]int, len(events))
 	for _, e := range events {
+		ref := callRef{runID: e.AgentRunID, callID: e.ToolCallID}
 		if e.Type == eventToolResult {
-			if at, ok := callAt[e.ToolCallID]; ok && e.ToolCallID != "" {
+			if at, ok := callAt[ref]; ok && e.ToolCallID != "" {
 				res := e
 				entries[at].Result = &res
 				continue
 			}
 		}
 		if e.Type == eventToolCall && e.ToolCallID != "" {
-			callAt[e.ToolCallID] = len(entries)
+			callAt[ref] = len(entries)
 		}
 		entries = append(entries, TranscriptEntry{Event: e})
 	}
@@ -423,8 +440,10 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 }
 
 // RenderTranscript draws the transcript pane: the eviction marker, then one
-// line group per entry. A nil pane renders nothing. The detail strip belongs to
-// the frame, not the pane.
+// line group per entry. A multi-attempt history carries an "attempt N" divider
+// above the first entry of each run, which includes the first entry of the
+// window. A single-attempt history carries no divider. A nil pane renders
+// nothing. The detail strip belongs to the frame, not the pane.
 func RenderTranscript(p *TranscriptPane) string {
 	if p == nil {
 		return ""
@@ -434,13 +453,37 @@ func RenderTranscript(p *TranscriptPane) string {
 		b.WriteString(evictionLine(p.view.Dropped))
 		b.WriteByte('\n')
 	}
+	attempts := attemptNumbers(p.view.RunOrder)
+	divide := len(p.view.RunOrder) > 1
+	prevRun := int64(0)
 	for i, e := range p.entries {
+		// A gate row belongs to no attempt, so it never opens one. An unknown run
+		// carries no attempt number and draws no divider rather than a wrong one.
+		if divide && !e.IsGate() && (i == 0 || e.Event.AgentRunID != prevRun) {
+			if n, ok := attempts[e.Event.AgentRunID]; ok {
+				fmt.Fprintf(&b, "── attempt %d ──\n", n)
+			}
+		}
+		if !e.IsGate() {
+			prevRun = e.Event.AgentRunID
+		}
 		for _, line := range entryLines(e, i == p.selection, p.Expanded(i)) {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
 	}
 	return b.String()
+}
+
+// attemptNumbers maps each AgentRun to its 1-based attempt number. The order
+// is run insertion order, which the tailer keeps, so a retry always numbers
+// above the attempt it follows.
+func attemptNumbers(runOrder []int64) map[int64]int {
+	attempts := make(map[int64]int, len(runOrder))
+	for i, id := range runOrder {
+		attempts[id] = i + 1
+	}
+	return attempts
 }
 
 // evictionLine marks history the reader never received. The wording says "not

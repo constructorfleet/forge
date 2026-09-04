@@ -9,6 +9,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/Teagan42/forge/internal/storage"
 )
@@ -35,26 +36,22 @@ const defaultTranscriptHeight = 20
 const noCursor = int64(-1)
 
 // TranscriptTailer polls a TranscriptStore for new events and appends them
-// to a capped RingBuffer. It tracks a cursor (the last Seq seen) so each Poll
-// reads only new events, and it holds a scrollback offset into the retained
-// window.
+// to a capped RingBuffer. It tracks one cursor (the last Seq seen) per tailed
+// AgentRun, so each Poll reads only new events, and it holds a scrollback
+// offset into the retained window. Several attempts for one Issue share one
+// tailer through AddRun, which makes the retry history one scrollback.
 type TranscriptTailer struct {
 	store TranscriptStore
-	runID int64
-	// cursor is the last Seq read. The tail API reads seq strictly greater
-	// than the cursor and the first event of a run carries Seq 0, so an
-	// unattached tailer holds noCursor, not 0.
-	cursor int64
-	ring   *RingBuffer
+	// runs holds every tailed AgentRun in insertion order, so a retry extends
+	// the same scrollback and the pane numbers the attempts from the order.
+	runs []*runTail
+	ring *RingBuffer
 
 	// height is the scrollback viewport height in events.
 	height int
 	// offset counts events scrolled back from the tail. Zero follows the tail.
 	offset int
 
-	// attached records that one poll has completed, so the first pass can
-	// detect history the store evicted before the reader attached.
-	attached bool
 	// evicted records that earlier events are not retained, from store-side
 	// retention or ring eviction. Distinct from a TRUNCATION marker: storage
 	// never persists TRUNCATION, so a leading seq gap means eviction.
@@ -69,11 +66,45 @@ func NewTranscriptTailer(store TranscriptStore, agentRunID int64, cap int) *Tran
 	}
 	return &TranscriptTailer{
 		store:  store,
-		runID:  agentRunID,
+		runs:   []*runTail{{id: agentRunID, cursor: noCursor}},
 		ring:   NewRingBuffer(cap),
-		cursor: noCursor,
 		height: defaultTranscriptHeight,
 	}
+}
+
+// runTail is one tailed AgentRun (attempt) and its own read cursor.
+type runTail struct {
+	id int64
+	// cursor is the last Seq read from this run. The tail API reads seq
+	// strictly greater than the cursor and the first event of a run carries
+	// Seq 0, so an unattached run holds noCursor, not 0.
+	cursor int64
+	// attached records that one poll has completed for this run, so the first
+	// pass can detect history the store evicted before the reader attached.
+	attached bool
+}
+
+// AddRun appends a retry's AgentRun to the tailed history. The retained window
+// keeps every earlier attempt, so the pane reads one continuous scrollback with
+// an attempt divider at each boundary. A known run changes nothing.
+//
+// No production caller yet; the roster wiring lands with #488.
+func (t *TranscriptTailer) AddRun(agentRunID int64) {
+	for _, r := range t.runs {
+		if r.id == agentRunID {
+			return
+		}
+	}
+	t.runs = append(t.runs, &runTail{id: agentRunID, cursor: noCursor})
+}
+
+// RunOrder returns every tailed AgentRun in insertion order.
+func (t *TranscriptTailer) RunOrder() []int64 {
+	order := make([]int64, 0, len(t.runs))
+	for _, r := range t.runs {
+		order = append(order, r.id)
+	}
+	return order
 }
 
 // SetHeight sets the scrollback viewport height in events. A height of zero
@@ -85,39 +116,90 @@ func (t *TranscriptTailer) SetHeight(h int) {
 	t.height = h
 }
 
-// Poll fetches events after the cursor and appends them to the ring buffer.
-// A read failure leaves the cursor and the retained window untouched, so the
-// next pass resumes from the same point.
+// Poll fetches new events for every tailed attempt and appends them to the ring
+// buffer. Every pass reads every attempt, oldest first. A read failure stops the
+// pass but keeps the attempts it already read, and the next pass starts again at
+// the oldest attempt, which the untouched cursors make cheap.
 func (t *TranscriptTailer) Poll(ctx context.Context) (TranscriptViewModel, error) {
-	events, err := t.store.TranscriptEventsAfter(ctx, t.runID, t.cursor, transcriptPollLimit)
+	anchor, anchored := t.anchor(t.orderedWindow())
+	for _, r := range t.runs {
+		if _, err := t.pollRun(ctx, r); err != nil {
+			return t.commit(anchor, anchored), err
+		}
+	}
+	return t.commit(anchor, anchored), nil
+}
+
+// anchor returns the key of the first visible event in retained while the
+// viewport is scrolled back. A tail-following viewport needs no anchor.
+func (t *TranscriptTailer) anchor(retained []TranscriptEvent) (eventKey, bool) {
+	if t.offset <= 0 || len(retained) == 0 {
+		return eventKey{}, false
+	}
+	start, _ := t.windowBounds(len(retained))
+	return keyOf(retained[start]), true
+}
+
+// commit records eviction and holds the scrollback anchor as the tail advances.
+// It re-derives the offset from the anchor's place in the ordered window, so an
+// event that sorts in ahead of the window does not slide it. A partial pass
+// commits as well. An evicted anchor keeps the old offset, clamped.
+func (t *TranscriptTailer) commit(anchor eventKey, anchored bool) TranscriptViewModel {
+	if t.ring.Dropped() > 0 {
+		t.evicted = true
+	}
+	retained := t.orderedWindow()
+	if anchored {
+		if at := indexOfEvent(retained, anchor); at >= 0 {
+			t.offset = t.offsetForStart(len(retained), at)
+		}
+		t.clampOffset()
+	}
+	return t.snapshotFrom(retained)
+}
+
+// indexOfEvent returns the position of key in events, or -1.
+func indexOfEvent(events []TranscriptEvent, key eventKey) int {
+	for i, e := range events {
+		if keyOf(e) == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// pollRun reads one attempt's new events into the ring and returns how many it
+// appended. A read failure leaves that run's cursor untouched, so the next pass
+// resumes from the same point.
+func (t *TranscriptTailer) pollRun(ctx context.Context, r *runTail) (int, error) {
+	events, err := t.store.TranscriptEventsAfter(ctx, r.id, r.cursor, transcriptPollLimit)
 	if err != nil {
-		return t.snapshot(), fmt.Errorf("tui: poll transcript for run %d: %w", t.runID, err)
+		return 0, fmt.Errorf("tui: poll transcript for run %d: %w", r.id, err)
 	}
 
 	// The first pass backfills from the retained start. A first event past
 	// seq 0 means the store's retention window already dropped history.
-	if !t.attached {
-		t.attached = true
+	if !r.attached {
+		r.attached = true
 		if len(events) > 0 && events[0].Seq > 0 {
 			t.evicted = true
 		}
 	}
 
 	for _, e := range events {
-		t.ring.Append(convertTranscriptEvent(e))
-		if int64(e.Seq) > t.cursor {
-			t.cursor = int64(e.Seq)
+		ev := convertTranscriptEvent(e)
+		if ev.AgentRunID == 0 {
+			// Every event must name its run, because the divider and the
+			// selection key both read it. The read scope names the run, so fill
+			// it in rather than trust the column.
+			ev.AgentRunID = r.id
+		}
+		t.ring.Append(ev)
+		if int64(e.Seq) > r.cursor {
+			r.cursor = int64(e.Seq)
 		}
 	}
-	if t.ring.Dropped() > 0 {
-		t.evicted = true
-	}
-	if t.offset > 0 {
-		// Hold the scrollback anchor as the tail advances.
-		t.offset += len(events)
-		t.clampOffset()
-	}
-	return t.snapshot(), nil
+	return len(events), nil
 }
 
 // ScrollUp moves the viewport n events towards the retained start.
@@ -149,39 +231,67 @@ func (t *TranscriptTailer) clampOffset() {
 	}
 }
 
-// Reattach clears the retained window and the cursor so the next Poll
-// backfills from the store's retained start. Use it after a reader gap or a
-// new AgentRun for the same tailer.
+// Reattach replaces the tailed runs with agentRunID alone and clears the
+// retained window, so the next Poll backfills from the store's retained start. Use it
+// after a reader gap. Use AddRun for a retry, which keeps the earlier attempts.
 func (t *TranscriptTailer) Reattach(agentRunID int64) {
-	t.runID = agentRunID
+	t.runs = []*runTail{{id: agentRunID, cursor: noCursor}}
 	t.Reset()
 }
 
-// Reset empties the ring buffer and resets the cursor, scrollback, and
-// eviction marker.
+// Reset empties the ring buffer and resets every cursor, the scrollback, and
+// the eviction marker. The tailed runs stay.
 func (t *TranscriptTailer) Reset() {
 	t.ring.Reset()
-	t.cursor = noCursor
+	for _, r := range t.runs {
+		r.cursor = noCursor
+		r.attached = false
+	}
 	t.offset = 0
-	t.attached = false
 	t.evicted = false
 }
 
-// Cursor returns the last Seq the tailer has read.
-func (t *TranscriptTailer) Cursor() int64 { return t.cursor }
+// LatestRunCursor returns the last Seq read from the newest attempt alone. It
+// is not a position in the rendered scrollback, which spans every attempt.
+func (t *TranscriptTailer) LatestRunCursor() int64 {
+	if len(t.runs) == 0 {
+		return noCursor
+	}
+	return t.runs[len(t.runs)-1].cursor
+}
 
 // snapshot builds a TranscriptViewModel from the ring's current state,
 // windowed by the scrollback offset and height.
 func (t *TranscriptTailer) snapshot() TranscriptViewModel {
-	retained := t.ring.Window()
-	end := len(retained) - t.offset
+	return t.snapshotFrom(t.orderedWindow())
+}
+
+// windowBounds turns the scrollback offset into the visible range of a retained
+// window of n events. It is the one place that holds the relation between the
+// offset and the window, and offsetForStart is its inverse.
+func (t *TranscriptTailer) windowBounds(n int) (start, end int) {
+	end = n - t.offset
 	if end < 0 {
 		end = 0
 	}
-	start := end - t.height
+	start = end - t.height
 	if start < 0 {
 		start = 0
 	}
+	return start, end
+}
+
+// offsetForStart returns the offset that puts start at the top of the visible
+// window. It inverts windowBounds, so a held anchor keeps its place as the tail
+// advances.
+func (t *TranscriptTailer) offsetForStart(n, start int) int {
+	return n - (start + t.height)
+}
+
+// snapshotFrom builds the view model from an already ordered window, so one Poll
+// orders the events once.
+func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptViewModel {
+	start, end := t.windowBounds(len(retained))
 	return TranscriptViewModel{
 		Events:   retained[start:end],
 		Evicted:  t.evicted,
@@ -189,12 +299,32 @@ func (t *TranscriptTailer) snapshot() TranscriptViewModel {
 		AtTail:   t.offset == 0,
 		AtStart:  start == 0,
 		Retained: len(retained),
+		RunOrder: t.RunOrder(),
 	}
+}
+
+// orderedWindow returns the retained events in run insertion order, then seq.
+// Ring order is append order, so a late event from an earlier attempt lands at
+// the tail; the sort keeps each attempt contiguous, which the divider needs.
+func (t *TranscriptTailer) orderedWindow() []TranscriptEvent {
+	retained := t.ring.Window()
+	rank := make(map[int64]int, len(t.runs))
+	for i, r := range t.runs {
+		rank[r.id] = i
+	}
+	sort.SliceStable(retained, func(i, j int) bool {
+		if rank[retained[i].AgentRunID] != rank[retained[j].AgentRunID] {
+			return rank[retained[i].AgentRunID] < rank[retained[j].AgentRunID]
+		}
+		return retained[i].Seq < retained[j].Seq
+	})
+	return retained
 }
 
 // convertTranscriptEvent narrows a stored event to the fields the TUI shows.
 func convertTranscriptEvent(e storage.TranscriptEvent) TranscriptEvent {
 	return TranscriptEvent{
+		AgentRunID: e.AgentRunID,
 		Seq:        e.Seq,
 		Type:       e.Type,
 		Role:       e.Role,
@@ -223,4 +353,8 @@ type TranscriptViewModel struct {
 	AtStart bool
 	// Retained counts every event held in the ring, visible or scrolled off.
 	Retained int
+	// RunOrder lists every tailed AgentRun in insertion order. The pane reads
+	// the attempt numbers from it, so the divider numbers stay stable while the
+	// visible window moves. It must name every retained event's run.
+	RunOrder []int64
 }

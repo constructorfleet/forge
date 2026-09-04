@@ -646,3 +646,101 @@ func nonEmptyLines(s string) []string {
 	}
 	return out
 }
+
+// TestRenderTranscriptDividesAdjacentAttempts proves a retry reads as one
+// continuous scrollback: the pane puts an inline "attempt N" divider at each
+// run boundary, numbered by run insertion order.
+func TestRenderTranscriptDividesAdjacentAttempts(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:   true,
+		RunOrder: []int64{4, 9},
+		Events: []tui.TranscriptEvent{
+			{AgentRunID: 4, Seq: 0, Type: "MESSAGE", Text: "first try"},
+			{AgentRunID: 9, Seq: 0, Type: "MESSAGE", Text: "second try"},
+		},
+	})
+
+	got := tui.RenderTranscript(pane)
+	want := "── attempt 1 ──\n" +
+		"    first try\n" +
+		"── attempt 2 ──\n" +
+		">   second try\n"
+	if got != want {
+		t.Errorf("RenderTranscript() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRenderTranscriptOmitsDividerForOneAttempt proves a single-attempt history
+// carries no divider: the annotation exists to separate attempts.
+func TestRenderTranscriptOmitsDividerForOneAttempt(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:   true,
+		RunOrder: []int64{4},
+		Events:   []tui.TranscriptEvent{{AgentRunID: 4, Seq: 0, Type: "MESSAGE", Text: "only try"}},
+	})
+
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "attempt") {
+		t.Errorf("RenderTranscript() = %q, want no attempt divider", got)
+	}
+}
+
+// TestRenderTranscriptNumbersScrolledAttempt proves the divider number comes
+// from the run's place in the whole history, not from the visible window: a
+// window that starts inside attempt 3 still reads "attempt 3".
+func TestRenderTranscriptNumbersScrolledAttempt(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		RunOrder: []int64{4, 9, 11},
+		Events:   []tui.TranscriptEvent{{AgentRunID: 11, Seq: 0, Type: "MESSAGE", Text: "third try"}},
+	})
+
+	if got := tui.RenderTranscript(pane); !strings.Contains(got, "── attempt 3 ──") {
+		t.Errorf("RenderTranscript() = %q, want an attempt 3 divider", got)
+	}
+}
+
+// TestPaneSelectionHoldsAcrossAttemptsWithEqualSeq proves the selection anchor
+// is the run plus the seq: every run restarts at seq 0, so a seq-only anchor
+// would jump to the older attempt's event.
+func TestPaneSelectionHoldsAcrossAttemptsWithEqualSeq(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	older := tui.TranscriptEvent{AgentRunID: 4, Seq: 0, Type: "MESSAGE", Text: "first try"}
+	newer := tui.TranscriptEvent{AgentRunID: 9, Seq: 0, Type: "MESSAGE", Text: "second try"}
+	pane.SetView(tui.TranscriptViewModel{RunOrder: []int64{4, 9}, Events: []tui.TranscriptEvent{older, newer}})
+	pane.Select(1)
+
+	pane.SetView(tui.TranscriptViewModel{
+		RunOrder: []int64{4, 9},
+		Events:   []tui.TranscriptEvent{older, newer, {AgentRunID: 9, Seq: 1, Type: "MESSAGE", Text: "more"}},
+	})
+
+	e, ok := pane.SelectedEntry()
+	if !ok || e.Event.AgentRunID != 9 || e.Event.Seq != 0 {
+		t.Errorf("SelectedEntry() = %+v (ok=%v), want run 9 seq 0", e.Event, ok)
+	}
+}
+
+// TestPaneFoldsToolResultWithinItsOwnAttempt proves a repeated tool call id
+// across attempts does not fold the retry's result into the first attempt's
+// call: the pairing key includes the run.
+func TestPaneFoldsToolResultWithinItsOwnAttempt(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:   true,
+		RunOrder: []int64{4, 9},
+		Events: []tui.TranscriptEvent{
+			{AgentRunID: 4, Seq: 0, Type: "TOOL_CALL", ToolName: "read", ToolCallID: "c1"},
+			{AgentRunID: 9, Seq: 0, Type: "TOOL_RESULT", ToolName: "read", ToolCallID: "c1", ToolOutput: "retry out"},
+		},
+	})
+
+	entries := pane.Entries()
+	if len(entries) != 2 {
+		t.Fatalf("Entries() = %d entries, want 2", len(entries))
+	}
+	if entries[0].Result != nil {
+		t.Errorf("entry 0 folded a result from another attempt: %+v", entries[0].Result)
+	}
+}
