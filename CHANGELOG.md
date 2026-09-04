@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.1](https://github.com/constructorfleet/forge/compare/forge-v0.36.0...forge-v0.36.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* Canceled-before-output runs persist a blank transcript (sink holds the cancelable run ctx) ([#545](https://github.com/constructorfleet/forge/issues/545)) ([8f3237d](https://github.com/constructorfleet/forge/commit/8f3237d8a4e8f7cea5efc8dc045f00a680d190b2)), closes [#454](https://github.com/constructorfleet/forge/issues/454)
+
 ## [0.36.0](https://github.com/constructorfleet/forge/compare/forge-v0.35.0...forge-v0.36.0) (2026-09-04)
 
 
