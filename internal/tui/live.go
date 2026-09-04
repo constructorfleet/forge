@@ -51,12 +51,26 @@ func (m *LiveModel) Init() tea.Cmd {
 func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
-		m.vm, m.lastErr = m.Roster.Fetch(context.Background(), m.ExecutionID, msg.now)
+		vm, err := m.Roster.Fetch(context.Background(), m.ExecutionID, msg.now)
+		m.lastErr = err
+		if err != nil {
+			// A silent poll failure is indistinguishable from an idle roster.
+			// Fetch returns a zero ViewModel on error, so hold the last good
+			// rows: one transient read must not blank the frame for a tick.
+			m.vm.Notice = err.Error()
+		} else {
+			// A poll refreshes the roster only. Pane attachment and focus are
+			// the operator's, so a tick must never reset them.
+			vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
+			m.vm = vm
+		}
 		return m, tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
 	case tea.KeyPressMsg:
-		if uv.Key(msg.Key()).MatchString("q", "ctrl+c") {
+		key := uv.Key(msg.Key())
+		if key.MatchString("q", "ctrl+c") {
 			return m, tea.Quit
 		}
+		m.handleTranscriptKey(key)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
 		return m, tea.Quit
@@ -64,7 +78,48 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the current roster frame headless.
+// handleTranscriptKey applies the pane keys. Tab moves focus; the movement
+// and expand keys act only while the pane holds focus, so a roster key and a
+// pane key can share a rune without collision.
+func (m *LiveModel) handleTranscriptKey(key uv.Key) {
+	pane := m.vm.Transcript
+	if pane == nil {
+		return
+	}
+	if key.MatchString("tab") {
+		if m.vm.Focus == PaneTranscript {
+			m.vm.Focus = PaneRoster
+			return
+		}
+		m.vm.Focus = PaneTranscript
+		return
+	}
+	if m.vm.Focus != PaneTranscript {
+		return
+	}
+	switch {
+	case key.MatchString("k", "up"):
+		pane.MoveSelection(-1)
+	case key.MatchString("j", "down"):
+		pane.MoveSelection(1)
+	case key.MatchString("enter"):
+		pane.ToggleExpand()
+	case key.MatchString("G"):
+		pane.FollowTail()
+	}
+}
+
+// SetTranscript attaches the transcript pane the frame renders. A nil pane
+// renders the roster alone. Spec #488 wires the tailer's polled window and its
+// scroller into the pane; until then only the model's tests attach one.
+func (m *LiveModel) SetTranscript(p *TranscriptPane) {
+	m.vm.Transcript = p
+	if p == nil {
+		m.vm.Focus = PaneRoster
+	}
+}
+
+// View renders the current frame headless.
 func (m *LiveModel) View() tea.View {
 	return tea.NewView(Render(m.vm))
 }

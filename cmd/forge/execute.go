@@ -33,8 +33,10 @@ func runExecute(args []string) int {
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")
 	tui := &triState{}
-	fs.Func("tui", "force the live roster on", tui.tuiFlag)
-	fs.Func("no-tui", "force the live roster off", tui.noTuiFlag)
+	// BoolFunc, not Func: Func consumes the next argument as a value, so
+	// `-tui 498` would eat the issue number instead of standing alone.
+	fs.BoolFunc("tui", "force the live roster on", tui.tuiFlag)
+	fs.BoolFunc("no-tui", "force the live roster off", tui.noTuiFlag)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

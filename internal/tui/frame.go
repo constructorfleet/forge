@@ -113,11 +113,33 @@ type WorkerRow struct {
 	Tool string
 }
 
+// Pane names the frame's two panes. Focus decides which pane the detail strip
+// describes and which keys the footer offers.
+type Pane int
+
+const (
+	// PaneRoster: the Worker list holds focus.
+	PaneRoster Pane = iota
+	// PaneTranscript: the transcript pane holds focus.
+	PaneTranscript
+)
+
 // ViewModel is the plain, transportable input to Render.
 type ViewModel struct {
 	// Selection is the index of the row whose detail strip and footer render.
 	Selection int
 	Workers   []WorkerRow
+
+	// Notice explains an empty roster: the Execution does not exist yet, or a
+	// poll pass failed. An empty frame with no words reads as a broken TUI.
+	Notice string
+
+	// Transcript is the selected Worker's transcript pane. Nil renders the
+	// roster alone.
+	Transcript *TranscriptPane
+
+	// Focus names the pane that owns the detail strip and the footer.
+	Focus Pane
 }
 
 // KeyBinding is one legal key and its label, rendered in the footer.
@@ -148,22 +170,65 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	return keys
 }
 
-// Render draws the whole roster frame: one line per Worker, a detail strip for
-// the selection, and a footer of legal keys. Pure and headless.
+// Render draws the whole frame: one line per Worker, a notice when the roster
+// is empty, the transcript pane, a detail strip for the focused pane's
+// selection, and a footer of legal keys. Pure and headless.
 func Render(vm ViewModel) string {
 	var b strings.Builder
 	for i, row := range vm.Workers {
 		b.WriteString(rowLine(row, i == vm.Selection))
 		b.WriteByte('\n')
 	}
-	if len(vm.Workers) > 0 && vm.Selection < len(vm.Workers) {
-		b.WriteString(detailLine(vm.Workers[vm.Selection]))
+	if len(vm.Workers) == 0 && vm.Notice != "" {
+		b.WriteString(vm.Notice)
 		b.WriteByte('\n')
 	}
-	selected := vm.Workers[vm.Selection]
-	b.WriteString(footerLine(LegalKeys(selected.State)))
+	if vm.Transcript != nil {
+		b.WriteString(RenderTranscript(vm.Transcript))
+	}
+	if strip, ok := stripLine(vm); ok {
+		b.WriteString(strip)
+		b.WriteByte('\n')
+	}
+	b.WriteString(footerLine(frameKeys(vm)))
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// stripLine picks the detail strip for the focused pane: the transcript
+// selection's own strip, or the selected Worker's.
+func stripLine(vm ViewModel) (string, bool) {
+	if vm.Focus == PaneTranscript && vm.Transcript != nil {
+		if e, ok := vm.Transcript.SelectedEntry(); ok {
+			return transcriptDetailLine(e), true
+		}
+		return "", false
+	}
+	if row, ok := selectedWorker(vm); ok {
+		return detailLine(row), true
+	}
+	return "", false
+}
+
+// frameKeys picks the footer's keys for the focused pane. A transcript focus
+// offers only transcript actions, so no state-illegal Worker key can appear.
+func frameKeys(vm ViewModel) []KeyBinding {
+	if vm.Focus == PaneTranscript && vm.Transcript != nil {
+		return TranscriptKeys(vm.Transcript)
+	}
+	if row, ok := selectedWorker(vm); ok {
+		return LegalKeys(row.State)
+	}
+	return []KeyBinding{{Key: "q", Label: "quit"}}
+}
+
+// selectedWorker returns the selected roster row. The bool is false when the
+// roster is empty, which a transcript-only attach produces.
+func selectedWorker(vm ViewModel) (WorkerRow, bool) {
+	if vm.Selection < 0 || vm.Selection >= len(vm.Workers) {
+		return WorkerRow{}, false
+	}
+	return vm.Workers[vm.Selection], true
 }
 
 // rowLine renders one Worker. Cursor marks the selection; the coarse state and

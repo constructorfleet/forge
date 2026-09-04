@@ -48,6 +48,10 @@ func NewRoster(store RosterStore, now func() time.Time) *Roster {
 // A Worker with no claim (planning) claims no liveness.
 func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (ViewModel, error) {
 	state, err := r.Store.LoadExecution(ctx, executionID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// The Scheduler writes the Execution after the roster starts polling.
+		return ViewModel{Notice: "waiting for the execution to start…"}, nil
+	}
 	if err != nil {
 		return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
 	}
@@ -56,7 +60,11 @@ func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (
 	for _, issue := range state.Issues {
 		rows = append(rows, r.row(ctx, state.Execution.ID, issue, now))
 	}
-	return ViewModel{Workers: rows}, nil
+	vm := ViewModel{Workers: rows}
+	if len(rows) == 0 {
+		vm.Notice = "no issues in this execution"
+	}
+	return vm, nil
 }
 
 // row resolves one Issue into a WorkerRow. A heartbeat missing or stale is
