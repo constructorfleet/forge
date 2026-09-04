@@ -187,6 +187,7 @@ func (t *TranscriptTailer) snapshot() TranscriptViewModel {
 		Evicted:  t.evicted,
 		Dropped:  t.ring.Dropped(),
 		AtTail:   t.offset == 0,
+		AtStart:  start == 0,
 		Retained: len(retained),
 	}
 }
@@ -217,6 +218,9 @@ type TranscriptViewModel struct {
 	Dropped int
 	// AtTail reports that the window follows the live tail.
 	AtTail bool
+	// AtStart reports that the window begins at the retained start, so no
+	// scrollback remains. The pane needs it to refuse an inert scroll.
+	AtStart bool
 	// Retained counts every event held in the ring, visible or scrolled off.
 	Retained int
 }

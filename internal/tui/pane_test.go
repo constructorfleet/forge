@@ -1,0 +1,648 @@
+package tui_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Teagan42/forge/internal/agent"
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/tui"
+)
+
+// call builds a TOOL_CALL pane event.
+func call(seq int, id, name, input string) tui.TranscriptEvent {
+	return tui.TranscriptEvent{Seq: seq, Type: "TOOL_CALL", Role: "assistant", ToolName: name, ToolInput: input, ToolCallID: id}
+}
+
+// result builds a TOOL_RESULT pane event.
+func result(seq int, id, name, output string) tui.TranscriptEvent {
+	return tui.TranscriptEvent{Seq: seq, Type: "TOOL_RESULT", Role: "user", ToolName: name, ToolOutput: output, ToolCallID: id}
+}
+
+// prose builds a MESSAGE pane event.
+func prose(seq int, text string) tui.TranscriptEvent {
+	return tui.TranscriptEvent{Seq: seq, Type: "MESSAGE", Role: "assistant", Text: text}
+}
+
+func TestTranscriptGlyph(t *testing.T) {
+	cases := []struct {
+		name  string
+		event tui.TranscriptEvent
+		want  string
+	}{
+		{"call", call(0, "a", "bash", "ls"), "\u2192"},
+		{"result", result(1, "a", "bash", "ok"), "\u2190"},
+		{"truncation", tui.TranscriptEvent{Seq: 2, Type: "TRUNCATION", Text: "5 dropped"}, "\u2026"},
+		{"prose has no glyph", prose(3, "hello"), " "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tui.TranscriptGlyph(tc.event); got != tc.want {
+				t.Fatalf("TranscriptGlyph(%s) = %q, want %q", tc.event.Type, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPaneCollapsedToolCall proves collapsed is the resting state: one line
+// for the call plus the first output line of its result, nothing more.
+func TestPaneCollapsedToolCall(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "go test ./..."),
+		result(1, "t1", "bash", "ok forge 0.1s\nok forge/internal 0.2s\nFAIL other"),
+	}})
+
+	got := tui.RenderTranscript(pane)
+	lines := nonEmptyLines(got)
+	if len(lines) != 2 {
+		t.Fatalf("collapsed render has %d lines, want 2:\n%s", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "\u2192") || !strings.Contains(lines[0], "bash") {
+		t.Errorf("call line = %q, want the call glyph and the tool name", lines[0])
+	}
+	if !strings.Contains(lines[1], "ok forge 0.1s") {
+		t.Errorf("result line = %q, want the first output line", lines[1])
+	}
+	if strings.Contains(got, "ok forge/internal") || strings.Contains(got, "FAIL other") {
+		t.Errorf("collapsed render leaks later output lines:\n%s", got)
+	}
+	if strings.Contains(got, "go test ./...") {
+		t.Errorf("collapsed render leaks the call input:\n%s", got)
+	}
+}
+
+// TestPaneExpandShowsCallAndResult proves expansion reveals the full call
+// input and the full result output.
+func TestPaneExpandShowsCallAndResult(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "go test ./..."),
+		result(1, "t1", "bash", "line one\nline two"),
+	}})
+	pane.ToggleExpand()
+
+	got := tui.RenderTranscript(pane)
+	for _, want := range []string{"go test ./...", "line one", "line two"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expanded render is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPaneExpansionResetsOnSelectionChange proves expansion is per entry: a
+// selection move collapses what was open, and moving back does not reopen it.
+func TestPaneExpansionResetsOnSelectionChange(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "first input"),
+		result(1, "t1", "bash", "first output"),
+		call(2, "t2", "read", "second input"),
+		result(3, "t2", "read", "second output"),
+	}})
+
+	pane.Select(0)
+	pane.ToggleExpand()
+	if !strings.Contains(tui.RenderTranscript(pane), "first input") {
+		t.Fatalf("entry 0 did not expand:\n%s", tui.RenderTranscript(pane))
+	}
+
+	pane.Select(1)
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "first input") {
+		t.Errorf("expansion survived a selection change:\n%s", got)
+	}
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "second input") {
+		t.Errorf("the new selection opened expanded, want collapsed at rest:\n%s", got)
+	}
+
+	pane.Select(0)
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "first input") {
+		t.Errorf("expansion returned with the selection, want collapsed:\n%s", got)
+	}
+}
+
+// TestPaneToggleCollapsesAgain proves the toggle is symmetric.
+func TestPaneToggleCollapsesAgain(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "the input"),
+		result(1, "t1", "bash", "the output"),
+	}})
+
+	pane.ToggleExpand()
+	pane.ToggleExpand()
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "the input") {
+		t.Errorf("second toggle did not collapse:\n%s", got)
+	}
+}
+
+// TestPaneProseIsNotExpandable proves only tool calls expand.
+func TestPaneProseIsNotExpandable(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{prose(0, "thinking about it")}})
+
+	if pane.CanExpand() {
+		t.Fatal("CanExpand on a prose entry = true, want false")
+	}
+	pane.ToggleExpand()
+	if pane.Expanded(0) {
+		t.Error("a prose entry expanded")
+	}
+}
+
+// TestPaneEvictionWordingIsDistinctFromTruncation proves the reader-side gap
+// and the Agent's own bounded-transcript marker never read as the same thing.
+func TestPaneEvictionWordingIsDistinctFromTruncation(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		Evicted: true,
+		Dropped: 12,
+		Events: []tui.TranscriptEvent{
+			{Seq: 40, Type: "TRUNCATION", Text: "5 dropped"},
+			prose(41, "carrying on"),
+		},
+	})
+
+	got := tui.RenderTranscript(pane)
+	if !strings.Contains(got, "not retained") {
+		t.Errorf("render is missing the eviction marker:\n%s", got)
+	}
+	if !strings.Contains(got, "12") {
+		t.Errorf("eviction marker omits the dropped count:\n%s", got)
+	}
+	if !strings.Contains(got, "truncated by the agent") {
+		t.Errorf("render is missing the truncation marker:\n%s", got)
+	}
+	if strings.Contains(got, "not retained by the agent") {
+		t.Errorf("the two markers share wording:\n%s", got)
+	}
+}
+
+// TestPaneUnpairedResultStaysVisible proves a result whose call fell out of
+// the window still renders, so eviction never hides work that did happen.
+func TestPaneUnpairedResultStaysVisible(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		result(9, "gone", "bash", "orphan output\nmore"),
+	}})
+
+	if len(pane.Entries()) != 1 {
+		t.Fatalf("entries = %d, want 1", len(pane.Entries()))
+	}
+	got := tui.RenderTranscript(pane)
+	if !strings.Contains(got, "←") || !strings.Contains(got, "orphan output") {
+		t.Errorf("unpaired result render = %q, want the result glyph and its first line", got)
+	}
+}
+
+// TestPaneSelectionHoldsItsEntryAsTheTailGrows proves a poll that appends
+// events leaves the operator's selection where they put it.
+func TestPaneSelectionHoldsItsEntryAsTheTailGrows(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	pane.Select(0)
+
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	e, ok := pane.SelectedEntry()
+	if !ok || e.Event.Seq != 0 {
+		t.Fatalf("selected seq = %d (ok=%v), want 0", e.Event.Seq, ok)
+	}
+}
+
+// transcriptFixture builds a pane over one prose event and two tool calls.
+func transcriptFixture() *tui.TranscriptPane {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "starting work"),
+		call(1, "t1", "bash", "go build ./..."),
+		result(2, "t1", "bash", "build ok"),
+	}})
+	return pane
+}
+
+// TestTranscriptKeysAreTranscriptLegalOnly proves the footer never advertises
+// a roster action while the transcript pane holds focus.
+func TestTranscriptKeysAreTranscriptLegalOnly(t *testing.T) {
+	pane := transcriptFixture()
+	pane.Select(1)
+
+	keys := map[string]string{}
+	for _, k := range tui.TranscriptKeys(pane) {
+		keys[k.Key] = k.Label
+	}
+	for _, want := range []string{"q", "tab", "enter", "k", "j"} {
+		if _, ok := keys[want]; !ok {
+			t.Errorf("TranscriptKeys omits %q, got %v", want, keys)
+		}
+	}
+	for _, illegal := range []string{"c", "r", "a"} {
+		if _, ok := keys[illegal]; ok {
+			t.Errorf("TranscriptKeys advertises the roster key %q", illegal)
+		}
+	}
+	if keys["enter"] != "expand" {
+		t.Errorf("enter label = %q, want \"expand\" on a collapsed tool call", keys["enter"])
+	}
+
+	pane.ToggleExpand()
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "enter" && k.Label != "collapse" {
+			t.Errorf("enter label = %q, want \"collapse\" on an expanded tool call", k.Label)
+		}
+	}
+}
+
+// TestTranscriptKeysHideExpandOnProse proves an entry with nothing to expand
+// never advertises the expand key.
+func TestTranscriptKeysHideExpandOnProse(t *testing.T) {
+	pane := transcriptFixture()
+	pane.Select(0)
+
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "enter" {
+			t.Fatalf("TranscriptKeys advertises enter on a prose entry")
+		}
+	}
+}
+
+// fakeScroller counts the scrollback requests the pane forwards.
+type fakeScroller struct {
+	tails int
+	up    int
+	down  int
+}
+
+func (s *fakeScroller) ScrollToTail() { s.tails++ }
+func (s *fakeScroller) ScrollUp(n int) {
+	s.up += n
+}
+func (s *fakeScroller) ScrollDown(n int) { s.down += n }
+
+// TestPaneFollowsTailUntilOperatorSelects proves an unpinned pane keeps
+// following the live tail, and that one operator move pins the selection.
+func TestPaneFollowsTailUntilOperatorSelects(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 2 {
+		t.Fatalf("selected seq = %d, want 2: the pane stopped following the tail", e.Event.Seq)
+	}
+
+	pane.Select(0)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+		prose(3, "fourth"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
+		t.Fatalf("selected seq = %d, want 0: the tail moved an operator selection", e.Event.Seq)
+	}
+}
+
+// TestPaneFollowTailUnpinsTheSelection proves the follow-tail action scrolls
+// the tailer, collapses, selects the newest entry, and resumes tail following.
+func TestPaneFollowTailUnpinsTheSelection(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "the input"),
+		result(1, "t1", "bash", "the output"),
+		prose(2, "carrying on"),
+	}})
+	pane.Select(0)
+	pane.ToggleExpand()
+
+	pane.FollowTail()
+	if sc.tails != 1 {
+		t.Fatalf("ScrollToTail calls = %d, want 1", sc.tails)
+	}
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 2 {
+		t.Errorf("selected seq = %d, want 2 after follow tail", e.Event.Seq)
+	}
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "the input") {
+		t.Errorf("follow tail left an entry expanded:\n%s", got)
+	}
+
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "the input"),
+		result(1, "t1", "bash", "the output"),
+		prose(2, "carrying on"),
+		prose(3, "newest"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 3 {
+		t.Errorf("selected seq = %d, want 3: follow tail did not unpin", e.Event.Seq)
+	}
+}
+
+// TestTranscriptKeysHideTailWithoutScroller proves the footer never advertises
+// a follow-tail the pane cannot perform.
+func TestTranscriptKeysHideTailWithoutScroller(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Events: []tui.TranscriptEvent{prose(0, "old")}})
+
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			t.Fatal("TranscriptKeys advertises follow tail with no scroller attached")
+		}
+	}
+}
+
+// TestTranscriptKeysOfferTailWhenScrolledBack proves the follow-tail key
+// appears only when the window has left the tail.
+func TestTranscriptKeysOfferTailWhenScrolledBack(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Events: []tui.TranscriptEvent{prose(0, "old")}})
+
+	var found bool
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TranscriptKeys omits the follow-tail key while scrolled back: %v", tui.TranscriptKeys(pane))
+	}
+}
+
+// TestFrameRendersTranscriptPaneAndItsFooter proves the pane is part of the
+// same pure frame as the roster, and that focus moves the detail strip and
+// the footer onto the transcript.
+func TestFrameRendersTranscriptPaneAndItsFooter(t *testing.T) {
+	pane := transcriptFixture()
+	pane.Select(1)
+	vm := tui.ViewModel{
+		Workers: []tui.WorkerRow{{
+			IssueID: "issue-1",
+			Title:   "do the thing",
+			State:   domain.StateFailed,
+			Attempt: 2,
+			Budget:  3,
+		}},
+		Transcript: pane,
+		Focus:      tui.PaneTranscript,
+	}
+
+	got := tui.Render(vm)
+	if !strings.Contains(got, "do the thing") {
+		t.Errorf("frame lost the roster row:\n%s", got)
+	}
+	if !strings.Contains(got, "bash") || !strings.Contains(got, "build ok") {
+		t.Errorf("frame lost the transcript pane:\n%s", got)
+	}
+	if !strings.Contains(got, "seq 1") || !strings.Contains(got, "TOOL_CALL") {
+		t.Errorf("detail strip does not describe the transcript selection:\n%s", got)
+	}
+	if strings.Contains(got, "[r] retry") {
+		t.Errorf("footer advertises a roster key while the transcript has focus:\n%s", got)
+	}
+	if !strings.Contains(got, "[enter] expand") {
+		t.Errorf("footer omits the transcript expand key:\n%s", got)
+	}
+}
+
+// TestFrameRosterFocusKeepsRosterFooter proves focus on the roster leaves the
+// worker detail strip and the state-legal keys in place.
+func TestFrameRosterFocusKeepsRosterFooter(t *testing.T) {
+	vm := tui.ViewModel{
+		Workers:    []tui.WorkerRow{{IssueID: "issue-1", Title: "t", State: domain.StateFailed, Attempt: 1, Budget: 3}},
+		Transcript: transcriptFixture(),
+		Focus:      tui.PaneRoster,
+	}
+
+	got := tui.Render(vm)
+	if !strings.Contains(got, "[r] retry") {
+		t.Errorf("footer omits the roster retry key:\n%s", got)
+	}
+	if !strings.Contains(got, "attempt 1/3") {
+		t.Errorf("detail strip is not the worker strip:\n%s", got)
+	}
+	if strings.Contains(got, "[enter] expand") {
+		t.Errorf("footer advertises a transcript key while the roster has focus:\n%s", got)
+	}
+}
+
+// TestRenderEmptyRosterDoesNotPanic proves a frame with no Workers still
+// renders, which a transcript-only attach needs.
+func TestRenderEmptyRosterDoesNotPanic(t *testing.T) {
+	if got := tui.Render(tui.ViewModel{}); got == "" {
+		t.Error("Render on an empty view-model returned nothing, want at least a footer")
+	}
+}
+
+// TestRenderTranscriptNilPane proves the pane renderer tolerates a nil pane,
+// as TranscriptKeys does.
+func TestRenderTranscriptNilPane(t *testing.T) {
+	if got := tui.RenderTranscript(nil); got != "" {
+		t.Errorf("RenderTranscript(nil) = %q, want the empty string", got)
+	}
+}
+
+// TestPaneGlyphsFollowTheAgentEventTypes proves the pane's own event-type
+// names still match the producer's, so a rename in the agent package fails
+// here instead of silently rendering every event as prose.
+func TestPaneGlyphsFollowTheAgentEventTypes(t *testing.T) {
+	cases := []struct {
+		typ  agent.TranscriptEventType
+		want string
+	}{
+		{agent.TranscriptEventToolCall, "→"},
+		{agent.TranscriptEventToolResult, "←"},
+		{agent.TranscriptEventTruncation, "…"},
+		{agent.TranscriptEventMessage, " "},
+	}
+	for _, tc := range cases {
+		got := tui.TranscriptGlyph(tui.TranscriptEvent{Type: string(tc.typ)})
+		if got != tc.want {
+			t.Errorf("TranscriptGlyph(%s) = %q, want %q", tc.typ, got, tc.want)
+		}
+	}
+}
+
+// TestTailerSatisfiesTheScrollerSeam proves the live tailer is the pane's
+// scroller, so the pane's scrollback requests reach the retained window.
+func TestTailerSatisfiesTheScrollerSeam(t *testing.T) {
+	var _ tui.TranscriptScroller = tui.NewTranscriptTailer(nil, 1, 8)
+}
+
+// TestPaneMoveUpAtTopEdgePagesOlderEvents proves the selection can leave the
+// current window: a move past the leading edge scrolls the tailer back, and the
+// wider window then carries the selection onto the older entry.
+func TestPaneMoveUpAtTopEdgePagesOlderEvents(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 3, Events: []tui.TranscriptEvent{
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+	pane.Select(0)
+
+	pane.MoveSelection(-1)
+	if sc.up != 1 {
+		t.Fatalf("ScrollUp events = %d, want 1: the top edge did not page back", sc.up)
+	}
+
+	// The tailer answers with the window one event older.
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 3, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
+		t.Errorf("selected seq = %d, want 0: the pending move did not apply", e.Event.Seq)
+	}
+}
+
+// TestPaneMoveUpAtRetainedStartDoesNotPin proves an up key on the oldest
+// entry, with no older event retained, leaves the pane following the tail. The
+// tailer clamps such a scroll to a no-op, so a pin here would silently stop the
+// pane from following the live tail after a key press that moved nothing.
+func TestPaneMoveUpAtRetainedStartDoesNotPin(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 2, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	pane.Select(0)
+
+	pane.MoveSelection(-1)
+	if sc.up != 0 {
+		t.Errorf("ScrollUp events = %d, want 0 at the retained start", sc.up)
+	}
+
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 3, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
+		t.Errorf("selected seq = %d, want 0: the operator's own Select must still hold", e.Event.Seq)
+	}
+}
+
+// TestPaneMoveDownAtTailDoesNotPin proves a down key on the newest entry, with
+// nothing newer to reach, leaves the pane following the tail.
+func TestPaneMoveDownAtTailDoesNotPin(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+
+	pane.MoveSelection(1)
+	if sc.down != 0 {
+		t.Errorf("ScrollDown events = %d, want 0 at the tail", sc.down)
+	}
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			t.Error("footer offers follow tail after an inert down key")
+		}
+	}
+
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 2 {
+		t.Errorf("selected seq = %d, want 2: an inert down key pinned the selection", e.Event.Seq)
+	}
+}
+
+// TestPaneFollowTailClearsTheFollowTailKey proves the footer reflects the
+// pane's own action at once, without waiting for the next poll.
+func TestPaneFollowTailClearsTheFollowTailKey(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Events: []tui.TranscriptEvent{prose(0, "old")}})
+
+	pane.FollowTail()
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			t.Error("footer still offers follow tail after the pane followed the tail")
+		}
+	}
+}
+
+// TestPanePinnedSelectionAnchorsTheWindow proves a pinned selection that the
+// advancing tail pushes out of the window anchors the window instead of
+// jumping to the newest entry.
+func TestPanePinnedSelectionAnchorsTheWindow(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 2, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	pane.Select(0)
+
+	// The window slides: seq 0 is no longer visible.
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 3, Events: []tui.TranscriptEvent{
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+	if sc.up != 1 {
+		t.Errorf("ScrollUp events = %d, want 1: the pane did not anchor the window", sc.up)
+	}
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 1 {
+		t.Errorf("selected seq = %d, want 1: the lost selection jumped to the tail", e.Event.Seq)
+	}
+
+	// The anchored window brings the pinned entry back.
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 3, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 1 {
+		t.Errorf("selected seq = %d, want 1: the pane lost its pinned entry", e.Event.Seq)
+	}
+}
+
+// TestPaneEmptyToolOutputHasNoBlankLine proves a tool that returns nothing
+// renders one line, not a line plus whitespace.
+func TestPaneEmptyToolOutputHasNoBlankLine(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", "touch f"),
+		result(1, "t1", "bash", ""),
+	}})
+
+	lines := strings.Split(strings.TrimRight(tui.RenderTranscript(pane), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("render has %d lines, want 1:\n%q", len(lines), lines)
+	}
+}
+
+// nonEmptyLines splits a render into its non-blank lines.
+func nonEmptyLines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
