@@ -492,6 +492,11 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	if err := e.Store.ClaimIssue(ctx, execution.ID, issueID, ref); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
 	}
+	// Heartbeat the Worker's liveness badge across its active lifecycle
+	// (claim -> release). Display-only; see RunWorkerHeartbeat.
+	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
+	defer stopHeartbeat()
+	go RunWorkerHeartbeat(heartbeatCtx, e.Store, execution.ID, issueID, heartbeatInterval, e.Now)
 	defer func() {
 		if err := e.Store.ReleaseWorkerClaim(ctx, execution.ID, issueID); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))

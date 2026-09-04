@@ -455,3 +455,75 @@ func TestStateSurvivesProcessRestart(t *testing.T) {
 		t.Fatalf("expected 2 events to survive restart, got %d: %+v", len(events), events)
 	}
 }
+
+// TestClaimIssueRecordsInitialHeartbeat pins that claiming a Worker seeds
+// workers.last_heartbeat (the Worker is alive from the moment it claims),
+// so WorkerClaim reflects a non-zero heartbeat without an explicit beat.
+func TestClaimIssueRecordsInitialHeartbeat(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateReady)
+
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	claim, err := store.WorkerClaim(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if claim.LastHeartbeat.IsZero() {
+		t.Fatal("expected claim to seed a non-zero LastHeartbeat")
+	}
+}
+
+// TestHeartbeatWorkerAdvancesLastHeartbeat pins the heartbeat write: an
+// explicit beat stamps the claim's LastHeartbeat with the supplied time.
+func TestHeartbeatWorkerAdvancesLastHeartbeat(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateReady)
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+
+	at := time.Unix(1710000000, 0).UTC()
+	if err := store.HeartbeatWorker(ctx, "exec-1", "issue-1", at); err != nil {
+		t.Fatalf("HeartbeatWorker: %v", err)
+	}
+	claim, err := store.WorkerClaim(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if !claim.LastHeartbeat.Equal(at) {
+		t.Fatalf("LastHeartbeat = %v, want %v", claim.LastHeartbeat, at)
+	}
+}
+
+// TestTransitionIssueRecordsStateChangedAt pins that the transition
+// transaction stamps execution_issues.state_changed_at, so a reloaded Issue
+// carries a non-zero StateChangedAt. Verifies both the returned Issue and
+// the persisted round-trip.
+func TestTransitionIssueRecordsStateChangedAt(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StatePending)
+
+	got, err := store.TransitionIssue(ctx, "exec-1", "issue-1", domain.StateReady)
+	if err != nil {
+		t.Fatalf("TransitionIssue: %v", err)
+	}
+	if got.StateChangedAt.IsZero() {
+		t.Fatal("expected returned Issue to have a non-zero StateChangedAt")
+	}
+
+	reloaded, err := store.GetIssue(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if reloaded.StateChangedAt.IsZero() {
+		t.Fatal("expected persisted Issue to have a non-zero StateChangedAt")
+	}
+	if !reloaded.StateChangedAt.Equal(got.StateChangedAt) {
+		t.Fatalf("StateChangedAt mismatch: %v vs %v", reloaded.StateChangedAt, got.StateChangedAt)
+	}
+}

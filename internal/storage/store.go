@@ -242,6 +242,11 @@ type WorkerClaim struct {
 	WorkerRef   string
 	OwnerPID    int
 	ClaimedAt   time.Time
+
+	// LastHeartbeat is when this Worker was last observed alive. Display-
+	// only: the TUI's liveness badge derives from it, and no state machine
+	// or loss-detection logic reads it.
+	LastHeartbeat time.Time
 }
 
 // CIRunStatus is the normalized result of one CI poll attempt.
@@ -381,6 +386,13 @@ type Store interface {
 	// ReleaseWorkerClaim removes the active Worker claim for issueID within
 	// executionID. Releasing a missing claim is a no-op.
 	ReleaseWorkerClaim(ctx context.Context, executionID, issueID string) error
+
+	// HeartbeatWorker stamps the active Worker claim for issueID within
+	// executionID with the time it was last observed alive. Display-only:
+	// no state machine or loss-detection logic reads it, but the TUI's
+	// liveness badge derives from it. Returns ErrNotFound if no active
+	// claim exists.
+	HeartbeatWorker(ctx context.Context, executionID, issueID string, at time.Time) error
 
 	// AppendEvent records a standalone Event (for occurrences that are not
 	// Issue state transitions, e.g. execution-level events).

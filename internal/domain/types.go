@@ -55,6 +55,11 @@ type Issue struct {
 	// that has no pending provider-limit backoff, which is every Issue in
 	// any other state.
 	ProviderLimitRetryAt *time.Time
+
+	// StateChangedAt is when the Issue last changed state, written in the
+	// transition transaction. Display-only: elapsed-in-state for the TUI.
+	// Zero when unknown (e.g. an Issue seeded before the column existed).
+	StateChangedAt time.Time
 }
 
 // IsManaged reports whether the Issue is part of the Execution set and will
