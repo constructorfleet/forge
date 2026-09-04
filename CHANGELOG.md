@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.35.0](https://github.com/constructorfleet/forge/compare/forge-v0.34.0...forge-v0.35.0) (2026-09-04)
+
+
+### Features
+
+* **tui:** render quality-gate runs as synthetic timeline rows ([#499](https://github.com/constructorfleet/forge/issues/499)) ([#534](https://github.com/constructorfleet/forge/issues/534)) ([18c6743](https://github.com/constructorfleet/forge/commit/18c6743ec16e2d0acec64ec6fc6f3046b138e7bf))
+* **tui:** show attempt dividers in the transcript scrollback ([#500](https://github.com/constructorfleet/forge/issues/500)) ([#535](https://github.com/constructorfleet/forge/issues/535)) ([a5379bc](https://github.com/constructorfleet/forge/commit/a5379bc3a55c73d1126d4b263fed5b66e39eb5e6))
+
 ## [0.34.0](https://github.com/constructorfleet/forge/compare/forge-v0.33.0...forge-v0.34.0) (2026-09-04)
 
 
