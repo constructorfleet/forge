@@ -8,6 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/Teagan42/forge/internal/scheduler"
+	"github.com/Teagan42/forge/internal/tui"
 )
 
 // runExecute implements `forge execute <issue-number> [<issue-number> ...]`
@@ -18,10 +23,18 @@ import (
 // holding dependency-blocked Issues until their prerequisites are
 // satisfied (see cmd/forge's completionResolver). It prints each Issue's
 // final state and exits non-zero if any Issue errored.
+//
+// When a human is present (a TTY by default, --tui/--no-tui to force either
+// way) it additionally attaches the live roster; the roster is an observer,
+// so quitting (q / Ctrl+C) never stops the run, and the terminal restore
+// makes a second Ctrl+C fall through to the default handler that cancels it.
 func runExecute(args []string) int {
 	fs := flag.NewFlagSet("forge execute", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")
+	tui := &triState{}
+	fs.Func("tui", "force the live roster on", tui.tuiFlag)
+	fs.Func("no-tui", "force the live roster off", tui.noTuiFlag)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -61,7 +74,17 @@ func runExecute(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	runtime, err := buildExecuteRuntime(store, cfg, repoRoot, issueIDs)
+	val, set := tui.wasSet()
+	useTUI := shouldUseTUI(val, set, isTerminalSession())
+
+	executionID := ""
+	var runtime *executeRuntime
+	if useTUI {
+		executionID = uuid.NewString()
+		runtime, err = buildExecuteRuntime(store, cfg, repoRoot, issueIDs, executionID)
+	} else {
+		runtime, err = buildExecuteRuntime(store, cfg, repoRoot, issueIDs)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
@@ -77,12 +100,43 @@ func runExecute(args []string) int {
 		defer stopProviderLimit()
 	}
 
-	results, err := runtime.Scheduler.Run(ctx, issueIDs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
-		return 1
+	if useTUI {
+		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs)
 	}
 
+	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)
+	return reportExecute(results, runErr, issueIDs)
+}
+
+// runExecuteTUI runs the Scheduler to completion while the live roster renders
+// in the background. The roster is the observer: quitting it early (q/Ctrl+C)
+// never cancels the run; when Scheduler.Run returns, the roster is stopped and
+// the final per-Issue states are printed.
+func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store tui.RosterStore, executionID string, issueIDs []string) int {
+	rosterCtx, cancelRoster := context.WithCancel(context.Background())
+	defer cancelRoster()
+	rosterDone := make(chan error, 1)
+	go func() {
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID)
+	}()
+
+	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)
+
+	cancelRoster()
+	if err := <-rosterDone; err != nil {
+		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
+	}
+
+	return reportExecute(results, runErr, issueIDs)
+}
+
+// reportExecute prints each requested Issue's final state and returns a
+// non-zero exit code if the run or any Issue errored.
+func reportExecute(results map[string]scheduler.Result, runErr error, issueIDs []string) int {
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "forge execute: %v\n", runErr)
+		return 1
+	}
 	exitCode := 0
 	for _, id := range issueIDs {
 		res := results[id]

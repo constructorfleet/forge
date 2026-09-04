@@ -305,7 +305,7 @@ type executeRuntime struct {
 // so its Worker sees its prerequisites' committed changes before it starts
 // (issue #108: dependency-ordered execution must also constrain what
 // repository state a dependent executes against, not merely when it runs).
-func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string) (*executeRuntime, error) {
+func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string, issueIDs []string, execIDs ...string) (*executeRuntime, error) {
 	trk, err := buildTracker(cfg, repoRoot)
 	if err != nil {
 		return nil, err
@@ -314,6 +314,14 @@ func buildExecuteRuntime(store storage.Store, cfg config.Config, repoRoot string
 	eng, err := buildEngine(store, cfg, repoRoot)
 	if err != nil {
 		return nil, err
+	}
+	// An explicit execution ID pins the run's Execution, so the TUI roster
+	// (which can only observe, never create) knows exactly what to poll.
+	for _, id := range execIDs {
+		if id != "" {
+			eng.NewExecutionID = func() string { return id }
+			break
+		}
 	}
 
 	wsMgr, err := workspace.NewManager(repoRoot,
