@@ -54,7 +54,7 @@ prerequisite work; see ADR 0030 for rationale.
 | Change | Detail |
 |---|---|
 | WAL enabled | `journal_mode=WAL` + `synchronous(NORMAL)` in the DSN `_pragma` list, not a one-shot exec |
-| Append-only writes | Batch of only unflushed events on a ~250ms timer; flush at run completion on `context.WithoutCancel(ctx)` |
+| Append-only writes | Batch of only unflushed events on a ~250ms timer, plus a flush at run completion; every flush uses `context.WithoutCancel(ctx)` |
 | Stable `seq` | Assigned once at `Emit`, per `agent_run_id`, never renumbered; `UNIQUE (agent_run_id, seq)`; eviction leaves gaps |
 | Cap in SQL | 5000 events, delete-oldest, in the same transaction as an append |
 | Read API | `TranscriptEventsAfter(ctx, agentRunID, afterSeq, limit)` + a phase-agnostic live-runs enumerator returning `agent_run_id` |

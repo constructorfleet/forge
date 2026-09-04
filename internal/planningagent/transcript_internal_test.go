@@ -19,7 +19,12 @@ type recordingTranscriptStore struct {
 	fail  bool
 }
 
-func (s *recordingTranscriptStore) RecordTranscriptEvents(_ context.Context, _, _ string, _ int64, events []storage.TranscriptEvent) error {
+// RecordTranscriptEvents rejects a cancelled context first, the way
+// database/sql does: BeginTx checks ctx.Done() before it takes a connection.
+func (s *recordingTranscriptStore) RecordTranscriptEvents(ctx context.Context, _, _ string, _ int64, events []storage.TranscriptEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fail {
@@ -67,6 +72,24 @@ func TestPlanningSinkFlush_AppendsOnlyUnflushed(t *testing.T) {
 	}
 	if got := store.calls[1]; len(got) != 1 || got[0].Seq != 2 {
 		t.Fatalf("second flush = %+v, want only seq 2", got)
+	}
+}
+
+// TestPlanningSinkFlush_PersistsAfterContextCancellation is issue 454, the
+// planning counterpart: a debounced flush of a post-cancellation event lands in
+// storage without waiting for Close, so a cancelled planning invocation keeps
+// its diagnostic fallback instead of reading as blank.
+func TestPlanningSinkFlush_PersistsAfterContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &recordingTranscriptStore{}
+	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "k", nil)
+
+	cancel()
+	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "cancelled before output"})
+	sink.flush()
+
+	if len(store.calls) != 1 || len(store.calls[0]) != 1 || store.calls[0][0].Text != "cancelled before output" {
+		t.Fatalf("flush after cancellation = %+v, want the fallback event appended", store.calls)
 	}
 }
 

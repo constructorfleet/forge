@@ -21,10 +21,13 @@ and break:
   mounts the worktree, never `.forge/` (ADRs 0021/0022) — but it is a fact a
   future engineer must not assume away.
 - **Writes become an append of only unflushed events on a ~250ms batch**, plus
-  a flush at run completion that runs on `context.WithoutCancel(ctx)` (the sink
-  holds the cancelable run context, so cancellation would otherwise drop the
-  tail). Capture stays best-effort: a failed flush drops events and lets gap
-  detection report them rather than changing the run's outcome.
+  a flush at run completion. Every flush runs on `context.WithoutCancel(ctx)`,
+  which the sink takes at construction (issue 454): `database/sql` rejects a
+  write on an already cancelled context, so a run cancelled before it streams
+  anything would otherwise persist not even its diagnostic fallback and would
+  read as a blank transcript. Capture stays best-effort: a failed flush drops
+  events and lets gap detection report them rather than changing the run's
+  outcome.
 - **`seq` becomes a stable per-run arrival ordinal assigned once at `Emit`**,
   never renumbered, with `UNIQUE (agent_run_id, seq)` making a double-write
   loud. Eviction leaves gaps; the lowest `seq` returned is the eviction count.
