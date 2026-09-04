@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.0](https://github.com/constructorfleet/forge/compare/forge-v0.31.0...forge-v0.32.0) (2026-09-04)
+
+
+### Features
+
+* **storage:** add Worker last_heartbeat and Issue state_changed_at columns ([#494](https://github.com/constructorfleet/forge/issues/494)) ([#511](https://github.com/constructorfleet/forge/issues/511)) ([042a5c0](https://github.com/constructorfleet/forge/commit/042a5c05fa2b3e27f0b8b614cee5b7fdf695ca0b))
+* **tui:** add headless roster frame renderer ([#495](https://github.com/constructorfleet/forge/issues/495)) ([#513](https://github.com/constructorfleet/forge/issues/513)) ([c349a5c](https://github.com/constructorfleet/forge/commit/c349a5c76d22696fb41326f6603c9d19e54fe7a3))
+
 ## [0.31.0](https://github.com/constructorfleet/forge/compare/forge-v0.30.1...forge-v0.31.0) (2026-09-04)
 
 
