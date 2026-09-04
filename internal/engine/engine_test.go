@@ -49,6 +49,7 @@ type spyWorkspaces struct {
 
 	mu            sync.Mutex
 	cleanupCalled bool
+	rebaseCalled  bool
 }
 
 func (s *spyWorkspaces) Create(ctx context.Context, executionID, issueID, base string) (domain.Workspace, error) {
@@ -67,7 +68,16 @@ func (s *spyWorkspaces) Validate(ctx context.Context, executionID, issueID strin
 }
 
 func (s *spyWorkspaces) Rebase(ctx context.Context, executionID, issueID, newBase string) ([]string, error) {
+	s.mu.Lock()
+	s.rebaseCalled = true
+	s.mu.Unlock()
 	return s.mgr.Rebase(ctx, executionID, issueID, newBase)
+}
+
+func (s *spyWorkspaces) RebaseCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rebaseCalled
 }
 
 func (s *spyWorkspaces) CleanupCalled() bool {

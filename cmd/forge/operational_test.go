@@ -1,6 +1,42 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/Teagan42/forge/internal/engine"
+)
+
+func TestReportRetryError_TreatsAlreadyClaimedAsNoOp(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := fmt.Errorf("engine: retry issue 9: %w", engine.ErrRetryAlreadyClaimed)
+
+	if code := reportRetryError(&out, &errOut, "exec-1", "9", err); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "already claimed") {
+		t.Fatalf("stdout = %q, want it to name the claimed retry", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing on a no-op", errOut.String())
+	}
+}
+
+func TestReportRetryError_KeepsFailureExitCode(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := reportRetryError(&out, &errOut, "exec-1", "9", errors.New("disk on fire")); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "disk on fire") {
+		t.Fatalf("stderr = %q, want the original error", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing on a failure", out.String())
+	}
+}
 
 func TestRunCancel_RejectsWrongArgCount(t *testing.T) {
 	for _, args := range [][]string{{}, {"a", "b"}} {

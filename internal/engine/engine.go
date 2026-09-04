@@ -1701,14 +1701,18 @@ func reviewAxisEnvelopesForStorage(issueID string, result review.Result) ([]stor
 // transition moves issueID to state `to` via Store.TransitionIssue, wrapping
 // any error (including *domain.InvalidTransitionError, unwrappable via
 // errors.As) with the operation's context. It is the single chokepoint
-// nearly every engine-driven transition passes through (the two exceptions,
-// internal/ci's own DONE/CI_FAILED transitions and forge resume's
-// NEEDS_INFO -> READY, reflect status independently or trivially need not —
-// see statusreflect.Label), which is why the ticket-24 in-progress/in-review
-// signal (internal/statusreflect) is applied here rather than at each
-// individual call site: transition reloads the Issue's current state before
-// persisting the new one specifically so it has an accurate `from` to hand
-// statusreflect.Apply.
+// nearly every engine-driven transition passes through. There are three
+// exceptions. internal/ci's own DONE/CI_FAILED transitions and forge
+// resume's NEEDS_INFO -> READY reflect status independently or trivially
+// need not — see statusreflect.Label. RetryIssue persists FAILED -> READY
+// through Store.ClaimRetry, because the retry must be one atomic claim
+// (issue 456), and calls applyTransitionEffects itself; add any new effect
+// to applyTransitionEffects so both paths get it.
+//
+// The ticket-24 in-progress/in-review signal (internal/statusreflect) is
+// applied here rather than at each individual call site: transition reloads
+// the Issue's current state before persisting the new one specifically so it
+// has an accurate `from` to hand statusreflect.Apply.
 func (e *Engine) transition(ctx context.Context, executionID, issueID string, to domain.IssueState) (domain.Issue, error) {
 	from, err := e.Store.GetIssue(ctx, executionID, issueID)
 	if err != nil {
@@ -1718,13 +1722,24 @@ func (e *Engine) transition(ctx context.Context, executionID, issueID string, to
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
 	}
-	if err := statusreflect.Apply(ctx, e.StatusTracker, e.Config.StatusReflection, issueID, from.State, to); err != nil {
-		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
-	}
-	if err := e.postStatusStartComment(ctx, executionID, issueID, from.State, to); err != nil {
-		return domain.Issue{}, fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
+	if err := e.applyTransitionEffects(ctx, executionID, issueID, from.State, to); err != nil {
+		return domain.Issue{}, err
 	}
 	return issue, nil
+}
+
+// applyTransitionEffects runs the tracker-side effects of a persisted
+// from -> to transition. It is separate from transition so callers that
+// persist a transition through another Store method (RetryIssue via
+// ClaimRetry) still reflect status and post the start comment.
+func (e *Engine) applyTransitionEffects(ctx context.Context, executionID, issueID string, from, to domain.IssueState) error {
+	if err := statusreflect.Apply(ctx, e.StatusTracker, e.Config.StatusReflection, issueID, from, to); err != nil {
+		return fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
+	}
+	if err := e.postStatusStartComment(ctx, executionID, issueID, from, to); err != nil {
+		return fmt.Errorf("engine: transition issue %s to %s: %w", issueID, to, err)
+	}
+	return nil
 }
 
 // postStatusStartComment posts the ticket-24 status-reflection start

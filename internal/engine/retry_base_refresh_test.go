@@ -161,6 +161,12 @@ func TestRetryIssue_RebaseConflictReportedDistinctly(t *testing.T) {
 		t.Fatalf("initial state = %s, want FAILED", result.Issue.State)
 	}
 
+	failed, err := te.store.GetIssue(ctx, result.ExecutionID, "72")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	failedBudget := failed.RetryBudget
+
 	ws, err := te.store.WorkspaceByIssue(ctx, result.ExecutionID, "72")
 	if err != nil {
 		t.Fatalf("WorkspaceByIssue: %v", err)
@@ -203,5 +209,10 @@ func TestRetryIssue_RebaseConflictReportedDistinctly(t *testing.T) {
 	}
 	if issue.State != domain.StateFailed {
 		t.Fatalf("issue state after rebase conflict = %s, want unchanged FAILED", issue.State)
+	}
+	// RetryIssue claims the retry before it refreshes the base, so a
+	// conflicting refresh must roll the reset budget back too.
+	if issue.RetryBudget != failedBudget {
+		t.Fatalf("retry budget after rebase conflict = %+v, want the pre-retry %+v", issue.RetryBudget, failedBudget)
 	}
 }

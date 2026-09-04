@@ -119,7 +119,11 @@ func activeClaimByIssue(ctx context.Context, q querier, issueID string) (WorkerC
 
 // ReleaseWorkerClaim removes the active Worker claim for one Issue.
 func (s *SQLiteStore) ReleaseWorkerClaim(ctx context.Context, executionID, issueID string) error {
-	if _, err := s.db.ExecContext(ctx, `
+	return releaseWorkerClaim(ctx, s.db, executionID, issueID)
+}
+
+func releaseWorkerClaim(ctx context.Context, q querier, executionID, issueID string) error {
+	if _, err := q.ExecContext(ctx, `
 		DELETE FROM workers
 		WHERE execution_id = ? AND issue_id = ?`,
 		executionID, issueID,
