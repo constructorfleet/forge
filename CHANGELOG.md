@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/constructorfleet/forge/compare/forge-v0.35.0...forge-v0.36.0) (2026-09-04)
+
+
+### Features
+
+* **tui:** label review axes inline and defer diffs to $PAGER ([#501](https://github.com/constructorfleet/forge/issues/501)) ([#541](https://github.com/constructorfleet/forge/issues/541)) ([dec818a](https://github.com/constructorfleet/forge/commit/dec818a18a67df168734062eb0543378e760ee81))
+
 ## [0.35.0](https://github.com/constructorfleet/forge/compare/forge-v0.34.0...forge-v0.35.0) (2026-09-04)
 
 
