@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,6 +34,13 @@ func (f *fakeCIWaiter) Wait(ctx context.Context, executionID, issueID string) (d
 		}
 	}
 	return f.state, f.err
+}
+
+// ownerToken is the identity token a seeded claim records for ownerPID. A
+// test that simulates pid reuse makes ProcessStartToken report a different
+// token for the same pid.
+func ownerToken(pid int) string {
+	return fmt.Sprintf("start-%d", pid)
 }
 
 func seedRecoveryExecution(t *testing.T, te testEngine, issue domain.Issue, state domain.IssueState, ownerPID int) (string, domain.Workspace) {
@@ -66,7 +74,7 @@ func seedRecoveryExecution(t *testing.T, te testEngine, issue domain.Issue, stat
 	if err := te.store.ClaimIssue(ctx, executionID, issue.ID, "worker-"+issue.ID); err != nil {
 		t.Fatalf("ClaimIssue: %v", err)
 	}
-	if err := te.store.UpdateWorkerOwner(ctx, executionID, issue.ID, ownerPID); err != nil {
+	if err := te.store.UpdateWorkerOwner(ctx, executionID, issue.ID, ownerPID, ownerToken(ownerPID)); err != nil {
 		t.Fatalf("UpdateWorkerOwner: %v", err)
 	}
 
@@ -215,6 +223,7 @@ func TestResumeExecution_LiveForeignOwnerDoesNotReleaseClaim(t *testing.T) {
 	te.eng.ProcessRunning = func(pid int) (bool, error) {
 		return pid == 222, nil
 	}
+	te.eng.ProcessStartToken = func(_ context.Context, pid int) string { return ownerToken(pid) }
 
 	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "53b", Title: "Resume owned issue"}, domain.StateImplementing, 222)
 	_, err := te.eng.ResumeExecution(context.Background(), executionID)
@@ -228,6 +237,35 @@ func TestResumeExecution_LiveForeignOwnerDoesNotReleaseClaim(t *testing.T) {
 	}
 	if claim.OwnerPID != 222 {
 		t.Fatalf("OwnerPID after rejected resume = %d, want 222", claim.OwnerPID)
+	}
+}
+
+// A crashed orchestrator leaves owner_pid behind. If the operating system
+// reuses that pid, recovery must not mistake the new process for the old
+// owner and refuse to resume.
+func TestResumeExecution_RecycledOwnerPIDResumes(t *testing.T) {
+	te := approvedTestEngine(t, "53c", domain.Issue{ID: "53c", Title: "Resume recycled owner"})
+	te.eng.Publisher = &fakePublisher{commitSHA: "sha-53c"}
+	te.eng.PRTracker = newFakePRTracker()
+	te.eng.BaseBranch = "main"
+	te.eng.CIWaiter = &fakeCIWaiter{state: domain.StateDone, store: te.store}
+	te.fake = agent.NewFakeAgent()
+	te.fake.ProgramResult("53c", agent.AgentResult{Status: agent.StatusImplemented, Summary: "continued"})
+	te.eng.Agent = te.fake
+	te.eng.OwnerPID = func() int { return 111 }
+	te.eng.ProcessRunning = func(int) (bool, error) { return true, nil }
+	// pid 222 is alive, but it is a different process than the one that
+	// took the claim.
+	te.eng.ProcessStartToken = func(context.Context, int) string { return "start-recycled" }
+
+	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "53c", Title: "Resume recycled owner"}, domain.StateImplementing, 222)
+
+	result, err := te.eng.ResumeExecution(context.Background(), executionID)
+	if err != nil {
+		t.Fatalf("ResumeExecution over a recycled owner pid: %v", err)
+	}
+	if len(result.Issues) != 1 || result.Issues[0].State != domain.StateDone {
+		t.Fatalf("resumed issues = %+v, want one DONE issue", result.Issues)
 	}
 }
 

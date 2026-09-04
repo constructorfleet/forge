@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+
+	"github.com/Teagan42/forge/internal/engine"
 )
 
 func runCancel(args []string) int {
@@ -44,8 +47,14 @@ func runCancel(args []string) int {
 	eng := buildOperationalEngine(store, cfg, repoRoot)
 	state, err := eng.CancelExecution(ctx, fs.Arg(0))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge cancel: %v\n", err)
-		return 1
+		// An unresponsive worker owner is a warning: the Issues are
+		// cancelled and the state below is valid.
+		var ownerErr *engine.CancelOwnerError
+		if !errors.As(err, &ownerErr) {
+			fmt.Fprintf(os.Stderr, "forge cancel: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "forge cancel: warning: %v\n", ownerErr)
 	}
 
 	fmt.Printf("execution %s cancelled\n", state.Execution.ID)

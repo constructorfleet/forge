@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -239,5 +240,124 @@ func TestCancelExecution_StatusShowsCancelledWithoutWorkspaceCorruption(t *testi
 	}
 	if _, err := te.store.WorkerClaim(context.Background(), exec.ID, "63"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("WorkerClaim after cancel = %v, want ErrNotFound", err)
+	}
+}
+
+// A stale owner_pid that the operating system reused points at an unrelated
+// process. Cancel must not signal it, and must still cancel the Issues.
+func TestCancelExecution_RecycledOwnerPIDIsNotSignalled(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{"65": {ID: "65"}})
+	te.eng.OwnerPID = func() int { return 111 }
+	te.eng.ProcessRunning = func(int) (bool, error) { return true, nil }
+	te.eng.ProcessStartToken = func(context.Context, int) string { return "start-recycled" }
+	var signalled []int
+	te.eng.InterruptProcess = func(pid int) error {
+		signalled = append(signalled, pid)
+		return nil
+	}
+
+	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "65", Title: "Cancel recycled owner"}, domain.StateImplementing, 222)
+
+	cancelled, err := te.eng.CancelExecution(context.Background(), executionID)
+	if err != nil {
+		t.Fatalf("CancelExecution: %v", err)
+	}
+	if len(signalled) != 0 {
+		t.Fatalf("signalled pids = %v, want none", signalled)
+	}
+	if len(cancelled.Issues) != 1 || cancelled.Issues[0].State != domain.StateCancelled {
+		t.Fatalf("cancelled issues = %+v, want one CANCELLED issue", cancelled.Issues)
+	}
+}
+
+// An owner the Engine cannot inspect is neither signalled nor released.
+// Signalling could hit an unrelated process that reused the pid, and
+// releasing the claim could hand the Issue to a second Execution while the
+// original owner still writes to the Workspace.
+func TestCancelExecution_UninspectableOwnerKeepsItsClaim(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{"67": {ID: "67"}})
+	te.eng.OwnerPID = func() int { return 111 }
+	inspectErr := errors.New("cannot inspect process 222")
+	te.eng.ProcessRunning = func(int) (bool, error) { return false, inspectErr }
+	var signalled []int
+	te.eng.InterruptProcess = func(pid int) error {
+		signalled = append(signalled, pid)
+		return nil
+	}
+
+	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "67", Title: "Cancel uninspectable owner"}, domain.StateImplementing, 222)
+
+	cancelled, err := te.eng.CancelExecution(context.Background(), executionID)
+	var ownerErr *engine.CancelOwnerError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("CancelExecution error = %v, want *engine.CancelOwnerError", err)
+	}
+	if len(signalled) != 0 {
+		t.Fatalf("signalled pids = %v, want none: the pid may belong to another process", signalled)
+	}
+	if len(cancelled.Issues) != 1 || cancelled.Issues[0].State != domain.StateCancelled {
+		t.Fatalf("cancelled issues = %+v, want one CANCELLED issue", cancelled.Issues)
+	}
+	if _, err := te.store.WorkerClaim(context.Background(), executionID, "67"); err != nil {
+		t.Fatalf("WorkerClaim after cancel = %v, want the claim kept", err)
+	}
+}
+
+// A worker that survives the interrupt makes cancel report an error, but the
+// Issues must still reach CANCELLED so the Execution is not left in limbo.
+func TestCancelExecution_SurvivingOwnerStillCancelsIssues(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{"66": {ID: "66"}})
+	te.eng.OwnerPID = func() int { return 111 }
+	te.eng.ProcessRunning = func(int) (bool, error) { return true, nil }
+	te.eng.ProcessStartToken = func(_ context.Context, pid int) string { return ownerToken(pid) }
+	te.eng.InterruptProcess = func(int) error { return nil }
+	waitErr := errors.New("process 222 still running after cancellation timeout")
+	te.eng.WaitForProcessExit = func(context.Context, int) error { return waitErr }
+
+	executionID, _ := seedRecoveryExecution(t, te, domain.Issue{ID: "66", Title: "Cancel surviving owner"}, domain.StateImplementing, 222)
+
+	cancelled, err := te.eng.CancelExecution(context.Background(), executionID)
+	if !errors.Is(err, waitErr) {
+		t.Fatalf("CancelExecution error = %v, want %v", err, waitErr)
+	}
+	// The error reports only the owner, so a caller can keep the state.
+	var ownerErr *engine.CancelOwnerError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("CancelExecution error = %T, want *engine.CancelOwnerError", err)
+	}
+	if cancelled.Execution.ID != executionID {
+		t.Fatalf("cancelled.Execution.ID = %q, want %q", cancelled.Execution.ID, executionID)
+	}
+
+	issue, err := te.store.GetIssue(context.Background(), executionID, "66")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.State != domain.StateCancelled {
+		t.Fatalf("state after cancel = %s, want CANCELLED", issue.State)
+	}
+
+	// The old owner still runs, so a second Execution must not be able to
+	// claim the same Issue.
+	claim, err := te.store.WorkerClaim(context.Background(), executionID, "66")
+	if err != nil {
+		t.Fatalf("WorkerClaim after cancel with a surviving owner: %v", err)
+	}
+	if claim.OwnerPID != 222 {
+		t.Fatalf("claim.OwnerPID = %d, want 222", claim.OwnerPID)
+	}
+
+	events, err := te.store.EventsByExecution(context.Background(), executionID)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var data string
+	for _, ev := range events {
+		if ev.Type == "execution.cancelled" {
+			data = ev.Data
+		}
+	}
+	if !strings.Contains(data, `"unstopped_owners":"66:222"`) {
+		t.Fatalf("execution.cancelled data = %q, want it to name owner 66:222", data)
 	}
 }

@@ -133,7 +133,7 @@ func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, iss
 	if err := e.Store.ClaimIssue(ctx, exec.ID, issue.ID, workerRef(exec.ID, issue.ID)); err != nil && !errors.Is(err, storage.ErrAlreadyClaimed) {
 		return domain.Issue{}, fmt.Errorf("engine: claim issue %s: %w", issue.ID, err)
 	}
-	if err := e.Store.UpdateWorkerOwner(ctx, exec.ID, issue.ID, e.OwnerPID()); err != nil {
+	if err := e.Store.UpdateWorkerOwner(ctx, exec.ID, issue.ID, e.OwnerPID(), e.ownerToken(ctx)); err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issue.ID, err)
 	}
 	issue, err := e.transition(ctx, exec.ID, issue.ID, domain.StateClaimed)
@@ -423,11 +423,11 @@ func (e *Engine) ensureRecoverableWorker(ctx context.Context, executionID, issue
 			if err := e.Store.ClaimIssue(ctx, executionID, issueID, workerRef(executionID, issueID)); err != nil && !errors.Is(err, storage.ErrAlreadyClaimed) {
 				return err
 			}
-			return e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID())
+			return e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID(), e.ownerToken(ctx))
 		}
 		return err
 	}
-	running, err := e.ProcessRunning(claim.OwnerPID)
+	running, err := e.claimOwnerIsLive(ctx, claim)
 	if err != nil {
 		return fmt.Errorf("engine: inspect worker owner for issue %s: %w", issueID, err)
 	}
@@ -442,7 +442,7 @@ func (e *Engine) ensureRecoverableWorker(ctx context.Context, executionID, issue
 			return err
 		}
 	}
-	return e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID())
+	return e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID(), e.ownerToken(ctx))
 }
 
 // ensureWorkspace returns a ready ExecutionEnvironment for a resumed Issue.
