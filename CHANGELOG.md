@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/constructorfleet/forge/compare/forge-v0.32.0...forge-v0.33.0) (2026-09-04)
+
+
+### Features
+
+* **tui:** add watch/execute live roster entrypoint ([#496](https://github.com/constructorfleet/forge/issues/496)) ([#514](https://github.com/constructorfleet/forge/issues/514)) ([d1517ac](https://github.com/constructorfleet/forge/commit/d1517acb1a950b7c05d6891c33c5bf0a6634c0db))
+
 ## [0.32.0](https://github.com/constructorfleet/forge/compare/forge-v0.31.0...forge-v0.32.0) (2026-09-04)
 
 
