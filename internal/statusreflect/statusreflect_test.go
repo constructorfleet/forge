@@ -15,11 +15,15 @@ func enabledConfig() config.StatusReflectionConfig {
 		Enabled:         true,
 		InProgressLabel: "in-progress",
 		InReviewLabel:   "in-review",
+		BlockedLabel:    "blocked",
 		FailedLabel:     "failed",
 		Comment:         true,
 	}
 }
 
+// TestLabel pins the full canonical IssueState -> tracker label mapping
+// (domain.IssueState.Group), one row per state so every bucket is explicit
+// and a state omitted from the mapping is caught.
 func TestLabel(t *testing.T) {
 	cfg := enabledConfig()
 
@@ -39,7 +43,9 @@ func TestLabel(t *testing.T) {
 		{domain.StatePRCreating, "in-progress"},
 		{domain.StateCIPending, "in-review"},
 		{domain.StateCIFailed, "in-review"},
-		{domain.StateNeedsInfo, ""},
+		{domain.StateNeedsInfo, "blocked"},
+		{domain.StateNeedsReplan, "blocked"},
+		{domain.StateProviderLimit, "blocked"},
 		{domain.StateFailed, "failed"},
 		{domain.StateDone, ""},
 		{domain.StateCancelled, ""},
@@ -130,15 +136,42 @@ func TestApply_FailedSwapsToFailedLabel(t *testing.T) {
 	}
 }
 
-func TestApply_NeedsInfoClearsInProgressLabel(t *testing.T) {
+func TestApply_NeedsInfoSwapsToBlockedLabel(t *testing.T) {
 	cfg := enabledConfig()
 	trk := tracker.NewFakeTracker()
 
 	if err := statusreflect.Apply(context.Background(), trk, cfg, "1", domain.StateImplementing, domain.StateNeedsInfo); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
+	if labels := trk.Labels("1"); len(labels) != 1 || labels[0] != "blocked" {
+		t.Errorf("Labels = %v, want [blocked]", labels)
+	}
+}
+
+func TestApply_ProviderLimitSwapsToBlockedLabel(t *testing.T) {
+	cfg := enabledConfig()
+	trk := tracker.NewFakeTracker()
+
+	if err := statusreflect.Apply(context.Background(), trk, cfg, "1", domain.StateImplementing, domain.StateProviderLimit); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if labels := trk.Labels("1"); len(labels) != 1 || labels[0] != "blocked" {
+		t.Errorf("Labels = %v, want [blocked]", labels)
+	}
+}
+
+// TestApply_ProviderLimitClearsBlockedLabelOnResume pins the other end of
+// the PROVIDER_LIMIT hole: when the backoff clears and the Issue returns to
+// READY, the blocked label is removed, not left behind.
+func TestApply_ProviderLimitClearsBlockedLabelOnResume(t *testing.T) {
+	cfg := enabledConfig()
+	trk := tracker.NewFakeTracker()
+
+	if err := statusreflect.Apply(context.Background(), trk, cfg, "1", domain.StateProviderLimit, domain.StateReady); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
 	if labels := trk.Labels("1"); len(labels) != 0 {
-		t.Errorf("Labels = %v, want none (composes with, not fighting, the needs-info label)", labels)
+		t.Errorf("Labels = %v, want none (blocked label removed on resume)", labels)
 	}
 }
 
