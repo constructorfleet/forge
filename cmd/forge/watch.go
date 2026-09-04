@@ -134,7 +134,7 @@ func runWatch(args []string) int {
 		case 1:
 			target = watchTarget{id: live[0].ID, isCoding: true}
 		default:
-			fmt.Fprintln(os.Stderr, fmt.Sprintf("forge watch: %d active executions; pass one:", len(live)))
+			fmt.Fprintf(os.Stderr, "forge watch: %d active executions; pass one:\n", len(live))
 			for _, e := range live {
 				fmt.Fprintf(os.Stderr, "  %s  base=%s  started=%s  active=%d done=%d failed=%d\n",
 					e.ID, e.Base, e.Started.Format(time.RFC3339), e.Active, e.Done, e.Failed)
