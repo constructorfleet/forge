@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -26,9 +27,32 @@ func (e *RebaseConflictError) Error() string {
 	return fmt.Sprintf("FAILED: rebase conflict onto %s: %s", e.Base, strings.Join(e.Paths, ", "))
 }
 
+// CancelOwnerError reports that CancelExecution could not stop, or could not
+// inspect, one or more worker owners. The cancel itself is complete: every
+// non-terminal Issue is CANCELLED, and every Issue whose owner did not stop
+// or could not be inspected keeps its Worker claim. Callers must test for
+// this error and report it as a warning, not as a failed cancel.
+type CancelOwnerError struct {
+	Err error
+}
+
+func (e *CancelOwnerError) Error() string {
+	return fmt.Sprintf("worker owner not stopped or not inspected: %v", e.Err)
+}
+
+func (e *CancelOwnerError) Unwrap() error { return e.Err }
+
 // CancelExecution interrupts any live worker owners for executionID, then
 // marks every non-terminal Issue in the Execution CANCELLED and releases
-// its worker claim.
+// its worker claim. It keeps the claim of an owner that did not stop, and of
+// an owner it could not inspect, and it names that Issue and pid in the
+// execution.cancelled event.
+//
+// A non-nil error of type *CancelOwnerError reports only that a worker owner
+// did not stop or could not be inspected; the Issues are cancelled and the
+// returned ExecutionState is valid. Callers must not read such an error as
+// "nothing was cancelled". Any other non-nil error comes with a zero
+// ExecutionState, even when earlier Issues in the loop already transitioned.
 func (e *Engine) CancelExecution(ctx context.Context, executionID string) (storage.ExecutionState, error) {
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
@@ -39,18 +63,29 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 		return storage.ExecutionState{}, err
 	}
 
-	for _, pid := range workerOwners(ctx, e.Store, executionID, state.Issues) {
+	// An owner that does not stop is a problem to report, but it must not
+	// stop the CANCELLED transitions below. A cancel that signals a worker
+	// and then leaves every Issue in its previous state is worse than one
+	// that cancels the Issues and reports the unresponsive owner.
+	owners, ownerErr := e.workerOwnersOf(ctx, executionID, state.Issues)
+	stopped := map[int]struct{}{}
+	for _, pid := range sortedOwnerPIDs(owners.live) {
 		if pid == e.OwnerPID() {
+			stopped[pid] = struct{}{}
 			continue
 		}
 		if err := e.InterruptProcess(pid); err != nil {
-			return storage.ExecutionState{}, fmt.Errorf("engine: interrupt worker owner %d: %w", pid, err)
+			ownerErr = errors.Join(ownerErr, fmt.Errorf("engine: interrupt worker owner %d: %w", pid, err))
+			continue
 		}
 		if err := e.WaitForProcessExit(ctx, pid); err != nil {
-			return storage.ExecutionState{}, fmt.Errorf("engine: wait for worker owner %d: %w", pid, err)
+			ownerErr = errors.Join(ownerErr, fmt.Errorf("engine: wait for worker owner %d: %w", pid, err))
+			continue
 		}
+		stopped[pid] = struct{}{}
 	}
 
+	var kept []string
 	for _, issue := range state.Issues {
 		if issue.State.IsTerminal() {
 			continue
@@ -66,15 +101,34 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 				}
 			}
 		}
+		// workers.issue_id is globally unique, so releasing the claim of an
+		// owner that still runs would let a second Execution claim the same
+		// Issue while the first owner still writes to it. Keep the claim.
+		if pid, keep := owners.keeps(issue.ID, stopped); keep {
+			kept = append(kept, fmt.Sprintf("%s:%d", issue.ID, pid))
+			continue
+		}
 		if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issue.ID); err != nil {
 			return storage.ExecutionState{}, fmt.Errorf("engine: release worker claim for issue %s: %w", issue.ID, err)
 		}
 	}
 
-	if err := e.appendEvent(ctx, executionID, "", "execution.cancelled", map[string]string{}); err != nil {
+	payload := map[string]string{}
+	if len(kept) > 0 {
+		sort.Strings(kept)
+		payload["unstopped_owners"] = strings.Join(kept, ",")
+	}
+	if err := e.appendEvent(ctx, executionID, "", "execution.cancelled", payload); err != nil {
 		return storage.ExecutionState{}, err
 	}
-	return e.Store.LoadExecution(ctx, executionID)
+	cancelled, err := e.Store.LoadExecution(ctx, executionID)
+	if err != nil {
+		return storage.ExecutionState{}, errors.Join(ownerErr, fmt.Errorf("engine: cancel execution %s: %w", executionID, err))
+	}
+	if ownerErr != nil {
+		return cancelled, &CancelOwnerError{Err: ownerErr}
+	}
+	return cancelled, nil
 }
 
 // RetryIssue reruns a FAILED Issue within its existing Execution, reusing
@@ -195,17 +249,84 @@ func (e *Engine) refreshRetryBase(ctx context.Context, exec domain.Execution, is
 	})
 }
 
-func workerOwners(ctx context.Context, store storage.Store, executionID string, issues []domain.Issue) []int {
-	owners := map[int]struct{}{}
+// workerOwners groups an Execution's Worker claims by what the Engine knows
+// about their owning process. Live holds the owners that passed the identity
+// test. Unknown holds the owners the Engine could not inspect, which needs
+// its own group because neither default is safe: signalling the pid can hit
+// an unrelated process that reused it, and releasing the claim can hand the
+// Issue to a second Execution while the original owner still writes to the
+// Workspace. Cancel therefore does neither — it keeps the claim and reports
+// the owner.
+type workerOwners struct {
+	live    map[string]int
+	unknown map[string]int
+}
+
+// keeps reports whether issueID's claim must survive the cancel, and names
+// the owner pid it belongs to.
+func (o workerOwners) keeps(issueID string, stopped map[int]struct{}) (int, bool) {
+	if pid, ok := o.unknown[issueID]; ok {
+		return pid, true
+	}
+	pid, ok := o.live[issueID]
+	if !ok {
+		return 0, false
+	}
+	if _, gone := stopped[pid]; gone {
+		return 0, false
+	}
+	return pid, true
+}
+
+// workerOwnersOf groups each Issue in executionID by its owner's liveness.
+// It drops an Issue whose owner process is gone, whose owner pid the
+// operating system reused for an unrelated process, or which has no claim at
+// all (ErrNotFound). The error collects the claim reads that failed; the
+// returned groups stay usable.
+func (e *Engine) workerOwnersOf(ctx context.Context, executionID string, issues []domain.Issue) (workerOwners, error) {
+	owners := workerOwners{live: map[string]int{}, unknown: map[string]int{}}
+	// One orchestrator normally owns every Issue in the Execution, and the
+	// token lookup can run a subprocess, so ask once per pid.
+	// The key is pid plus recorded token, because two claim rows can name
+	// one pid with different tokens, and only one of them is the live owner.
+	tokens := map[string]bool{}
+	var errs error
 	for _, issue := range issues {
-		claim, err := store.WorkerClaim(ctx, executionID, issue.ID)
-		if err != nil || claim.OwnerPID <= 0 {
+		claim, err := e.Store.WorkerClaim(ctx, executionID, issue.ID)
+		if err != nil {
+			if !errors.Is(err, storage.ErrNotFound) {
+				errs = errors.Join(errs, fmt.Errorf("engine: read worker claim for issue %s: %w", issue.ID, err))
+			}
 			continue
 		}
-		owners[claim.OwnerPID] = struct{}{}
+		key := fmt.Sprintf("%d/%s", claim.OwnerPID, claim.OwnerToken)
+		live, cached := tokens[key]
+		if !cached {
+			live, err = e.claimOwnerIsLive(ctx, claim)
+			if err != nil {
+				errs = errors.Join(errs, fmt.Errorf("engine: inspect worker owner for issue %s: %w", issue.ID, err))
+				owners.unknown[issue.ID] = claim.OwnerPID
+				continue
+			}
+			tokens[key] = live
+		}
+		if live {
+			owners.live[issue.ID] = claim.OwnerPID
+		}
 	}
-	pids := make([]int, 0, len(owners))
-	for pid := range owners {
+	return owners, errs
+}
+
+// sortedOwnerPIDs returns each distinct owner pid one time, in a stable
+// order, so cancel signals a pid that owns several Issues one time.
+func sortedOwnerPIDs(ownerByIssue map[string]int) []int {
+	seen := map[int]struct{}{}
+	pids := make([]int, 0, len(ownerByIssue))
+	for _, pid := range ownerByIssue {
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
 		pids = append(pids, pid)
 	}
 	sort.Ints(pids)

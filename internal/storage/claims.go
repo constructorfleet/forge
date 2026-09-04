@@ -11,10 +11,15 @@ import (
 
 // ClaimIssue records a Worker claim on an Issue and appends a claim Event,
 // transactionally. Returns ErrAlreadyClaimed if the Issue is already
-// claimed by any active Execution (workers.UNIQUE(issue_id)) or ErrNotFound
-// if the Issue doesn't exist (workers.FOREIGN KEY -> execution_issues), in
-// both cases translating a database constraint violation rather than doing
-// a read-then-write check that would race.
+// claimed by any active Execution, or ErrNotFound if the Issue doesn't
+// exist (workers.FOREIGN KEY -> execution_issues). In both cases it
+// translates a database constraint violation rather than doing a
+// read-then-write check that would race.
+//
+// The global guarantee is the unique index on workers.issue_id from
+// migration 0011, not the weaker UNIQUE(execution_id, issue_id) in
+// 0001_init.sql. activeClaimByIssue relies on it: one Issue has at most one
+// active claim across all Executions.
 func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -56,14 +61,18 @@ func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, work
 	return nil
 }
 
-// UpdateWorkerOwner records the owning process ID for an active Worker
-// claim.
-func (s *SQLiteStore) UpdateWorkerOwner(ctx context.Context, executionID, issueID string, ownerPID int) error {
+// UpdateWorkerOwner records the owning process ID and process identity
+// token for an active Worker claim. It writes both together, including an
+// empty ownerToken. The pid and the token must describe one process: a new
+// pid beside the previous owner's token fails the identity test and makes
+// the new, live owner look dead. An empty token means "identity unknown",
+// which Engine.claimOwnerIsLive answers with the pid test alone.
+func (s *SQLiteStore) UpdateWorkerOwner(ctx context.Context, executionID, issueID string, ownerPID int, ownerToken string) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE workers
-		SET owner_pid = ?
+		SET owner_pid = ?, owner_token = ?
 		WHERE execution_id = ? AND issue_id = ?`,
-		ownerPID, executionID, issueID,
+		ownerPID, ownerToken, executionID, issueID,
 	)
 	if err != nil {
 		return fmt.Errorf("storage: update worker owner for issue %s/%s: %w", executionID, issueID, err)
@@ -81,13 +90,13 @@ func (s *SQLiteStore) UpdateWorkerOwner(ctx context.Context, executionID, issueI
 // WorkerClaim reloads the active Worker claim for one Issue.
 func (s *SQLiteStore) WorkerClaim(ctx context.Context, executionID, issueID string) (WorkerClaim, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at, last_heartbeat
+		SELECT execution_id, issue_id, worker_ref, owner_pid, owner_token, claimed_at, last_heartbeat
 		FROM workers
 		WHERE execution_id = ? AND issue_id = ?`,
 		executionID, issueID,
 	)
 	var claim WorkerClaim
-	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
+	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.OwnerToken, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkerClaim{}, fmt.Errorf("storage: worker claim %s/%s: %w", executionID, issueID, ErrNotFound)
 		}
@@ -100,13 +109,13 @@ func (s *SQLiteStore) WorkerClaim(ctx context.Context, executionID, issueID stri
 
 func activeClaimByIssue(ctx context.Context, q querier, issueID string) (WorkerClaim, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at, last_heartbeat
+		SELECT execution_id, issue_id, worker_ref, owner_pid, owner_token, claimed_at, last_heartbeat
 		FROM workers
 		WHERE issue_id = ?`,
 		issueID,
 	)
 	var claim WorkerClaim
-	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
+	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.OwnerToken, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkerClaim{}, fmt.Errorf("storage: worker claim for issue %s: %w", issueID, ErrNotFound)
 		}

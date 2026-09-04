@@ -63,7 +63,7 @@ func TestWorkerClaimOwnerAndRelease_AllowsReclaim(t *testing.T) {
 	if err := store.ClaimIssue(ctx, "exec-worker", "issue-worker", "worker-a"); err != nil {
 		t.Fatalf("ClaimIssue: %v", err)
 	}
-	if err := store.UpdateWorkerOwner(ctx, "exec-worker", "issue-worker", 4242); err != nil {
+	if err := store.UpdateWorkerOwner(ctx, "exec-worker", "issue-worker", 4242, "start-token-a"); err != nil {
 		t.Fatalf("UpdateWorkerOwner: %v", err)
 	}
 
@@ -73,6 +73,9 @@ func TestWorkerClaimOwnerAndRelease_AllowsReclaim(t *testing.T) {
 	}
 	if claim.WorkerRef != "worker-a" || claim.OwnerPID != 4242 {
 		t.Fatalf("claim = %+v, want worker-a owned by 4242", claim)
+	}
+	if claim.OwnerToken != "start-token-a" {
+		t.Fatalf("claim.OwnerToken = %q, want start-token-a", claim.OwnerToken)
 	}
 
 	if err := store.ReleaseWorkerClaim(ctx, "exec-worker", "issue-worker"); err != nil {
@@ -84,6 +87,36 @@ func TestWorkerClaimOwnerAndRelease_AllowsReclaim(t *testing.T) {
 
 	if err := store.ClaimIssue(ctx, "exec-worker", "issue-worker", "worker-b"); err != nil {
 		t.Fatalf("reclaim ClaimIssue: %v", err)
+	}
+}
+
+// The pid and the token must always describe one process. Keeping the
+// previous owner's token beside a new pid fails the identity test and makes
+// the new, live owner look dead.
+func TestUpdateWorkerOwner_WritesPIDAndTokenTogether(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedRecoveryIssue(t, store, "exec-token", "issue-token", domain.StateClaimed)
+
+	if err := store.ClaimIssue(ctx, "exec-token", "issue-token", "worker-token"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.UpdateWorkerOwner(ctx, "exec-token", "issue-token", 4242, "start-token-a"); err != nil {
+		t.Fatalf("UpdateWorkerOwner: %v", err)
+	}
+	if err := store.UpdateWorkerOwner(ctx, "exec-token", "issue-token", 5353, ""); err != nil {
+		t.Fatalf("UpdateWorkerOwner with empty token: %v", err)
+	}
+
+	claim, err := store.WorkerClaim(ctx, "exec-token", "issue-token")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if claim.OwnerPID != 5353 {
+		t.Fatalf("claim.OwnerPID = %d, want 5353", claim.OwnerPID)
+	}
+	if claim.OwnerToken != "" {
+		t.Fatalf("claim.OwnerToken = %q, want the new owner's empty token", claim.OwnerToken)
 	}
 }
 

@@ -270,6 +270,29 @@ type Engine struct {
 	ProcessRunning     func(pid int) (bool, error)
 	InterruptProcess   func(pid int) error
 	WaitForProcessExit func(ctx context.Context, pid int) error
+
+	// ProcessStartToken returns a string that identifies the process which
+	// currently holds pid. The operating system reuses a pid after its
+	// process exits, so a pid alone cannot prove that a recorded owner is
+	// still the same process. It returns an empty token when it cannot
+	// identify the process. It returns no error, because an empty token
+	// fails open: the recorded owner then counts as live if ProcessRunning
+	// reports the pid alive.
+	ProcessStartToken func(ctx context.Context, pid int) string
+
+	// ownerTokenMu guards the cached token for this Engine's own process.
+	// Engine computes the token one time per OwnerPID and reuses it, so
+	// repeated lookups cannot disagree and a claim does not pay for a
+	// subprocess. ownerTokenPID records which pid produced the token,
+	// because OwnerPID is injectable and can change.
+	//
+	// The cache covers this process only. A lookup of another process's pid
+	// runs a subprocess on a system without procfs, so callers that inspect
+	// many claims cache per pid themselves; see workerOwnersOf.
+	ownerTokenMu    sync.Mutex
+	ownerTokenValue string
+	ownerTokenPID   int
+	ownerTokenDone  bool
 }
 
 // New builds an Engine from its injected dependencies.
@@ -287,6 +310,7 @@ func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag 
 		ProcessRunning:     processRunning,
 		InterruptProcess:   interruptProcess,
 		WaitForProcessExit: waitForProcessExit,
+		ProcessStartToken:  processStartToken,
 	}
 }
 
@@ -502,7 +526,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 			retErr = errors.Join(retErr, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))
 		}
 	}()
-	if err := e.Store.UpdateWorkerOwner(ctx, execution.ID, issueID, e.OwnerPID()); err != nil {
+	if err := e.Store.UpdateWorkerOwner(ctx, execution.ID, issueID, e.OwnerPID(), e.ownerToken(ctx)); err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issueID, err)
 	}
 	issue, err = e.transition(ctx, execution.ID, issueID, domain.StateClaimed)

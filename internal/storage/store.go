@@ -252,6 +252,11 @@ type WorkerClaim struct {
 	OwnerPID    int
 	ClaimedAt   time.Time
 
+	// OwnerToken identifies the owning process itself, so a recycled
+	// OwnerPID does not look like a live owner. It is empty for claims
+	// written before migration 0029, and callers then test the pid alone.
+	OwnerToken string
+
 	// LastHeartbeat is when this Worker was last observed alive. Display-
 	// only: the TUI's liveness badge derives from it, and no state machine
 	// or loss-detection logic reads it.
@@ -384,9 +389,11 @@ type Store interface {
 	// callers can report the owning Execution explicitly.
 	ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error
 
-	// UpdateWorkerOwner records the OS process ID currently owning the
-	// active Worker claim for issueID within executionID.
-	UpdateWorkerOwner(ctx context.Context, executionID, issueID string, ownerPID int) error
+	// UpdateWorkerOwner records the OS process ID and the process identity
+	// token that own the active Worker claim for issueID within
+	// executionID. It writes both together, including an empty ownerToken,
+	// because a pid beside another process's token fails the identity test.
+	UpdateWorkerOwner(ctx context.Context, executionID, issueID string, ownerPID int, ownerToken string) error
 
 	// WorkerClaim reloads the active Worker claim for issueID within
 	// executionID. Returns ErrNotFound if no active claim exists.
