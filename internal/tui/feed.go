@@ -41,11 +41,29 @@ type TranscriptFeed struct {
 	issueID     string
 	pane        *TranscriptPane
 	tailer      *TranscriptTailer
+
+	// height is the viewport height a newly built tailer inherits.
+	height int
 }
 
 // NewTranscriptFeed builds a feed over store. The first Apply builds the pane.
 func NewTranscriptFeed(store TranscriptFeedStore) *TranscriptFeed {
 	return &TranscriptFeed{store: store}
+}
+
+// SetHeight sets the scrollback viewport height in events for the tailer the
+// feed owns. A height of zero or less restores the tailer's default. The live
+// view calls it from the terminal size, so the pane reads as much history as the
+// rows can hold.
+//
+// The update goroutine alone calls this, while a Fetch for the same feed can run
+// in a command goroutine. So Fetch must not read height: the two would then race
+// over one field. Only Apply, on the update goroutine, builds a tailer from it.
+func (f *TranscriptFeed) SetHeight(h int) {
+	f.height = h
+	if f.tailer != nil {
+		f.tailer.SetHeight(h)
+	}
 }
 
 // FeedRead holds one Fetch pass's store reads for one Issue. Apply commits it.
@@ -141,7 +159,9 @@ func (f *TranscriptFeed) reset(executionID, issueID string) {
 // tailerFor returns the tailer Fetch reads through, or nil where the Issue holds
 // no attempt yet. The pane's own tailer serves the Issue it already holds;
 // another Issue, or a first pass, reads through a throwaway tailer, because
-// Fetch must not build the state Apply owns.
+// Fetch must not build the state Apply owns. The throwaway tailer keeps the
+// default height, because a fetch must not read the height field; the window it
+// holds reaches no view, and Apply builds the committed tailer at f.height.
 func (f *TranscriptFeed) tailerFor(executionID, issueID string, runs []storage.AgentRun) *TranscriptTailer {
 	if f.tailer != nil && f.executionID == executionID && f.issueID == issueID {
 		return f.tailer
@@ -159,13 +179,21 @@ func (f *TranscriptFeed) attachRuns(runs []storage.AgentRun) {
 		return
 	}
 	if f.tailer == nil {
-		f.tailer = NewTranscriptTailer(f.store, runs[0].ID, 0)
+		f.tailer = f.newTailer(runs[0].ID)
 		f.pane.SetScroller(f.tailer)
 	}
 	// AddRun ignores a known run, so the first one costs nothing on later polls.
 	for _, run := range runs {
 		f.tailer.AddRun(run.ID)
 	}
+}
+
+// newTailer builds the feed's committed tailer at the current viewport height,
+// so a height set before the first attempt is not lost. Apply alone calls it.
+func (f *TranscriptFeed) newTailer(agentRunID int64) *TranscriptTailer {
+	t := NewTranscriptTailer(f.store, agentRunID, 0)
+	t.SetHeight(f.height)
+	return t
 }
 
 // runIDs lists the AgentRun ids in record order.

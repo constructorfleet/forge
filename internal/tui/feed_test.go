@@ -361,3 +361,41 @@ func TestFeedPollGateErrorKeepsEvents(t *testing.T) {
 		t.Errorf("a failed gate read blanked the events:\n%s", got)
 	}
 }
+
+// TestFeedSetHeightWindowsTheTailer proves the feed passes the viewport height
+// to the tailer it owns: a two-event window drops the oldest event.
+func TestFeedSetHeightWindowsTheTailer(t *testing.T) {
+	feed := tui.NewTranscriptFeed(feedFixture())
+	feed.SetHeight(2)
+
+	pane, err := feed.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	got := tui.RenderTranscript(pane)
+	if strings.Contains(got, "starting work") {
+		t.Errorf("a height of 2 kept the oldest event:\n%s", got)
+	}
+	if !strings.Contains(got, "bash") {
+		t.Errorf("render omits the newest events:\n%s", got)
+	}
+}
+
+// TestFeedSetHeightAfterPollWindowsTheTailer proves a height set after the pane
+// exists reaches the tailer the feed already holds.
+func TestFeedSetHeightAfterPollWindowsTheTailer(t *testing.T) {
+	feed := tui.NewTranscriptFeed(feedFixture())
+	ctx := context.Background()
+	if _, err := feed.Poll(ctx, "ex-1", "#1"); err != nil {
+		t.Fatalf("first Poll: %v", err)
+	}
+
+	feed.SetHeight(2)
+	pane, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("second Poll: %v", err)
+	}
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "starting work") {
+		t.Errorf("a height of 2 kept the oldest event:\n%s", got)
+	}
+}
