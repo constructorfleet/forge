@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.2](https://github.com/constructorfleet/forge/compare/forge-v0.36.1...forge-v0.36.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* make retry one atomic claim ([#456](https://github.com/constructorfleet/forge/issues/456)) ([#559](https://github.com/constructorfleet/forge/issues/559)) ([1157baa](https://github.com/constructorfleet/forge/commit/1157baa90e1a4e359fcb6ac130727e7e6a2bc16f))
+
 ## [0.36.1](https://github.com/constructorfleet/forge/compare/forge-v0.36.0...forge-v0.36.1) (2026-09-04)
 
 
