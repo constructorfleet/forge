@@ -1039,6 +1039,9 @@ func TestDefault_StatusReflectionDisabled(t *testing.T) {
 	if cfg.StatusReflection.FailedLabel != "failed" {
 		t.Errorf("StatusReflection.FailedLabel = %q, want failed", cfg.StatusReflection.FailedLabel)
 	}
+	if cfg.StatusReflection.BlockedLabel != "" {
+		t.Errorf("StatusReflection.BlockedLabel = %q, want empty (default keeps old compose behavior)", cfg.StatusReflection.BlockedLabel)
+	}
 	if cfg.StatusReflection.Comment {
 		t.Error("StatusReflection.Comment = true, want false")
 	}
@@ -1050,6 +1053,7 @@ status_reflection:
   enabled: true
   in_progress_label: working
   in_review_label: review
+  blocked_label: blocked
   failed_label: broken
   comment: true
 `)
@@ -1062,6 +1066,7 @@ status_reflection:
 		Enabled:         true,
 		InProgressLabel: "working",
 		InReviewLabel:   "review",
+		BlockedLabel:    "blocked",
 		FailedLabel:     "broken",
 		Comment:         true,
 	}

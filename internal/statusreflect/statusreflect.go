@@ -38,31 +38,32 @@ type Tracker interface {
 const startComment = "Forge has started work on this issue."
 
 // Label returns the tracker label state should carry under cfg, or "" if
-// state carries no status-reflection label at all: PENDING,
-// BLOCKED_DEPENDENCY, and READY (not yet claimed); NEEDS_INFO and
-// NEEDS_REPLAN (both compose with the existing blocked label applied by
-// internal/engine's handleNeedsInfo/handleReplanRequired rather than
-// fighting it — see Apply's doc comment); and the terminal DONE/CANCELLED
-// states.
+// state carries no status-reflection label at all. Derivation is keyed on
+// the canonical IssueState.Group() (internal/domain) instead of a private
+// bucket switch, so statusreflect and the TUI agree on every state. The
+// status-display groups that have no tracker label map to "".
 func Label(cfg config.StatusReflectionConfig, state domain.IssueState) string {
-	switch state {
-	case domain.StateClaimed, domain.StatePreparing, domain.StateImplementing,
-		domain.StateValidating, domain.StateReviewing, domain.StateCommitting,
-		domain.StatePRCreating:
+	switch state.Group() {
+	case domain.GroupWorking:
 		// Forge is actively working the Issue, including the brief window
 		// where a commit/push/PR-creation attempt is in flight — the PR
 		// is not confirmed to exist until PR_CREATING -> CI_PENDING
 		// succeeds, so InReviewLabel would overclaim readiness for review
 		// if applied any earlier.
 		return cfg.InProgressLabel
-	case domain.StateCIPending, domain.StateCIFailed:
+	case domain.GroupWaiting:
 		// A pull request exists; Forge is waiting on CI (or, in
 		// CI_FAILED, about to repair it) rather than actively
 		// implementing.
 		return cfg.InReviewLabel
-	case domain.StateFailed:
+	case domain.GroupBlocked:
+		// Parked on human input or a provider backoff.
+		return cfg.BlockedLabel
+	case domain.GroupFailed:
 		return cfg.FailedLabel
 	default:
+		// GroupPending (not yet claimed) and GroupDone (terminal) carry no
+		// status-reflection label.
 		return ""
 	}
 }

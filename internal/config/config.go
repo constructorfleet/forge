@@ -402,6 +402,11 @@ type StatusReflectionConfig struct {
 	// FailedLabel replaces InProgressLabel when an Issue reaches FAILED.
 	// Empty disables this label.
 	FailedLabel string `yaml:"failed_label"`
+	// BlockedLabel is applied while an Issue is parked awaiting human input
+	// or a provider backoff (NEEDS_INFO, NEEDS_REPLAN, PROVIDER_LIMIT).
+	// Empty disables it, preserving the older compose-with-Blocked.Label
+	// behavior for NEEDS_INFO and NEEDS_REPLAN.
+	BlockedLabel string `yaml:"blocked_label"`
 	// Comment, if true, posts a one-line comment the first time the
 	// in-progress signal is applied (the READY -> CLAIMED transition).
 	Comment bool `yaml:"comment"`
