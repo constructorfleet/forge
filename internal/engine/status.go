@@ -111,13 +111,18 @@ func ListActiveExecutions(ctx context.Context, store StatusStore) ([]ExecutionSu
 			IssueCount: len(state.Issues),
 		}
 		for _, issue := range state.Issues {
-			switch issue.State {
-			case domain.StateDone:
-				summary.DoneIssues++
-			case domain.StateFailed:
+			// Coarse bucketing is the canonical issueState.Group(); only the
+			// DONE/CANCELLED split inside GroupDone stays on the exact state
+			// because this report reports them separately.
+			switch issue.State.Group() {
+			case domain.GroupFailed:
 				summary.FailedIssues++
-			case domain.StateCancelled:
-				summary.CancelledIssues++
+			case domain.GroupDone:
+				if issue.State == domain.StateCancelled {
+					summary.CancelledIssues++
+				} else {
+					summary.DoneIssues++
+				}
 			default:
 				summary.ActiveIssues++
 			}
