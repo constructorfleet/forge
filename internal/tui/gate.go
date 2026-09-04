@@ -1,0 +1,155 @@
+package tui
+
+// gate.go: quality-gate runs as synthetic transcript rows. A gate run is not
+// an Agent transcript event and storage never persists one as such, so the
+// pane derives the row from the store's GateRun records and appends it after
+// the event window. No new TranscriptEvent type exists for a gate.
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/Teagan42/forge/internal/storage"
+)
+
+// maxGateOutputLines bounds a gate row's expanded output. A gate can emit a
+// whole test log, which must never fill the pane.
+const maxGateOutputLines = 40
+
+// GateRow is one quality-gate run as the pane shows it. It holds the fields a
+// row renders and nothing else, so the TUI keeps no dependency on
+// internal/gate. Build a row with ConvertGateRun or ConvertGateRuns, which
+// bound Output; a hand-built row renders a longer Output whole.
+type GateRow struct {
+	Name     string
+	Command  string
+	ExitCode int
+	Passed   bool
+	// Output is the run's combined stdout and stderr. ConvertGateRun keeps at
+	// most maxGateOutputLines output lines, plus one marker line that counts the
+	// dropped lines.
+	Output string
+	// FinishedAt is the run's finish time. It orders the rows and feeds the
+	// cross-poll key, so a retry of one gate keeps its own identity.
+	FinishedAt time.Time
+	// key identifies the row across polls, so a pinned selection holds it.
+	// gateEntries is the one place that derives it (see gateEntries).
+	key string
+}
+
+// ConvertGateRun narrows a stored gate run to the fields a row renders and
+// bounds its output.
+func ConvertGateRun(run storage.GateRun) GateRow {
+	return GateRow{
+		Name:       run.Name,
+		Command:    run.Command,
+		ExitCode:   run.ExitCode,
+		Passed:     run.Passed,
+		Output:     boundGateOutput(run.Stdout, run.Stderr),
+		FinishedAt: run.FinishedAt,
+	}
+}
+
+// ConvertGateRuns converts every run and orders the rows oldest first, so the
+// timeline reads in the order the gates ran.
+func ConvertGateRuns(runs []storage.GateRun) []GateRow {
+	ordered := append([]storage.GateRun(nil), runs...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].FinishedAt.Before(ordered[j].FinishedAt)
+	})
+	rows := make([]GateRow, 0, len(ordered))
+	for _, r := range ordered {
+		rows = append(rows, ConvertGateRun(r))
+	}
+	return rows
+}
+
+// boundGateOutput joins stdout and stderr and keeps at most
+// maxGateOutputLines output lines plus one marker line. It keeps the tail,
+// because gate tooling prints its verdict last.
+func boundGateOutput(stdout, stderr string) string {
+	parts := make([]string, 0, 2)
+	for _, s := range []string{stdout, stderr} {
+		if s = strings.TrimRight(s, "\n"); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	joined := strings.Join(parts, "\n")
+	if joined == "" {
+		return ""
+	}
+	lines := strings.Split(joined, "\n")
+	if len(lines) <= maxGateOutputLines {
+		return joined
+	}
+	dropped := len(lines) - maxGateOutputLines
+	kept := []string{fmt.Sprintf("… %d earlier lines not shown", dropped)}
+	kept = append(kept, lines[dropped:]...)
+	return strings.Join(kept, "\n")
+}
+
+// gateEntries turns gate rows into synthetic entries and derives each row's
+// cross-poll key. The key holds the row's position, because retries record
+// several runs of one gate name that can share a finish time. ConvertGateRuns
+// sorts the rows by finish time with a stable sort, so the position holds across
+// polls.
+func gateEntries(rows []GateRow) []TranscriptEntry {
+	entries := make([]TranscriptEntry, 0, len(rows))
+	for i := range rows {
+		g := rows[i]
+		g.key = fmt.Sprintf("gate:%d:%s@%d", i, g.Name, g.FinishedAt.UnixNano())
+		entries = append(entries, TranscriptEntry{Gate: &g})
+	}
+	return entries
+}
+
+// gateOutcome labels a gate row's result. A failed gate carries its exit code,
+// because the code is what an operator acts on.
+func gateOutcome(g GateRow) string {
+	if g.Passed {
+		return "pass"
+	}
+	return fmt.Sprintf("fail, exit %d", g.ExitCode)
+}
+
+// gateLines renders one gate row, collapsed to its name and outcome or
+// expanded to its command, exit code, and bounded output. The collapsed preview
+// keeps the last output line, which holds a gate tool's verdict.
+func gateLines(g GateRow, cur string, expanded bool) []string {
+	head := header(cur, gateGlyph(g), fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g)))
+	if !expanded {
+		if last := lastLine(g.Output); last != "" {
+			return []string{head, indented(last)}
+		}
+		return []string{head}
+	}
+	// The header already carries the exit code of a failed gate, so only a pass
+	// needs the code spelled out here.
+	lines := []string{head, indented("$ " + g.Command)}
+	if g.Passed {
+		lines = append(lines, indented(fmt.Sprintf("exit %d", g.ExitCode)))
+	}
+	return append(lines, indentedBlock(g.Output)...)
+}
+
+// gateGlyph marks a gate row's column with its outcome. The glyphs differ from
+// the tool-call arrows, because a gate is the orchestrator's own work and not
+// the Agent's.
+func gateGlyph(g GateRow) string {
+	if g.Passed {
+		return "✓"
+	}
+	return "✗"
+}
+
+// gateDetailLine renders the selected gate row's name, command, exit code, and
+// outcome.
+func gateDetailLine(g GateRow) string {
+	cmd := g.Command
+	if cmd == "" {
+		cmd = "—"
+	}
+	return fmt.Sprintf("gate %s | %s | exit %d | %s", g.Name, cmd, g.ExitCode, gateOutcome(g))
+}

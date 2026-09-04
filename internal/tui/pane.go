@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -44,10 +45,25 @@ type TranscriptEntry struct {
 	// Result is the paired TOOL_RESULT, when the call has returned and the
 	// window retains it.
 	Result *TranscriptEvent
+	// Gate marks a synthetic quality-gate row. Event stays zero on such an
+	// entry: a gate is no TranscriptEvent (see gate.go).
+	Gate *GateRow
 }
 
-// IsToolCall reports that the entry is a tool call, the only expandable kind.
-func (e TranscriptEntry) IsToolCall() bool { return e.Event.Type == eventToolCall }
+// IsToolCall reports that the entry is a tool call.
+func (e TranscriptEntry) IsToolCall() bool { return e.Gate == nil && e.Event.Type == eventToolCall }
+
+// IsGate reports that the entry is a synthetic quality-gate row.
+func (e TranscriptEntry) IsGate() bool { return e.Gate != nil }
+
+// key identifies an entry across polls. A gate row carries no Seq, so the two
+// kinds share one string namespace.
+func (e TranscriptEntry) key() string {
+	if e.Gate != nil {
+		return e.Gate.key
+	}
+	return "seq:" + strconv.Itoa(e.Event.Seq)
+}
 
 // TranscriptScroller is the window-anchor seam the pane needs to move the
 // visible window. TranscriptTailer implements it.
@@ -66,6 +82,12 @@ type TranscriptScroller interface {
 type TranscriptPane struct {
 	view    TranscriptViewModel
 	entries []TranscriptEntry
+	// gates are the quality-gate rows the pane appends after the event window.
+	gates []GateRow
+	// eventCount is the number of leading entries that come from the event
+	// window. The trailing gate rows are no part of the window, so a move past
+	// this edge must still ask the scroller for newer events.
+	eventCount int
 
 	// scroller moves the window anchor. Nil means the pane cannot follow the
 	// tail, and the footer then hides the follow-tail key.
@@ -97,24 +119,56 @@ func NewTranscriptPane() *TranscriptPane {
 // move past a window edge, and a lost pinned anchor all drive it.
 func (p *TranscriptPane) SetScroller(s TranscriptScroller) { p.scroller = s }
 
-// SetView replaces the visible window. A pinned selection holds its entry by
-// Seq where the new window still retains it, so a poll that appends events does
-// not move the operator's selection. An unpinned selection follows the tail
-// while the window is at the tail. Expansion survives only where the selection
-// holds the same event.
+// SetGates replaces the quality-gate rows the pane appends after the event
+// window. Gate runs follow the Agent's own work, so they render last. The call
+// rebuilds the entries through rebuild, the pane's one rebuild path, so
+// selection and expansion follow the same key-based rules a poll obeys. It
+// leaves pendingMove and tailRequested alone: both wait for the poll that
+// answers them.
+//
+// The pane's owner calls this on each poll with the store's runs for the Issue:
+//
+//	runs, err := store.GateRunsByIssue(ctx, executionID, issueID)
+//	if err == nil {
+//		pane.SetGates(ConvertGateRuns(runs))
+//	}
+//
+// The live view does not yet drive the pane at all (see #529).
+func (p *TranscriptPane) SetGates(rows []GateRow) {
+	// Copy, so a caller that reuses one buffer across polls cannot change the
+	// rendered rows behind a rebuild.
+	p.gates = append([]GateRow(nil), rows...)
+	p.rebuild(0)
+}
+
+// SetView replaces the visible window and re-appends the gate rows. A pinned
+// selection holds its entry by key where the new window still retains it, so a
+// poll that appends events does not move the operator's selection. An unpinned
+// selection follows the tail while the window is at the tail. Expansion
+// survives only where the selection holds the same entry.
 func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
-	prevSeq, hadSelection := p.selectedSeq()
-	wasExpanded := p.expanded != noSelection
 	pending := p.pendingMove
 	p.pendingMove = 0
 	p.tailRequested = false
-
 	p.view = vm
-	p.entries = buildEntries(vm.Events)
+	p.rebuild(pending)
+}
 
-	idx := defaultSelection(p.entries)
-	if hadSelection && (p.pinned || !vm.AtTail) {
-		idx = indexOfSeq(p.entries, prevSeq)
+// rebuild derives the entries from the current window and gate rows, then
+// re-derives the selection and the expansion by key. Every entry change goes
+// through here, so the two callers cannot diverge. pending applies a selection
+// move that an earlier window could not satisfy.
+func (p *TranscriptPane) rebuild(pending int) {
+	prevKey, hadSelection := p.selectedKey()
+	wasExpanded := p.expanded != noSelection
+
+	events := buildEntries(p.view.Events)
+	p.eventCount = len(events)
+	p.entries = append(events, gateEntries(p.gates)...)
+
+	idx := p.defaultSelection()
+	if hadSelection && (p.pinned || !p.view.AtTail) {
+		idx = indexOfKey(p.entries, prevKey)
 		if idx == noSelection {
 			idx = p.anchorLostSelection()
 		}
@@ -126,7 +180,7 @@ func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 	p.selection = idx
 	p.expanded = noSelection
 	if wasExpanded {
-		if e, ok := p.SelectedEntry(); ok && e.Event.Seq == prevSeq {
+		if e, ok := p.SelectedEntry(); ok && e.key() == prevKey {
 			p.expanded = idx
 		}
 	}
@@ -137,7 +191,7 @@ func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 // from sliding further, and holds the oldest retained entry meanwhile.
 func (p *TranscriptPane) anchorLostSelection() int {
 	if p.scroller == nil || len(p.entries) == 0 || p.view.AtStart {
-		return defaultSelection(p.entries)
+		return p.defaultSelection()
 	}
 	p.scroller.ScrollUp(1)
 	return 0
@@ -157,14 +211,14 @@ func (p *TranscriptPane) FollowTail() {
 	p.pinned = false
 	p.pendingMove = 0
 	p.expanded = noSelection
-	p.selection = defaultSelection(p.entries)
+	p.selection = p.defaultSelection()
 }
 
 // Entries returns the pane's selectable entries, oldest first.
 func (p *TranscriptPane) Entries() []TranscriptEntry { return p.entries }
 
 // Select moves the selection to index i, clamped to the entries. An index is
-// valid only until the next SetView, which re-derives the selection by Seq: do
+// valid only until the next SetView, which re-derives the selection by key: do
 // not hold an index across a poll. A move to a
 // different entry pins the selection, so the live tail no longer moves it, and
 // collapses the previously expanded entry. A call on an empty pane does
@@ -187,16 +241,24 @@ func (p *TranscriptPane) Select(i int) {
 // MoveSelection moves the selection n entries towards the tail. Negative n
 // moves towards the retained start. A move past a window edge asks the scroller
 // for the neighbouring events, so the selection is not confined to the window.
+// The tail edge is the last event entry and not the last entry: the trailing
+// gate rows must not hide the edge, or the window never advances by key.
 func (p *TranscriptPane) MoveSelection(n int) {
 	if n == 0 || len(p.entries) == 0 {
 		return
 	}
 	target := p.selection + n
+	tailEdge := p.eventEdge()
 	switch {
 	case target < 0:
 		p.requestScroll(-target)
-	case target > len(p.entries)-1:
-		p.requestScroll(-(target - (len(p.entries) - 1)))
+	case tailEdge != noSelection && target > tailEdge:
+		p.requestScroll(-(target - tailEdge))
+		// A served request holds the selection at the event edge, so the move
+		// the new window applies starts from the event and not from a gate row.
+		if p.pendingMove != 0 {
+			target = tailEdge
+		}
 	}
 	p.Select(target)
 }
@@ -242,10 +304,10 @@ func (p *TranscriptPane) ToggleExpand() {
 // Expanded reports that the entry at index i renders expanded.
 func (p *TranscriptPane) Expanded(i int) bool { return i != noSelection && p.expanded == i }
 
-// CanExpand reports that the selection is an expandable tool call.
+// CanExpand reports that the selection expands: a tool call or a gate row.
 func (p *TranscriptPane) CanExpand() bool {
 	e, ok := p.SelectedEntry()
-	return ok && e.IsToolCall()
+	return ok && (e.IsToolCall() || e.IsGate())
 }
 
 // SelectedEntry returns the selected entry. The bool is false on an empty pane.
@@ -256,21 +318,38 @@ func (p *TranscriptPane) SelectedEntry() (TranscriptEntry, bool) {
 	return p.entries[p.selection], true
 }
 
-// selectedSeq returns the Seq of the selected entry's own event.
-func (p *TranscriptPane) selectedSeq() (int, bool) {
+// selectedKey returns the selected entry's cross-poll identity.
+func (p *TranscriptPane) selectedKey() (string, bool) {
 	e, ok := p.SelectedEntry()
 	if !ok {
-		return 0, false
+		return "", false
 	}
-	return e.Event.Seq, true
+	return e.key(), true
 }
 
-// defaultSelection selects the newest entry, so a fresh pane follows the tail.
-func defaultSelection(entries []TranscriptEntry) int {
-	if len(entries) == 0 {
+// eventEdge returns the index of the last event entry, or noSelection where the
+// window holds no event. rebuild appends the gate rows after the event entries,
+// so eventCount is the whole layout rule and this is the one place that turns it
+// into an index.
+func (p *TranscriptPane) eventEdge() int {
+	if p.eventCount == 0 {
 		return noSelection
 	}
-	return len(entries) - 1
+	return p.eventCount - 1
+}
+
+// defaultSelection selects the newest event entry, so a fresh pane follows the
+// tail. An unpinned selection must hold the live Agent event and must not stick
+// to the newest gate row. A pane that holds gate rows alone selects the last of
+// them.
+func (p *TranscriptPane) defaultSelection() int {
+	if edge := p.eventEdge(); edge != noSelection {
+		return edge
+	}
+	if len(p.entries) == 0 {
+		return noSelection
+	}
+	return len(p.entries) - 1
 }
 
 // clampIndex holds i inside a list of n entries.
@@ -284,10 +363,10 @@ func clampIndex(i, n int) int {
 	return i
 }
 
-// indexOfSeq finds the entry whose own event carries seq.
-func indexOfSeq(entries []TranscriptEntry, seq int) int {
+// indexOfKey finds the entry that carries key.
+func indexOfKey(entries []TranscriptEntry, key string) int {
 	for i, e := range entries {
-		if e.Event.Seq == seq {
+		if e.key() == key {
 			return i
 		}
 	}
@@ -380,6 +459,9 @@ func entryLines(e TranscriptEntry, selected, expanded bool) []string {
 	if selected {
 		cur = ">"
 	}
+	if e.Gate != nil {
+		return gateLines(*e.Gate, cur, expanded)
+	}
 	glyph := TranscriptGlyph(e.Event)
 	switch e.Event.Type {
 	case eventToolCall:
@@ -432,6 +514,9 @@ func truncationText(text string) string {
 // transcriptDetailLine renders the selected entry's seq, kind, tool, and
 // whether a result has arrived.
 func transcriptDetailLine(e TranscriptEntry) string {
+	if e.Gate != nil {
+		return gateDetailLine(*e.Gate)
+	}
 	tool := e.Event.ToolName
 	if tool == "" {
 		tool = "—"
@@ -470,6 +555,19 @@ func indentedBlock(text string) []string {
 		out = append(out, indented(l))
 	}
 	return out
+}
+
+// lastLine returns the final line of text that holds more than whitespace. A
+// gate log can end in blank or padded lines, which must never render as an empty
+// preview row.
+func lastLine(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimRight(lines[i], " \t\r"); strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 // firstLine returns text up to its first newline.
