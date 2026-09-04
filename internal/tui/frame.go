@@ -140,9 +140,14 @@ type ViewModel struct {
 	Selection int
 	Workers   []WorkerRow
 
-	// Notice explains an empty roster: the Execution does not exist yet, or a
-	// poll pass failed. An empty frame with no words reads as a broken TUI.
+	// Notice explains the roster: the Execution does not exist yet, it holds no
+	// Issues, or a roster poll pass failed. It renders with whatever rows the
+	// pass retained, because a stale roster must say so.
 	Notice string
+
+	// TranscriptNotice reports a failed transcript poll pass. It is separate
+	// from Notice, so neither failure source can hide the other.
+	TranscriptNotice string
 
 	// ActionNotice reports the last operator action's outcome when the action
 	// declined or failed. It renders whether or not the roster has rows, and it
@@ -187,9 +192,9 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	return keys
 }
 
-// Render draws the whole frame: one line per Worker, a notice when the roster
-// is empty, an action notice when one is set, the transcript pane, a detail
-// strip for the focused pane's selection, and a footer of legal keys. Pure and
+// Render draws the whole frame: one line per Worker, a notice for an empty or
+// stale roster, the transcript pane with its own poll notice, a detail strip
+// for the focused pane's selection, and a footer of legal keys. Pure and
 // headless.
 func Render(vm ViewModel) string {
 	var b strings.Builder
@@ -197,9 +202,16 @@ func Render(vm ViewModel) string {
 		b.WriteString(rowLine(row, i == vm.Selection))
 		b.WriteByte('\n')
 	}
-	if len(vm.Workers) == 0 && vm.Notice != "" {
+	// A notice also carries a failed poll pass, which holds the last good rows.
+	// It must render with those rows, or the failure is invisible.
+	if vm.Notice != "" {
 		b.WriteString(vm.Notice)
 		b.WriteByte('\n')
+	}
+	// The notice renders above the pane, so the failure sits with the transcript
+	// it describes and a long pane cannot push the two apart.
+	if vm.TranscriptNotice != "" {
+		b.WriteString(vm.TranscriptNotice)
 	}
 	if vm.ActionNotice != "" {
 		b.WriteString(vm.ActionNotice)

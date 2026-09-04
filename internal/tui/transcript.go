@@ -87,8 +87,6 @@ type runTail struct {
 // AddRun appends a retry's AgentRun to the tailed history. The retained window
 // keeps every earlier attempt, so the pane reads one continuous scrollback with
 // an attempt divider at each boundary. A known run changes nothing.
-//
-// No production caller yet; the roster wiring lands with #488.
 func (t *TranscriptTailer) AddRun(agentRunID int64) {
 	for _, r := range t.runs {
 		if r.id == agentRunID {
@@ -121,13 +119,72 @@ func (t *TranscriptTailer) SetHeight(h int) {
 // pass but keeps the attempts it already read, and the next pass starts again at
 // the oldest attempt, which the untouched cursors make cheap.
 func (t *TranscriptTailer) Poll(ctx context.Context) (TranscriptViewModel, error) {
+	read, err := t.fetch(ctx, nil)
+	return t.apply(read), err
+}
+
+// transcriptRead holds one fetch pass's events, keyed by attempt. apply commits
+// it. It is a token to carry between the two halves, never a view input.
+type transcriptRead struct {
+	runs []runEvents
+}
+
+// runEvents is one attempt's newly read events, oldest first.
+type runEvents struct {
+	id     int64
+	events []storage.TranscriptEvent
+}
+
+// fetch reads new events for every attempt in runIDs, oldest attempt first, and
+// changes no tailer state. apply commits the result. The split exists so the
+// store reads can run on another goroutine while the tailer's owner keeps
+// serving key presses. An empty runIDs reads the attempts the tailer already
+// holds. An unknown run reads from its retained start. A read failure returns
+// the attempts it already read with the error.
+func (t *TranscriptTailer) fetch(ctx context.Context, runIDs []int64) (transcriptRead, error) {
+	if len(runIDs) == 0 {
+		runIDs = t.RunOrder()
+	}
+	var read transcriptRead
+	for _, id := range runIDs {
+		events, err := t.store.TranscriptEventsAfter(ctx, id, t.cursorOf(id), transcriptPollLimit)
+		if err != nil {
+			return read, fmt.Errorf("tui: poll transcript for run %d: %w", id, err)
+		}
+		read.runs = append(read.runs, runEvents{id: id, events: events})
+	}
+	return read, nil
+}
+
+// apply appends a fetched pass to the ring buffer, adds any attempt the pass
+// names that the tailer does not hold, and returns the window. A partial pass
+// commits what it read.
+func (t *TranscriptTailer) apply(read transcriptRead) TranscriptViewModel {
 	anchor, anchored := t.anchor(t.orderedWindow())
+	for _, rd := range read.runs {
+		t.AddRun(rd.id)
+		t.ingest(rd.id, rd.events)
+	}
+	return t.commit(anchor, anchored)
+}
+
+// runOf returns the tailed attempt with id, or nil.
+func (t *TranscriptTailer) runOf(id int64) *runTail {
 	for _, r := range t.runs {
-		if _, err := t.pollRun(ctx, r); err != nil {
-			return t.commit(anchor, anchored), err
+		if r.id == id {
+			return r
 		}
 	}
-	return t.commit(anchor, anchored), nil
+	return nil
+}
+
+// cursorOf returns the last Seq read from attempt id. An untailed attempt holds
+// noCursor, so it reads from its retained start.
+func (t *TranscriptTailer) cursorOf(id int64) int64 {
+	if r := t.runOf(id); r != nil {
+		return r.cursor
+	}
+	return noCursor
 }
 
 // anchor returns the key of the first visible event in retained while the
@@ -168,13 +225,12 @@ func indexOfEvent(events []TranscriptEvent, key eventKey) int {
 	return -1
 }
 
-// pollRun reads one attempt's new events into the ring and returns how many it
-// appended. A read failure leaves that run's cursor untouched, so the next pass
-// resumes from the same point.
-func (t *TranscriptTailer) pollRun(ctx context.Context, r *runTail) (int, error) {
-	events, err := t.store.TranscriptEventsAfter(ctx, r.id, r.cursor, transcriptPollLimit)
-	if err != nil {
-		return 0, fmt.Errorf("tui: poll transcript for run %d: %w", r.id, err)
+// ingest appends one attempt's newly read events to the ring and advances its
+// cursor. An attempt the tailer does not hold is ignored, so Apply adds it first.
+func (t *TranscriptTailer) ingest(id int64, events []storage.TranscriptEvent) {
+	r := t.runOf(id)
+	if r == nil {
+		return
 	}
 
 	// The first pass backfills from the retained start. A first event past
@@ -199,7 +255,6 @@ func (t *TranscriptTailer) pollRun(ctx context.Context, r *runTail) (int, error)
 			r.cursor = int64(e.Seq)
 		}
 	}
-	return len(events), nil
 }
 
 // ScrollUp moves the viewport n events towards the retained start.

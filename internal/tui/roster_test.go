@@ -18,6 +18,8 @@ type fakeRosterStore struct {
 	state   storage.ExecutionState
 	claims  map[string]storage.WorkerClaim
 	claimOK map[string]bool
+	loadErr error
+
 	// reviews holds the Review history per Issue, in insertion order.
 	reviews map[string][]storage.ReviewRun
 	// runReads counts LatestReviewDiff calls, so a test can prove a poll pass
@@ -44,6 +46,9 @@ func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string)
 }
 
 func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	if f.loadErr != nil {
+		return storage.ExecutionState{}, f.loadErr
+	}
 	return f.state, nil
 }
 

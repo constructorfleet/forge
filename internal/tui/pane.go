@@ -138,14 +138,7 @@ func (p *TranscriptPane) SetScroller(s TranscriptScroller) { p.scroller = s }
 // leaves pendingMove and tailRequested alone: both wait for the poll that
 // answers them.
 //
-// The pane's owner calls this on each poll with the store's runs for the Issue:
-//
-//	runs, err := store.GateRunsByIssue(ctx, executionID, issueID)
-//	if err == nil {
-//		pane.SetGates(ConvertGateRuns(runs))
-//	}
-//
-// The live view does not yet drive the pane at all (see #529).
+// TranscriptFeed calls this on each poll with the store's runs for the Issue.
 func (p *TranscriptPane) SetGates(rows []GateRow) {
 	// Copy, so a caller that reuses one buffer across polls cannot change the
 	// rendered rows behind a rebuild.

@@ -24,6 +24,16 @@ const diffReadTimeout = 2 * time.Second
 // clock does.
 type pollTickMsg struct{ now time.Time }
 
+// transcriptReadMsg carries one finished feed read back to the update loop. The
+// read runs in a command, so the store never blocks the key handler; the model
+// commits it here, where it is the only writer of the pane. feed names the reader,
+// so a read still in flight when the feed changes is dropped rather than
+// committed to a feed that never asked for it.
+type transcriptReadMsg struct {
+	feed *TranscriptFeed
+	read FeedRead
+}
+
 // LiveModel is the Bubble Tea model driving the live roster for one
 // Execution: it polls the Roster each tick and renders the frame. It is an
 // observer, never an owner (ADR-0031): it has no path to write engineering
@@ -35,6 +45,15 @@ type LiveModel struct {
 	poll        time.Duration
 	vm          ViewModel
 	lastErr     error
+
+	// feed drives the transcript pane for the selected Worker. It is the pane's
+	// one owner: a nil feed renders the roster alone.
+	feed *TranscriptFeed
+	// reading records a feed read in flight, so a tick starts no second one.
+	reading bool
+	// ctx bounds the feed reads the poll commands run, so quitting the program
+	// cancels an in-flight store read instead of waiting it out.
+	ctx context.Context
 
 	// OpenDiff defers a diff to $PAGER, writing its artifact under the given
 	// directory. Injected so a test drives the whole key path without spawning
@@ -52,7 +71,16 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 	if poll <= 0 {
 		poll = pollInterval
 	}
-	return &LiveModel{Roster: r, ExecutionID: executionID, poll: poll}
+	return &LiveModel{Roster: r, ExecutionID: executionID, poll: poll, ctx: context.Background()}
+}
+
+// SetContext bounds every store read the model performs. Pass the program's own
+// context, so a quit cancels an in-flight read.
+func (m *LiveModel) SetContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.ctx = ctx
 }
 
 // Init returns a command that paints the first frame immediately, then the
@@ -61,13 +89,14 @@ func (m *LiveModel) Init() tea.Cmd {
 	return func() tea.Msg { return pollTickMsg{m.Roster.Now()} }
 }
 
-// Update drives the roster: a poll tick refetches state and schedules the
-// next; q, Ctrl+C, or a programmatic interrupt quits the model. Quitting
-// carries no stop-work signal.
+// Update drives the roster: a poll tick refetches state, starts the transcript
+// read, and schedules the next tick; a finished read commits to the pane; q,
+// Ctrl+C, or a programmatic interrupt quits the model. Quitting carries no
+// stop-work signal.
 func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
-		vm, err := m.Roster.Fetch(context.Background(), m.ExecutionID, msg.now)
+		vm, err := m.Roster.Fetch(m.ctx, m.ExecutionID, msg.now)
 		m.lastErr = err
 		if err != nil {
 			// A silent poll failure is indistinguishable from an idle roster.
@@ -75,13 +104,20 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// rows: one transient read must not blank the frame for a tick.
 			m.vm.Notice = err.Error()
 		} else {
-			// A poll refreshes the roster only. Pane attachment and focus are
-			// the operator's, so a tick must never reset them.
+			// The roster refresh keeps the operator's pane and focus: they are
+			// not the roster's to reset. The feed read the tick starts owns the
+			// pane, and it detaches the pane and returns focus to the roster
+			// when the selected row disappears.
 			vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 			vm.ActionNotice = m.vm.ActionNotice
 			m.vm = vm
 		}
-		return m, tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
+		// The feed read comes first in the batch, so a caller that drives the
+		// model by hand reaches it without waiting out the tick.
+		next := tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
+		return m, tea.Batch(m.readTranscript(), next)
+	case transcriptReadMsg:
+		m.applyTranscript(msg)
 	case tea.KeyPressMsg:
 		key := uv.Key(msg.Key())
 		// Any key press answers the last action notice, so it clears here.
@@ -220,14 +256,63 @@ func (m *LiveModel) handleTranscriptKey(key uv.Key) {
 	}
 }
 
-// SetTranscript attaches the transcript pane the frame renders. A nil pane
-// renders the roster alone. Spec #488 wires the tailer's polled window and its
-// scroller into the pane; until then only the model's tests attach one.
-func (m *LiveModel) SetTranscript(p *TranscriptPane) {
-	m.vm.Transcript = p
-	if p == nil {
-		m.vm.Focus = PaneRoster
+// readTranscript returns the command that reads the selected Worker's
+// transcript. The read runs in the command, off the update goroutine, so a slow
+// store cannot delay a key press. No selected Worker detaches the pane at once
+// and starts no read: a transcript that belongs to no listed row must not keep
+// rendering.
+//
+// One read runs at a time. A store slower than the poll interval would otherwise
+// leave several reads in flight over the one tailer, whose cursors only Fetch
+// reads and only Apply advances: the later read would re-read the events the
+// earlier one holds and append them twice.
+func (m *LiveModel) readTranscript() tea.Cmd {
+	if m.feed == nil || m.reading {
+		return nil
 	}
+	row, ok := selectedWorker(m.vm)
+	if !ok {
+		m.detachTranscript()
+		return nil
+	}
+	m.reading = true
+	feed, ctx, executionID, issueID := m.feed, m.ctx, m.ExecutionID, row.IssueID
+	return func() tea.Msg {
+		return transcriptReadMsg{feed: feed, read: feed.Fetch(ctx, executionID, issueID)}
+	}
+}
+
+// applyTranscript commits a finished read and attaches the pane it produces. A
+// read failure keeps the pane the feed already holds and reports the failure in
+// TranscriptNotice, so a transient failure never blanks the transcript.
+func (m *LiveModel) applyTranscript(msg transcriptReadMsg) {
+	if m.feed == nil || msg.feed != m.feed {
+		return
+	}
+	m.reading = false
+	pane := m.feed.Apply(msg.read)
+	m.vm.TranscriptNotice = msg.read.Err()
+	if pane != nil {
+		m.vm.Transcript = pane
+	}
+}
+
+// SetFeed attaches the transcript feed each poll drives. It is the pane's one
+// owner. A nil feed renders the roster alone.
+func (m *LiveModel) SetFeed(f *TranscriptFeed) {
+	m.feed = f
+	// The read in flight belongs to the old feed and its message is dropped, so
+	// the new feed must be free to start its own.
+	m.reading = false
+	m.detachTranscript()
+}
+
+// detachTranscript drops the pane and returns focus to the roster, leaving the
+// feed attached.
+func (m *LiveModel) detachTranscript() {
+	m.vm.Transcript = nil
+	m.vm.TranscriptNotice = ""
+	m.vm.Focus = PaneRoster
 }
 
 // View renders the current frame headless.
