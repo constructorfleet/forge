@@ -196,6 +196,15 @@ type ReviewRun struct {
 	Envelopes   []ReviewAxisEnvelope
 }
 
+// ReviewOutcome is the current Review result for one Issue, without the diff
+// body. An observer polls this each pass, so it must not carry a blob it
+// discards: HasDiff tells the caller a diff exists to read on request.
+type ReviewOutcome struct {
+	Verdict  string
+	HasDiff  bool
+	Recorded bool
+}
+
 // PullRequest is one created (or idempotently recovered) pull request's
 // persisted record, mirroring tracker.PullRequest but living in this
 // package so storage has no dependency on internal/tracker — callers (the

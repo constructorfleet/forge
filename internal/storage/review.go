@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -154,6 +155,56 @@ func (s *SQLiteStore) ReviewRunsByIssue(ctx context.Context, executionID, issueI
 		out[i] = ir.run
 	}
 	return out, nil
+}
+
+// LatestReviewOutcome returns the current Review verdict for one Issue and
+// whether that run stored a diff. It reads one row and returns no diff body, so
+// a per-second poll costs the same whatever the review history holds. Use
+// ReviewRunsByIssue only where the caller needs the runs themselves.
+func (s *SQLiteStore) LatestReviewOutcome(ctx context.Context, executionID, issueID string) (ReviewOutcome, error) {
+	var out ReviewOutcome
+	err := s.db.QueryRowContext(ctx, `
+		SELECT verdict, LENGTH(diff) > 0
+		FROM review_runs
+		WHERE execution_id = ? AND issue_id = ?
+		ORDER BY id DESC
+		LIMIT 1`,
+		executionID, issueID,
+	).Scan(&out.Verdict, &out.HasDiff)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReviewOutcome{}, nil
+	}
+	if err != nil {
+		return ReviewOutcome{}, fmt.Errorf("storage: latest review outcome for issue %s/%s: %w", executionID, issueID, err)
+	}
+	out.Recorded = true
+	return out, nil
+}
+
+// LatestReviewDiff returns the current Review run's stored diff for one Issue.
+// It reads the one diff column alone, with no findings and no axis envelopes, so
+// the on-request pager read never loads the whole review history. An Issue with
+// no Review run, or a run that stored an empty diff, returns "".
+//
+// It repeats LatestReviewOutcome's "highest id wins" rule, so the strip's
+// verdict and the pager's diff always name one run.
+func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID string) (string, error) {
+	var diff string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT diff
+		FROM review_runs
+		WHERE execution_id = ? AND issue_id = ?
+		ORDER BY id DESC
+		LIMIT 1`,
+		executionID, issueID,
+	).Scan(&diff)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("storage: latest review diff for issue %s/%s: %w", executionID, issueID, err)
+	}
+	return diff, nil
 }
 
 func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64) ([]ReviewFinding, error) {

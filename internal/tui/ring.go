@@ -24,6 +24,11 @@ type TranscriptEvent struct {
 	ToolInput  string
 	ToolOutput string
 	ToolCallID string
+	// Subagent names the subagent that produced the event (a review axis such
+	// as "bugs", "quality", "docs"), read straight off
+	// transcript_events.subagent. Empty for the single implementation Agent,
+	// which needs no label.
+	Subagent string
 }
 
 // NewRingBuffer returns an empty RingBuffer that retains at most cap events.

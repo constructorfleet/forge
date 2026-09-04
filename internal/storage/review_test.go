@@ -265,3 +265,62 @@ func TestReviewRunsByIssue_ReturnsEmptyForIssueWithNoReviewRuns(t *testing.T) {
 		t.Errorf("got %d review runs, want 0", len(runs))
 	}
 }
+
+// TestLatestReviewOutcome_ReadsTheLastRunWithoutTheDiff proves the observer
+// seam returns the current verdict plus whether a diff exists, and never the
+// diff body: a poll must not read a blob it discards.
+func TestLatestReviewOutcome_ReadsTheLastRunWithoutTheDiff(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForReviewRun(t, store, "exec-review-6", "issue-review-6")
+
+	first := storage.ReviewRun{
+		ExecutionID: "exec-review-6",
+		IssueID:     "issue-review-6",
+		Verdict:     "CHANGES_REQUIRED",
+		Summary:     "first pass",
+		Diff:        "diff --git a/a.go b/a.go\n",
+		StartedAt:   time.Now().UTC(),
+		FinishedAt:  time.Now().UTC(),
+	}
+	if err := store.RecordReviewRun(ctx, first); err != nil {
+		t.Fatalf("RecordReviewRun: %v", err)
+	}
+	second := first
+	second.Verdict = "APPROVED"
+	second.Summary = "second pass"
+	second.Diff = ""
+	if err := store.RecordReviewRun(ctx, second); err != nil {
+		t.Fatalf("RecordReviewRun: %v", err)
+	}
+
+	got, err := store.LatestReviewOutcome(ctx, "exec-review-6", "issue-review-6")
+	if err != nil {
+		t.Fatalf("LatestReviewOutcome: %v", err)
+	}
+	if !got.Recorded {
+		t.Fatal("Recorded = false, want true")
+	}
+	if got.Verdict != "APPROVED" {
+		t.Errorf("Verdict = %q, want APPROVED", got.Verdict)
+	}
+	if got.HasDiff {
+		t.Error("HasDiff = true, want false for a run that stored an empty diff")
+	}
+}
+
+// TestLatestReviewOutcome_WithoutARunReportsNothing proves an unreviewed Issue
+// reports no outcome instead of an error.
+func TestLatestReviewOutcome_WithoutARunReportsNothing(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForReviewRun(t, store, "exec-review-7", "issue-review-7")
+
+	got, err := store.LatestReviewOutcome(ctx, "exec-review-7", "issue-review-7")
+	if err != nil {
+		t.Fatalf("LatestReviewOutcome: %v", err)
+	}
+	if got.Recorded || got.Verdict != "" || got.HasDiff {
+		t.Errorf("outcome = %+v, want a zero outcome", got)
+	}
+}

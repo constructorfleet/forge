@@ -152,7 +152,7 @@ func TestRender(t *testing.T) {
 	want := "" +
 		"      pending  #1         Write tests\n" +
 		"> * • working  #2         Add roster frame\n" +
-		"IMPLEMENTING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status\n" +
+		"IMPLEMENTING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict —\n" +
 		"[q] quit [c] cancel\n"
 
 	if got := tui.Render(vm); got != want {

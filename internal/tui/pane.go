@@ -510,18 +510,18 @@ func entryLines(e TranscriptEntry, selected, expanded bool) []string {
 	case eventToolCall:
 		return toolCallLines(e, cur, glyph, expanded)
 	case eventToolResult:
-		return withFirstOutput([]string{header(cur, glyph, e.Event.ToolName)}, e.Event.ToolOutput)
+		return withFirstOutput([]string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName})}, e.Event.ToolOutput)
 	case eventTruncation:
-		return []string{header(cur, glyph, truncationText(e.Event.Text))}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)})}
 	default:
-		return []string{header(cur, glyph, firstLine(e.Event.Text))}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)})}
 	}
 }
 
 // toolCallLines renders a tool call: collapsed to its name plus the first
 // output line of its result, or expanded to the whole call and result.
 func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool) []string {
-	lines := []string{header(cur, glyph, e.Event.ToolName)}
+	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName})}
 	if !expanded {
 		if e.Result != nil {
 			lines = withFirstOutput(lines, e.Result.ToolOutput)
@@ -530,7 +530,7 @@ func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool) []string
 	}
 	lines = append(lines, indentedBlock(e.Event.ToolInput)...)
 	if e.Result != nil {
-		lines = append(lines, header(" ", TranscriptGlyph(*e.Result), e.Result.ToolName))
+		lines = append(lines, header(headerParts{cursor: " ", glyph: TranscriptGlyph(*e.Result), axis: e.Result.Subagent, text: e.Result.ToolName}))
 		lines = append(lines, indentedBlock(e.Result.ToolOutput)...)
 	}
 	return lines
@@ -571,12 +571,34 @@ func transcriptDetailLine(e TranscriptEntry) string {
 	case !e.IsToolCall():
 		res = "—"
 	}
-	return fmt.Sprintf("seq %d | %s | tool %s | result %s", e.Event.Seq, e.Event.Type, tool, res)
+	axis := e.Event.Subagent
+	if axis == "" {
+		axis = "—"
+	}
+	return fmt.Sprintf("seq %d | %s | axis %s | tool %s | result %s",
+		e.Event.Seq, e.Event.Type, axis, tool, res)
 }
 
-// header renders one entry's first line: cursor, glyph column, then text.
-func header(cur, glyph, text string) string {
-	return strings.TrimRight(fmt.Sprintf("%s %s %s", cur, glyph, text), " ")
+// headerParts names one entry header's columns. The fields carry names rather
+// than a run of positional strings, so a swapped axis and text cannot compile.
+type headerParts struct {
+	cursor string
+	glyph  string
+	// axis labels the review axis (bugs, quality, docs) that produced the entry.
+	// Empty for the implementation Agent, which has no subagent.
+	axis string
+	text string
+}
+
+// header renders one entry's first line: cursor, glyph column, inline axis
+// label, then text. The three review axes interleave in the one pane, so every
+// entry kind carries its label from here: the label is the only separation.
+func header(h headerParts) string {
+	label := ""
+	if h.axis != "" {
+		label = "[" + h.axis + "] "
+	}
+	return strings.TrimRight(fmt.Sprintf("%s %s %s%s", h.cursor, h.glyph, label, h.text), " ")
 }
 
 // indented renders one continuation line under an entry's header.
