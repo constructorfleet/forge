@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.31.0](https://github.com/constructorfleet/forge/compare/forge-v0.30.1...forge-v0.31.0) (2026-09-04)
+
+
+### Features
+
+* **domain:** add canonical IssueState coarse grouping ([#490](https://github.com/constructorfleet/forge/issues/490)) ([#508](https://github.com/constructorfleet/forge/issues/508)) ([e1f0449](https://github.com/constructorfleet/forge/commit/e1f0449c320ab1ac1beab70ddacbfffe21db1fae))
+
+
+### Bug Fixes
+
+* Agent timeout ([#48](https://github.com/constructorfleet/forge/issues/48)) is wired to the claude adapter only — codex/opencode/pi/openai can hang forever ([#469](https://github.com/constructorfleet/forge/issues/469)) ([71f3c95](https://github.com/constructorfleet/forge/commit/71f3c95ca94dd630b49b8e9ef1279e3f2e703f85)), closes [#455](https://github.com/constructorfleet/forge/issues/455)
+
 ## [0.30.1](https://github.com/constructorfleet/forge/compare/forge-v0.30.0...forge-v0.30.1) (2026-09-03)
 
 
