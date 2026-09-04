@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.0](https://github.com/constructorfleet/forge/compare/forge-v0.33.0...forge-v0.34.0) (2026-09-04)
+
+
+### Features
+
+* **tui:** add live transcript tailing pipeline ([#497](https://github.com/constructorfleet/forge/issues/497)) ([#516](https://github.com/constructorfleet/forge/issues/516)) ([4e2ca18](https://github.com/constructorfleet/forge/commit/4e2ca1858930d9e4089711a523c99a7955a5a6e0))
+* **tui:** transcript pane collapse/expand + selection ([#498](https://github.com/constructorfleet/forge/issues/498)) ([#526](https://github.com/constructorfleet/forge/issues/526)) ([a60177d](https://github.com/constructorfleet/forge/commit/a60177d6096c6c1f352d8852f2986351f942158e))
+
 ## [0.33.0](https://github.com/constructorfleet/forge/compare/forge-v0.32.0...forge-v0.33.0) (2026-09-04)
 
 
