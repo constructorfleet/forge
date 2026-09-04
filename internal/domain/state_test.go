@@ -284,6 +284,63 @@ func TestProviderLimitIsReachableOnlyFromAgentStages(t *testing.T) {
 	}
 }
 
+// issueStateGroup is a table-test entry mapping one IssueState to its
+// canonical coarse bucket. One row per state, so adding a state is a single
+// edit that picks up every exhaustive test.
+func issueStateGroup() []struct {
+	state domain.IssueState
+	group domain.StateGroup
+} {
+	return []struct {
+		state domain.IssueState
+		group domain.StateGroup
+	}{
+		{domain.StatePending, domain.GroupPending},
+		{domain.StateBlockedDependency, domain.GroupPending},
+		{domain.StateReady, domain.GroupPending},
+		{domain.StateClaimed, domain.GroupWorking},
+		{domain.StatePreparing, domain.GroupWorking},
+		{domain.StateImplementing, domain.GroupWorking},
+		{domain.StateValidating, domain.GroupWorking},
+		{domain.StateReviewing, domain.GroupWorking},
+		{domain.StateCommitting, domain.GroupWorking},
+		{domain.StatePRCreating, domain.GroupWorking},
+		{domain.StateCIPending, domain.GroupWaiting},
+		{domain.StateCIFailed, domain.GroupWaiting},
+		{domain.StateNeedsInfo, domain.GroupBlocked},
+		{domain.StateNeedsReplan, domain.GroupBlocked},
+		{domain.StateProviderLimit, domain.GroupBlocked},
+		{domain.StateFailed, domain.GroupFailed},
+		{domain.StateDone, domain.GroupDone},
+		{domain.StateCancelled, domain.GroupDone},
+	}
+}
+
+// TestIssueStateGroupsEveryStateMapsToExactlyOneBucket pins the canonical
+// coarse grouping: each of the 18 states lands in exactly one bucket, and the
+// coverage is exhaustive against allStates().
+func TestIssueStateGroupsEveryStateMapsToExactlyOneBucket(t *testing.T) {
+	want := make(map[domain.IssueState]domain.StateGroup)
+	for _, tc := range issueStateGroup() {
+		if _, dup := want[tc.state]; dup {
+			t.Fatalf("duplicate table entry for state %s", tc.state)
+		}
+		want[tc.state] = tc.group
+	}
+	if len(want) != len(allStates()) {
+		t.Fatalf("expected %d states in table, got %d", len(allStates()), len(want))
+	}
+
+	for _, tc := range issueStateGroup() {
+		t.Run(string(tc.state), func(t *testing.T) {
+			got := tc.state.Group()
+			if got != tc.group {
+				t.Fatalf("%s.Group() = %q, want %q", tc.state, got, tc.group)
+			}
+		})
+	}
+}
+
 func TestIsTerminal(t *testing.T) {
 	terminal := map[domain.IssueState]bool{
 		domain.StateDone:      true,
