@@ -47,16 +47,25 @@ func insertIssue(ctx context.Context, tx *sql.Tx, issue domain.Issue) error {
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used,
 			retry_provider_limit_limit, retry_provider_limit_used,
-			provider_limit_retry_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			provider_limit_retry_at,
+			state_changed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		issue.ExecutionID, issue.ID, issue.Provider, issue.Title, issue.Body, string(issue.State), string(issue.Scope),
 		limits.Gate, issue.RetryBudget.GateFailures(),
 		limits.Review, issue.RetryBudget.ReviewFailures(),
 		limits.CI, issue.RetryBudget.CIFailures(),
 		limits.ProviderLimit, issue.RetryBudget.ProviderLimitFailures(),
 		issue.ProviderLimitRetryAt,
+		nullableTime(issue.StateChangedAt),
 	)
 	return err
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
 }
 
 func dependencyIssueProvider(issue domain.Issue, dep domain.Dependency) string {
@@ -85,7 +94,8 @@ func (s *SQLiteStore) getIssue(ctx context.Context, q querier, executionID, issu
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used,
 			retry_provider_limit_limit, retry_provider_limit_used,
-			provider_limit_retry_at
+			provider_limit_retry_at,
+			state_changed_at
 		FROM execution_issues WHERE execution_id = ? AND issue_id = ?`,
 		executionID, issueID,
 	)
@@ -117,6 +127,7 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 		gateLimit, gateUsed, reviewLimit, reviewUsed, ciLimit, ciUsed int
 		providerLimitLimit, providerLimitUsed                         int
 		providerLimitRetryAt                                          sql.NullTime
+		stateChangedAt                                                sql.NullTime
 	)
 	issue := domain.Issue{ExecutionID: executionID}
 	if err := row.Scan(
@@ -126,6 +137,7 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 		&ciLimit, &ciUsed,
 		&providerLimitLimit, &providerLimitUsed,
 		&providerLimitRetryAt,
+		&stateChangedAt,
 	); err != nil {
 		return domain.Issue{}, err
 	}
@@ -138,6 +150,9 @@ func scanIssueRow(row scanner, executionID string) (domain.Issue, error) {
 	if providerLimitRetryAt.Valid {
 		retryAt := providerLimitRetryAt.Time.UTC()
 		issue.ProviderLimitRetryAt = &retryAt
+	}
+	if stateChangedAt.Valid {
+		issue.StateChangedAt = stateChangedAt.Time.UTC()
 	}
 	return issue, nil
 }
@@ -204,7 +219,8 @@ func listIssueRows(ctx context.Context, q querier, executionID string) (map[stri
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used,
 			retry_provider_limit_limit, retry_provider_limit_used,
-			provider_limit_retry_at
+			provider_limit_retry_at,
+			state_changed_at
 		FROM execution_issues
 		WHERE execution_id = ?
 		ORDER BY issue_id`,
@@ -278,8 +294,9 @@ func (s *SQLiteStore) TransitionIssue(ctx context.Context, executionID, issueID 
 		// Illegal transition: propagate domain's own error, no write.
 		return domain.Issue{}, err
 	}
+	issue.StateChangedAt = time.Now().UTC()
 
-	affected, err := updateIssueStateCAS(ctx, tx, executionID, issueID, string(from), string(issue.State))
+	affected, err := updateIssueStateCAS(ctx, tx, executionID, issueID, string(from), string(issue.State), issue.StateChangedAt)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("storage: transition issue %s/%s: %w", executionID, issueID, err)
 	}
@@ -361,7 +378,8 @@ func (s *SQLiteStore) ListDueProviderLimitIssues(ctx context.Context, now time.T
 			retry_review_limit, retry_review_used,
 			retry_ci_limit, retry_ci_used,
 			retry_provider_limit_limit, retry_provider_limit_used,
-			provider_limit_retry_at
+			provider_limit_retry_at,
+			state_changed_at
 		FROM execution_issues
 		WHERE state = ? AND provider_limit_retry_at IS NOT NULL AND provider_limit_retry_at <= ?
 		ORDER BY execution_id, issue_id`,
@@ -412,11 +430,11 @@ func (p prefixScanner) Scan(dest ...any) error {
 // against a future multi-connection or Postgres implementation where a
 // naive UPDATE ... WHERE execution_id = ? AND issue_id = ? could silently
 // overwrite a state that changed between the read and the write.
-func updateIssueStateCAS(ctx context.Context, tx *sql.Tx, executionID, issueID, from, to string) (int64, error) {
+func updateIssueStateCAS(ctx context.Context, tx *sql.Tx, executionID, issueID, from, to string, stateChangedAt time.Time) (int64, error) {
 	res, err := tx.ExecContext(ctx, `
-		UPDATE execution_issues SET state = ?
+		UPDATE execution_issues SET state = ?, state_changed_at = ?
 		WHERE execution_id = ? AND issue_id = ? AND state = ?`,
-		to, executionID, issueID, from,
+		to, stateChangedAt, executionID, issueID, from,
 	)
 	if err != nil {
 		return 0, err

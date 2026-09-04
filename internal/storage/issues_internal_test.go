@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
@@ -44,7 +45,7 @@ func TestUpdateIssueStateCASRejectsStaleFrom(t *testing.T) {
 
 	// The row is actually READY; assert a stale "from" (PENDING) affects no
 	// rows instead of forcing the write through.
-	affected, err := updateIssueStateCAS(ctx, tx, "exec-1", "issue-1", string(domain.StatePending), string(domain.StateClaimed))
+	affected, err := updateIssueStateCAS(ctx, tx, "exec-1", "issue-1", string(domain.StatePending), string(domain.StateClaimed), time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatalf("updateIssueStateCAS with stale from: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestUpdateIssueStateCASRejectsStaleFrom(t *testing.T) {
 	}
 
 	// The correct "from" (READY) affects exactly one row.
-	affected, err = updateIssueStateCAS(ctx, tx, "exec-1", "issue-1", string(domain.StateReady), string(domain.StateClaimed))
+	affected, err = updateIssueStateCAS(ctx, tx, "exec-1", "issue-1", string(domain.StateReady), string(domain.StateClaimed), time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatalf("updateIssueStateCAS with correct from: %v", err)
 	}

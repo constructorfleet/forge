@@ -24,9 +24,9 @@ func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, work
 
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO workers (execution_id, issue_id, worker_ref, claimed_at)
-		VALUES (?, ?, ?, ?)`,
-		executionID, issueID, workerRef, now,
+		INSERT INTO workers (execution_id, issue_id, worker_ref, claimed_at, last_heartbeat)
+		VALUES (?, ?, ?, ?, ?)`,
+		executionID, issueID, workerRef, now, now,
 	); err != nil {
 		switch {
 		case isUniqueConstraintErr(err):
@@ -81,37 +81,39 @@ func (s *SQLiteStore) UpdateWorkerOwner(ctx context.Context, executionID, issueI
 // WorkerClaim reloads the active Worker claim for one Issue.
 func (s *SQLiteStore) WorkerClaim(ctx context.Context, executionID, issueID string) (WorkerClaim, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at
+		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at, last_heartbeat
 		FROM workers
 		WHERE execution_id = ? AND issue_id = ?`,
 		executionID, issueID,
 	)
 	var claim WorkerClaim
-	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt); err != nil {
+	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkerClaim{}, fmt.Errorf("storage: worker claim %s/%s: %w", executionID, issueID, ErrNotFound)
 		}
 		return WorkerClaim{}, fmt.Errorf("storage: load worker claim %s/%s: %w", executionID, issueID, err)
 	}
 	claim.ClaimedAt = claim.ClaimedAt.UTC()
+	claim.LastHeartbeat = claim.LastHeartbeat.UTC()
 	return claim, nil
 }
 
 func activeClaimByIssue(ctx context.Context, q querier, issueID string) (WorkerClaim, error) {
 	row := q.QueryRowContext(ctx, `
-		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at
+		SELECT execution_id, issue_id, worker_ref, owner_pid, claimed_at, last_heartbeat
 		FROM workers
 		WHERE issue_id = ?`,
 		issueID,
 	)
 	var claim WorkerClaim
-	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt); err != nil {
+	if err := row.Scan(&claim.ExecutionID, &claim.IssueID, &claim.WorkerRef, &claim.OwnerPID, &claim.ClaimedAt, &claim.LastHeartbeat); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return WorkerClaim{}, fmt.Errorf("storage: worker claim for issue %s: %w", issueID, ErrNotFound)
 		}
 		return WorkerClaim{}, fmt.Errorf("storage: load worker claim for issue %s: %w", issueID, err)
 	}
 	claim.ClaimedAt = claim.ClaimedAt.UTC()
+	claim.LastHeartbeat = claim.LastHeartbeat.UTC()
 	return claim, nil
 }
 
@@ -123,6 +125,28 @@ func (s *SQLiteStore) ReleaseWorkerClaim(ctx context.Context, executionID, issue
 		executionID, issueID,
 	); err != nil {
 		return fmt.Errorf("storage: release worker claim %s/%s: %w", executionID, issueID, err)
+	}
+	return nil
+}
+
+// HeartbeatWorker stamps the active Worker claim's last_heartbeat with at.
+// Returns ErrNotFound if no active claim exists.
+func (s *SQLiteStore) HeartbeatWorker(ctx context.Context, executionID, issueID string, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE workers
+		SET last_heartbeat = ?
+		WHERE execution_id = ? AND issue_id = ?`,
+		at.UTC(), executionID, issueID,
+	)
+	if err != nil {
+		return fmt.Errorf("storage: heartbeat worker %s/%s: %w", executionID, issueID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("storage: heartbeat worker %s/%s: %w", executionID, issueID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("storage: heartbeat worker %s/%s: %w", executionID, issueID, ErrNotFound)
 	}
 	return nil
 }
