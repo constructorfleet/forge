@@ -1,0 +1,180 @@
+package tui_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tui"
+)
+
+// fakeRosterStore is a scripted RosterStore double: it holds the Execution
+// state it LoadExecution returns and a per-Issue WorkerClaim lookup, so a
+// test can drive the poller's whole state-fetch pass deterministically.
+type fakeRosterStore struct {
+	state   storage.ExecutionState
+	claims  map[string]storage.WorkerClaim
+	claimOK map[string]bool
+}
+
+func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	return f.state, nil
+}
+
+func (f *fakeRosterStore) WorkerClaim(_ context.Context, _, issueID string) (storage.WorkerClaim, error) {
+	if f.claimOK[issueID] {
+		return f.claims[issueID], nil
+	}
+	return storage.WorkerClaim{}, storage.ErrNotFound
+}
+
+func mustRetryBudget(limits domain.RetryLimits, gate, review, ci, provider int) domain.RetryBudget {
+	return domain.NewRetryBudgetFrom(limits, gate, review, ci, provider)
+}
+
+// TestRosterFetchBuildsVMFromStoreAndClock proves one poller pass turns the
+// store's Issue + WorkerClaim state, resolved against the injected clock,
+// into the view-model the frame renders: elapsed from state_changed_at and a
+// truthful liveness badge from last_heartbeat, kept the distinct quantities
+// the liveness criterion demands.
+func TestRosterFetchBuildsVMFromStoreAndClock(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				// Living Worker: a fresh beat inside the 15s stale window.
+				{
+					ID: "#1", Title: "Write tests", State: domain.StateImplementing,
+					StateChangedAt: now.Add(-30 * time.Second),
+					RetryBudget:    mustRetryBudget(domain.RetryLimits{Gate: 3}, 1, 0, 0, 0),
+				},
+				// Wedged Worker: a beat far beyond the stale window.
+				{
+					ID: "#2", Title: "Add roster", State: domain.StateImplementing,
+					StateChangedAt: now.Add(-2 * time.Minute),
+					RetryBudget:    mustRetryBudget(domain.RetryLimits{Gate: 3}, 0, 0, 0, 0),
+				},
+				// Planning row: no claim, so no liveness claim at all.
+				{
+					ID: "#3", Title: "Pending work", State: domain.StatePending,
+					StateChangedAt: now.Add(-time.Second),
+				},
+			},
+		},
+		claimOK: map[string]bool{"#1": true, "#2": true},
+		claims: map[string]storage.WorkerClaim{
+			"#1": {LastHeartbeat: now.Add(-3 * time.Second)},
+			"#2": {LastHeartbeat: now.Add(-2 * time.Minute)},
+		},
+	}
+
+	r := tui.NewRoster(store, func() time.Time { return now })
+
+	vm, err := r.Fetch(context.Background(), "ex-1", now)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(vm.Workers) != 3 {
+		t.Fatalf("len(vm.Workers) = %d, want 3", len(vm.Workers))
+	}
+
+	// Row #1: living worker shows a live badge; elapsed is 30s, distinct from
+	// the 3s heartbeat age.
+	row := vm.Workers[0]
+	if row.IssueID != "#1" || row.Title != "Write tests" || row.State != domain.StateImplementing {
+		t.Fatalf("row 0 identity = %+v, want #1/Write tests/IMPLEMENTING", row)
+	}
+	if !row.HasHeartbeat {
+		t.Fatalf("row 0 HasHeartbeat = false, want true")
+	}
+	if row.Elapsed != 30*time.Second {
+		t.Fatalf("row 0 Elapsed = %s, want 30s (state_changed_at 30s ago)", row.Elapsed)
+	}
+	if row.HeartbeatAge != 3*time.Second {
+		t.Fatalf("row 0 HeartbeatAge = %s, want 3s (last_heartbeat 3s ago)", row.HeartbeatAge)
+	}
+
+	// Row #2: wedged worker's heartbeat is beyond the stale window; elapsed
+	// and heartbeat age must render as distinct quantities.
+	row = vm.Workers[1]
+	if !row.HasHeartbeat {
+		t.Fatalf("row 1 HasHeartbeat = false, want true")
+	}
+	if row.Elapsed != 2*time.Minute {
+		t.Fatalf("row 1 Elapsed = %s, want 2m (state_changed_at 2m ago)", row.Elapsed)
+	}
+	if row.HeartbeatAge != 2*time.Minute {
+		t.Fatalf("row 1 HeartbeatAge = %s, want 2m (last_heartbeat 2m ago)", row.HeartbeatAge)
+	}
+	if got := tui.DeriveLiveness(row.HasHeartbeat, row.HeartbeatAge); got != tui.LivenessStale {
+		t.Fatalf("row 1 liveness = %v, want stale", got)
+	}
+
+	// Row #3: planning row claims no liveness without a beat.
+	row = vm.Workers[2]
+	if row.HasHeartbeat {
+		t.Fatalf("row 2 HasHeartbeat = true, want false (no worker claim)")
+	}
+}
+
+// TestRosterFetchDerivesLiveBadgeFromClock proves DeriveLiveness renders the
+// injected clock's heartbeat age against the 15s stale window.
+func TestRosterFetchDerivesLiveBadgeFromClock(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "t", State: domain.StateImplementing},
+			},
+		},
+		claimOK: map[string]bool{"#1": true},
+		claims:  map[string]storage.WorkerClaim{"#1": {LastHeartbeat: now.Add(-10 * time.Second)}},
+	}
+	r := tui.NewRoster(store, func() time.Time { return now })
+
+	vm, err := r.Fetch(context.Background(), "ex-1", now)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got := tui.DeriveLiveness(vm.Workers[0].HasHeartbeat, vm.Workers[0].HeartbeatAge); got != tui.LivenessLive {
+		t.Fatalf("liveness = %v, want live (10s within 15s window)", got)
+	}
+}
+
+// TestRosterFetchPropagatesStoreError proves a failed store read surfaces as
+// an error from Fetch rather than being swallowed into a partial view.
+func TestRosterFetchPropagatesStoreError(t *testing.T) {
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues:    []domain.Issue{{ID: "#1", Title: "t"}},
+		},
+		claimOK: map[string]bool{"#1": false},
+	}
+	// A claim-error propagation: make LoadExecution fail instead by wrapping.
+	failing := &failingLoadRosterStore{fake: store}
+	r := tui.NewRoster(failing, func() time.Time { return time.Now() })
+
+	if _, err := r.Fetch(context.Background(), "ex-1", time.Now()); err == nil {
+		t.Fatal("Fetch: want error from failed LoadExecution, got nil")
+	}
+}
+
+type failingLoadRosterStore struct {
+	fake *fakeRosterStore
+}
+
+func (f *failingLoadRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	return storage.ExecutionState{}, errors.New("load failed")
+}
+
+func (f *failingLoadRosterStore) WorkerClaim(_ context.Context, _, _ string) (storage.WorkerClaim, error) {
+	return storage.WorkerClaim{}, storage.ErrNotFound
+}

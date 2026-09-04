@@ -28,6 +28,7 @@ Commands:
   init                     Generate .forge.yaml via deterministic repository-policy discovery
   execute <issue-number>   Execute a single Issue with no unmet Dependencies
   status [execution-id]    Show active Executions or one Execution's persisted state
+  watch [execution-id]     Attach the live roster to an active Execution
   cancel <execution-id>    Stop an active Execution and mark running work CANCELLED
   retry <execution>/<issue> Retry a FAILED Issue within its Execution
   resume <execution-id>    Reconcile and continue an incomplete Execution
@@ -65,6 +66,8 @@ func run(args []string) int {
 		return runExecute(rest)
 	case "status":
 		return runStatus(rest)
+	case "watch":
+		return runWatch(rest)
 	case "cancel":
 		return runCancel(rest)
 	case "retry":
