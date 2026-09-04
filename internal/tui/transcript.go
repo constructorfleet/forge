@@ -388,6 +388,7 @@ func convertTranscriptEvent(e storage.TranscriptEvent) TranscriptEvent {
 		ToolInput:  e.ToolInput,
 		ToolOutput: e.ToolOutput,
 		ToolCallID: e.ToolCallID,
+		Subagent:   e.Subagent,
 	}
 }
 

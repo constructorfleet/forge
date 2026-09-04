@@ -118,7 +118,7 @@ func gateOutcome(g GateRow) string {
 // expanded to its command, exit code, and bounded output. The collapsed preview
 // keeps the last output line, which holds a gate tool's verdict.
 func gateLines(g GateRow, cur string, expanded bool) []string {
-	head := header(cur, gateGlyph(g), fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g)))
+	head := header(headerParts{cursor: cur, glyph: gateGlyph(g), text: fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g))})
 	if !expanded {
 		if last := lastLine(g.Output); last != "" {
 			return []string{head, indented(last)}

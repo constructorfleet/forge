@@ -316,6 +316,123 @@ func (s *SQLiteStore) TransitionIssue(ctx context.Context, executionID, issueID 
 	return issue, nil
 }
 
+// retryClaimFrom and retryClaimTo are the one edge ClaimRetry applies. The
+// compare-and-set uses retryClaimFrom as its predicate, so the claim's
+// `from` is this state by construction.
+const (
+	retryClaimFrom = domain.StateFailed
+	retryClaimTo   = domain.StateReady
+)
+
+// RetryClaim reports one applied retry claim: the Issue as the claim left
+// it, and the state the compare-and-set moved it off. Callers use From
+// instead of restating the edge, which keeps ClaimRetry the one authority on
+// which state a retry claims off.
+type RetryClaim struct {
+	Issue domain.Issue
+	From  domain.IssueState
+}
+
+// RetryClaimConflictError reports that ClaimRetry did not find the Issue in
+// FAILED. State is the state the transaction read back after its
+// compare-and-set matched no row. State alone does not name the cause: a
+// rival retry's winner moves on through READY and later states, and an Issue
+// that was never FAILED also sits in one of those. Only CANCELLED is
+// unambiguous. See engine.retryClaimError, which pairs State with the
+// pre-claim state. It wraps
+// ErrConcurrentModification, so it still satisfies errors.Is for that
+// sentinel.
+type RetryClaimConflictError struct {
+	ExecutionID string
+	IssueID     string
+	State       domain.IssueState
+}
+
+func (e *RetryClaimConflictError) Error() string {
+	return fmt.Sprintf("storage: claim retry %s/%s: issue is %s, want FAILED", e.ExecutionID, e.IssueID, e.State)
+}
+
+func (e *RetryClaimConflictError) Unwrap() error { return ErrConcurrentModification }
+
+// ClaimRetry performs one retry claim of a FAILED Issue as a single
+// transaction. See engine.RetryIssue for the failure mode separate
+// statements produce: the losing retry resets the budget under the winner
+// and releases the winner's fresh Worker claim.
+//
+// The compare-and-set runs first, before any read. A read-then-write
+// transaction must upgrade its read snapshot to a write lock, and WAL mode
+// refuses that with SQLITE_BUSY_SNAPSHOT when another connection committed
+// after the read began — busy_timeout does not wait that out. Two separate
+// `forge retry` processes would then get a raw lock error instead of a
+// RetryClaimConflictError. Writing first takes the lock up front, and the
+// row is read back only to report the state the claim lost to.
+func (s *SQLiteStore) ClaimRetry(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) (RetryClaim, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	affected, err := updateIssueStateCAS(ctx, tx, executionID, issueID,
+		string(retryClaimFrom), string(retryClaimTo), time.Now().UTC())
+	if err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+
+	issue, err := s.getIssue(ctx, tx, executionID, issueID)
+	if err != nil {
+		return RetryClaim{}, err
+	}
+	if affected == 0 {
+		return RetryClaim{}, &RetryClaimConflictError{ExecutionID: executionID, IssueID: issueID, State: issue.State}
+	}
+
+	if err := updateRetryBudget(ctx, tx, executionID, issueID, budget); err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+	if err := releaseWorkerClaim(ctx, tx, executionID, issueID); err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+	if err := appendTransitionEvent(ctx, tx, executionID, issueID, retryClaimFrom, issue.State); err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RetryClaim{}, fmt.Errorf("storage: claim retry %s/%s: %w", executionID, issueID, err)
+	}
+	issue.RetryBudget = budget
+	return RetryClaim{Issue: issue, From: retryClaimFrom}, nil
+}
+
+// AbortRetry undoes a ClaimRetry the caller could not complete. See
+// Store.AbortRetry for why it puts back a state the forward state machine
+// forbids, and for the Worker claim it does not restore.
+func (s *SQLiteStore) AbortRetry(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	affected, err := updateIssueStateCAS(ctx, tx, executionID, issueID,
+		string(domain.StateReady), string(domain.StateFailed), time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, ErrConcurrentModification)
+	}
+	if err := updateRetryBudget(ctx, tx, executionID, issueID, budget); err != nil {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, err)
+	}
+	if err := appendTransitionEvent(ctx, tx, executionID, issueID, domain.StateReady, domain.StateFailed); err != nil {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: abort retry %s/%s: %w", executionID, issueID, err)
+	}
+	return nil
+}
+
 // UpdateRetryBudget persists budget's used-counters for issueID within
 // executionID. See Store.UpdateRetryBudget's doc comment for why the
 // repair loop needs this: TransitionIssue always reloads the Issue fresh
@@ -323,7 +440,11 @@ func (s *SQLiteStore) TransitionIssue(ctx context.Context, executionID, issueID 
 // RecordReviewRejection/RecordCIFailure/RecordProviderLimitStop would
 // otherwise be silently discarded on the very next transition.
 func (s *SQLiteStore) UpdateRetryBudget(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error {
-	_, err := s.db.ExecContext(ctx, `
+	return updateRetryBudget(ctx, s.db, executionID, issueID, budget)
+}
+
+func updateRetryBudget(ctx context.Context, q querier, executionID, issueID string, budget domain.RetryBudget) error {
+	_, err := q.ExecContext(ctx, `
 		UPDATE execution_issues
 		SET retry_gate_used = ?, retry_review_used = ?, retry_ci_used = ?,
 			retry_provider_limit_used = ?

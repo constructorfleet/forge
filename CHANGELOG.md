@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.36.2](https://github.com/constructorfleet/forge/compare/forge-v0.36.1...forge-v0.36.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* make retry one atomic claim ([#456](https://github.com/constructorfleet/forge/issues/456)) ([#559](https://github.com/constructorfleet/forge/issues/559)) ([1157baa](https://github.com/constructorfleet/forge/commit/1157baa90e1a4e359fcb6ac130727e7e6a2bc16f))
+
+## [0.36.1](https://github.com/constructorfleet/forge/compare/forge-v0.36.0...forge-v0.36.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* Canceled-before-output runs persist a blank transcript (sink holds the cancelable run ctx) ([#545](https://github.com/constructorfleet/forge/issues/545)) ([8f3237d](https://github.com/constructorfleet/forge/commit/8f3237d8a4e8f7cea5efc8dc045f00a680d190b2)), closes [#454](https://github.com/constructorfleet/forge/issues/454)
+
+## [0.36.0](https://github.com/constructorfleet/forge/compare/forge-v0.35.0...forge-v0.36.0) (2026-09-04)
+
+
+### Features
+
+* **tui:** label review axes inline and defer diffs to $PAGER ([#501](https://github.com/constructorfleet/forge/issues/501)) ([#541](https://github.com/constructorfleet/forge/issues/541)) ([dec818a](https://github.com/constructorfleet/forge/commit/dec818a18a67df168734062eb0543378e760ee81))
+
 ## [0.35.0](https://github.com/constructorfleet/forge/compare/forge-v0.34.0...forge-v0.35.0) (2026-09-04)
 
 

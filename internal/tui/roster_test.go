@@ -19,6 +19,30 @@ type fakeRosterStore struct {
 	claims  map[string]storage.WorkerClaim
 	claimOK map[string]bool
 	loadErr error
+
+	// reviews holds the Review history per Issue, in insertion order.
+	reviews map[string][]storage.ReviewRun
+	// runReads counts LatestReviewDiff calls, so a test can prove a poll pass
+	// never reads the diff blobs.
+	runReads int
+}
+
+func (f *fakeRosterStore) LatestReviewOutcome(_ context.Context, _, issueID string) (storage.ReviewOutcome, error) {
+	runs := f.reviews[issueID]
+	if len(runs) == 0 {
+		return storage.ReviewOutcome{}, nil
+	}
+	last := runs[len(runs)-1]
+	return storage.ReviewOutcome{Verdict: last.Verdict, HasDiff: last.Diff != "", Recorded: true}, nil
+}
+
+func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string) (string, error) {
+	f.runReads++
+	runs := f.reviews[issueID]
+	if len(runs) == 0 {
+		return "", nil
+	}
+	return runs[len(runs)-1].Diff, nil
 }
 
 func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
@@ -198,6 +222,14 @@ func (missingExecutionRosterStore) WorkerClaim(_ context.Context, _, _ string) (
 	return storage.WorkerClaim{}, storage.ErrNotFound
 }
 
+func (missingExecutionRosterStore) LatestReviewDiff(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (missingExecutionRosterStore) LatestReviewOutcome(_ context.Context, _, _ string) (storage.ReviewOutcome, error) {
+	return storage.ReviewOutcome{}, nil
+}
+
 type failingLoadRosterStore struct {
 	fake *fakeRosterStore
 }
@@ -208,4 +240,12 @@ func (f *failingLoadRosterStore) LoadExecution(context.Context, string) (storage
 
 func (f *failingLoadRosterStore) WorkerClaim(_ context.Context, _, _ string) (storage.WorkerClaim, error) {
 	return storage.WorkerClaim{}, storage.ErrNotFound
+}
+
+func (f *failingLoadRosterStore) LatestReviewDiff(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (f *failingLoadRosterStore) LatestReviewOutcome(_ context.Context, _, _ string) (storage.ReviewOutcome, error) {
+	return storage.ReviewOutcome{}, nil
 }

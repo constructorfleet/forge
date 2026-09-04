@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -64,29 +65,41 @@ func TestRetryIssue_RerunsFailedIssue(t *testing.T) {
 	}
 }
 
+// TestRetryIssue_RejectsNonFailedIssue covers READY as well as a live state.
+// READY is also the state a rival retry's winner leaves, so a queued Issue
+// that never failed must still get the plain non-FAILED error, not the
+// no-op "another actor already claimed this retry" report.
 func TestRetryIssue_RejectsNonFailedIssue(t *testing.T) {
-	te := newTestEngine(t, map[string]domain.Issue{
-		"62": {ID: "62", Title: "Still running"},
-	})
-	ctx := context.Background()
-	exec := domain.Execution{ID: "exec-62", BaseRevision: te.base, StartedAt: time.Now().UTC()}
-	if err := te.store.CreateExecution(ctx, exec); err != nil {
-		t.Fatalf("CreateExecution: %v", err)
-	}
-	if err := te.store.CreateIssue(ctx, domain.Issue{
-		ID:          "62",
-		ExecutionID: exec.ID,
-		Title:       "Still running",
-		State:       domain.StateReady,
-		Scope:       domain.ScopeManaged,
-		RetryBudget: domain.NewRetryBudget(te.eng.Config.Retry),
-	}); err != nil {
-		t.Fatalf("CreateIssue: %v", err)
-	}
+	for _, state := range []domain.IssueState{domain.StateClaimed, domain.StateReady} {
+		t.Run(string(state), func(t *testing.T) {
+			te := newTestEngine(t, map[string]domain.Issue{
+				"62": {ID: "62", Title: "Still running"},
+			})
+			ctx := context.Background()
+			exec := domain.Execution{ID: "exec-62", BaseRevision: te.base, StartedAt: time.Now().UTC()}
+			if err := te.store.CreateExecution(ctx, exec); err != nil {
+				t.Fatalf("CreateExecution: %v", err)
+			}
+			if err := te.store.CreateIssue(ctx, domain.Issue{
+				ID:          "62",
+				ExecutionID: exec.ID,
+				Title:       "Still running",
+				State:       state,
+				Scope:       domain.ScopeManaged,
+				RetryBudget: domain.NewRetryBudget(te.eng.Config.Retry),
+			}); err != nil {
+				t.Fatalf("CreateIssue: %v", err)
+			}
 
-	_, err := te.eng.RetryIssue(ctx, exec.ID, "62")
-	if err == nil || err.Error() != "engine: issue 62 is READY, want FAILED" {
-		t.Fatalf("RetryIssue error = %v, want clear non-FAILED error", err)
+			_, err := te.eng.RetryIssue(ctx, exec.ID, "62")
+			want := fmt.Sprintf("engine: retry issue 62: issue is %s, want FAILED", state)
+			if err == nil || err.Error() != want {
+				t.Fatalf("RetryIssue error = %v, want %q", err, want)
+			}
+			if errors.Is(err, engine.ErrRetryAlreadyClaimed) {
+				t.Fatalf("RetryIssue error = %v, want a non-FAILED report, not a no-op", err)
+			}
+		})
 	}
 }
 

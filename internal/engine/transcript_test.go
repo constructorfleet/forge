@@ -206,6 +206,81 @@ func TestExecute_CancelledMidStream_RetainsTranscriptUpToCancellation(t *testing
 	}
 }
 
+// cancelledFallbackAgent streams nothing, waits for cancellation, then emits
+// one diagnostic fallback event — the shape internal/agent/clicommon's
+// emitFallback and the claude adapter's deferred FAILED summary have. Both are
+// no-ops when anything already streamed, so this produced-nothing run is the
+// only case where the fallback is the whole transcript.
+type cancelledFallbackAgent struct {
+	entered chan struct{}
+}
+
+func (a *cancelledFallbackAgent) Execute(ctx context.Context, req agent.AgentRequest) (agent.AgentResult, error) {
+	close(a.entered)
+	<-ctx.Done()
+	req.Transcript.Emit(agent.TranscriptEvent{
+		Type: agent.TranscriptEventMessage,
+		Role: "assistant",
+		Text: "run cancelled before any output",
+	})
+	return agent.AgentResult{}, ctx.Err()
+}
+
+var _ agent.Agent = (*cancelledFallbackAgent)(nil)
+
+// TestExecute_CancelledBeforeOutput_PersistsFallbackTranscript closes issue
+// 454: a run cancelled before it streams anything must still persist its
+// diagnostic fallback, so the transcript never reads as blank. The sink
+// persists on a cancel-immune context, so the fallback survives the
+// cancellation of the run it describes.
+func TestExecute_CancelledBeforeOutput_PersistsFallbackTranscript(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
+	store := openTestStore(t)
+	trk := &stubTracker{issues: map[string]domain.Issue{"42": {ID: "42"}}}
+	mgr, err := workspace.NewManager(repoRoot)
+	if err != nil {
+		t.Fatalf("workspace.NewManager: %v", err)
+	}
+	fake := &cancelledFallbackAgent{entered: make(chan struct{})}
+	eng := engine.New(store, trk, &spyWorkspaces{mgr: mgr}, fake, config.Default(), repoRoot)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	execution, err := eng.StartExecution(ctx, base)
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, execErr := eng.ExecuteInExecution(ctx, execution, "42", base)
+		done <- execErr
+	}()
+
+	select {
+	case <-fake.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the agent to start")
+	}
+
+	cancel()
+	if execErr := <-done; execErr == nil {
+		t.Fatalf("ExecuteInExecution err = nil, want non-nil (the run was cancelled)")
+	}
+
+	final, err := engine.LoadTranscript(context.Background(), store, execution.ID, "42")
+	if err != nil {
+		t.Fatalf("LoadTranscript (post-cancellation): %v", err)
+	}
+	if len(final) != 1 {
+		t.Fatalf("got %d transcript events, want 1 — the cancel fallback must persist rather than leave a blank transcript", len(final))
+	}
+	if final[0].Text != "run cancelled before any output" {
+		t.Fatalf("final[0] = %+v, want the cancel fallback event", final[0])
+	}
+}
+
 // transcriptEmittingReviewer is an engine.Engine.Reviewer double that emits
 // one scripted TranscriptEvent per subagent via req.TranscriptSinkFor (when
 // set) before returning a programmed review.Result — standing in for

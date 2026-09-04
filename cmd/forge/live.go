@@ -28,6 +28,11 @@ func runLiveRoster(ctx context.Context, store liveStore, executionID string) err
 	model := tui.NewLiveModel(roster, executionID, 0)
 	model.SetContext(ctx)
 	model.SetFeed(tui.NewTranscriptFeed(store))
+
+	// A quit key removes the diff artifacts itself; this covers every other
+	// exit path (cancellation, signal, panic).
+	defer model.Close()
+
 	p := tea.NewProgram(model, tea.WithContext(ctx))
 	// The caller cancels ctx to stop the observer once the run ends, so a
 	// cancellation is the normal exit, not a failure to report.

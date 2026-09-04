@@ -196,6 +196,15 @@ type ReviewRun struct {
 	Envelopes   []ReviewAxisEnvelope
 }
 
+// ReviewOutcome is the current Review result for one Issue, without the diff
+// body. An observer polls this each pass, so it must not carry a blob it
+// discards: HasDiff tells the caller a diff exists to read on request.
+type ReviewOutcome struct {
+	Verdict  string
+	HasDiff  bool
+	Recorded bool
+}
+
 // PullRequest is one created (or idempotently recovered) pull request's
 // persisted record, mirroring tracker.PullRequest but living in this
 // package so storage has no dependency on internal/tracker — callers (the
@@ -343,6 +352,34 @@ type Store interface {
 	// write occurs; an illegal transition leaves persisted state unchanged
 	// and returns *domain.InvalidTransitionError.
 	TransitionIssue(ctx context.Context, executionID, issueID string, to domain.IssueState) (domain.Issue, error)
+
+	// ClaimRetry claims one retry of a FAILED Issue: it resets the retry
+	// budget to budget, releases the stale Worker claim, transitions the
+	// Issue to READY, and appends the transition Event — all in one
+	// transaction, guarded by a compare-and-set on the FAILED state. Two
+	// concurrent retries of the same Issue therefore cannot both succeed:
+	// exactly one wins and the other gets a *RetryClaimConflictError (which
+	// wraps ErrConcurrentModification) with no write applied. Separate
+	// statements instead let the loser reset the budget under the winner and
+	// release the winner's fresh Worker claim; see engine.RetryIssue.
+	// Returns ErrNotFound when the Issue does not exist.
+	ClaimRetry(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) (RetryClaim, error)
+
+	// AbortRetry undoes a ClaimRetry whose caller could not finish the
+	// retry: it puts the Issue back to FAILED, restores budget, and appends
+	// the transition Event, in one transaction guarded by a compare-and-set
+	// on READY. READY -> FAILED is not a legal forward edge, so this is a
+	// rollback of the claim rather than a transition, and it exists only for
+	// engine.RetryIssue's own compensation path. Returns
+	// ErrConcurrentModification when the Issue is no longer READY, which
+	// means another actor owns the state and the rollback must not apply.
+	//
+	// AbortRetry does not put back the Worker claim ClaimRetry released. The
+	// released claim is the stale claim of the attempt that failed, and no
+	// reader needs it: recovery derives a Worker's base from its
+	// worker.base_captured Events, not from the claim. The Issue therefore
+	// returns to FAILED without a claim, which is what a fresh retry wants.
+	AbortRetry(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error
 
 	// UpdateRetryBudget persists budget's current used-counters (gate,
 	// review, CI, provider limit) for issueID within executionID; the

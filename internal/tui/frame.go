@@ -111,6 +111,16 @@ type WorkerRow struct {
 
 	// Tool is the running tool's name; empty when none is in flight.
 	Tool string
+
+	// Verdict is the aggregate review_runs verdict of the last recorded
+	// Review. The per-axis streams ride the transcript pane; the outcome
+	// belongs here. Empty until a Review has run.
+	Verdict string
+
+	// HasDiff records that the last Review stored a diff, so the frame can
+	// offer the pager key. The diff itself never enters the view-model: it is
+	// a heavy artifact, read on request and handed to $PAGER.
+	HasDiff bool
 }
 
 // Pane names the frame's two panes. Focus decides which pane the detail strip
@@ -138,6 +148,13 @@ type ViewModel struct {
 	// TranscriptNotice reports a failed transcript poll pass. It is separate
 	// from Notice, so neither failure source can hide the other.
 	TranscriptNotice string
+
+	// ActionNotice reports the last operator action's outcome when the action
+	// declined or failed. It renders whether or not the roster has rows, and it
+	// is kept apart from Notice because a poll pass replaces the whole polled
+	// view-model: the message must last until the operator presses the next
+	// key, not for one poll interval.
+	ActionNotice string
 
 	// Transcript is the selected Worker's transcript pane. Nil renders the
 	// roster alone.
@@ -195,6 +212,9 @@ func Render(vm ViewModel) string {
 	// it describes and a long pane cannot push the two apart.
 	if vm.TranscriptNotice != "" {
 		b.WriteString(vm.TranscriptNotice)
+  }
+	if vm.ActionNotice != "" {
+		b.WriteString(vm.ActionNotice)
 		b.WriteByte('\n')
 	}
 	if vm.Transcript != nil {
@@ -231,7 +251,13 @@ func frameKeys(vm ViewModel) []KeyBinding {
 		return TranscriptKeys(vm.Transcript)
 	}
 	if row, ok := selectedWorker(vm); ok {
-		return LegalKeys(row.State)
+		keys := LegalKeys(row.State)
+		if row.HasDiff {
+			// The diff defers to $PAGER, so the key appears only where the
+			// store holds a diff to open.
+			keys = append(keys, KeyBinding{Key: "d", Label: "diff"})
+		}
+		return keys
 	}
 	return []KeyBinding{{Key: "q", Label: "quit"}}
 }
@@ -268,8 +294,12 @@ func detailLine(row WorkerRow) string {
 	if tool == "" {
 		tool = "\u2014"
 	}
-	return fmt.Sprintf("%s | elapsed %s | beat %s | attempt %d/%d | tool %s",
-		row.State, formatDuration(row.Elapsed), beat, row.Attempt, row.Budget, tool)
+	verdict := row.Verdict
+	if verdict == "" {
+		verdict = "—"
+	}
+	return fmt.Sprintf("%s | elapsed %s | beat %s | attempt %d/%d | tool %s | verdict %s",
+		row.State, formatDuration(row.Elapsed), beat, row.Attempt, row.Budget, tool, verdict)
 }
 
 // footerLine joins legal keys into one space-separated footer.
