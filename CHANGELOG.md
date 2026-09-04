@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.3](https://github.com/constructorfleet/forge/compare/forge-v0.36.2...forge-v0.36.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* verify worker owner identity before cancel signals it ([#457](https://github.com/constructorfleet/forge/issues/457)) ([#569](https://github.com/constructorfleet/forge/issues/569)) ([c5c6e01](https://github.com/constructorfleet/forge/commit/c5c6e01924e580d31fc62e7f97d7533f07ec3077))
+
 ## [0.36.2](https://github.com/constructorfleet/forge/compare/forge-v0.36.1...forge-v0.36.2) (2026-09-04)
 
 
