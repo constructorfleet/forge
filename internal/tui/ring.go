@@ -13,6 +13,9 @@ type RingBuffer struct {
 // storage.TranscriptEvent the tailer needs for display. Kept narrow so the
 // TUI package has no dependency on storage internals.
 type TranscriptEvent struct {
+	// AgentRunID names the attempt the event belongs to. Seq restarts at 0 in
+	// every run, so only the pair identifies an event across a retry history.
+	AgentRunID int64
 	Seq        int
 	Type       string
 	Role       string

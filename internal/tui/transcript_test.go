@@ -81,8 +81,8 @@ func TestTailerPollAdvancesCursor(t *testing.T) {
 	if _, err := tailer.Poll(context.Background()); err != nil {
 		t.Fatalf("Poll 1: %v", err)
 	}
-	if got := tailer.Cursor(); got != 1 {
-		t.Fatalf("Cursor = %d, want 1", got)
+	if got := tailer.LatestRunCursor(); got != 1 {
+		t.Fatalf("LatestRunCursor = %d, want 1", got)
 	}
 
 	store.events = append(store.events, msg(2, "third"))
@@ -167,8 +167,8 @@ func TestTailerReadFailureKeepsWindow(t *testing.T) {
 	if len(vm.Events) != 1 {
 		t.Fatalf("Events len = %d, want the last good window", len(vm.Events))
 	}
-	if got := tailer.Cursor(); got != 0 {
-		t.Fatalf("Cursor = %d, want 0 unchanged", got)
+	if got := tailer.LatestRunCursor(); got != 0 {
+		t.Fatalf("LatestRunCursor = %d, want 0 unchanged", got)
 	}
 
 	store.err = nil
@@ -274,5 +274,232 @@ func TestTailerRingCapDefaults(t *testing.T) {
 	}
 	if vm.Retained != 3 || vm.Dropped != 0 {
 		t.Fatalf("vm = %+v, want 3 retained and no drops", vm)
+	}
+}
+
+// fakeMultiRunStore is a TranscriptStore double over several runs' logs, keyed
+// by AgentRunID: it proves the tailer reads each attempt with its own cursor.
+type fakeMultiRunStore struct {
+	runs map[int64][]storage.TranscriptEvent
+	// errFor fails the read for one run, so a pass can fail part way.
+	errFor map[int64]error
+	// calls records every (run, afterSeq) pair the tailer read with.
+	calls [][2]int64
+}
+
+func (f *fakeMultiRunStore) TranscriptEventsAfter(_ context.Context, runID, afterSeq, limit int64) ([]storage.TranscriptEvent, error) {
+	f.calls = append(f.calls, [2]int64{runID, afterSeq})
+	if err := f.errFor[runID]; err != nil {
+		return nil, err
+	}
+	var out []storage.TranscriptEvent
+	for _, e := range f.runs[runID] {
+		if int64(e.Seq) > afterSeq {
+			out = append(out, e)
+		}
+		if int64(len(out)) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// runMsg builds a MESSAGE event at seq within agentRunID.
+func runMsg(runID int64, seq int, text string) storage.TranscriptEvent {
+	e := msg(seq, text)
+	e.AgentRunID = runID
+	return e
+}
+
+// TestTailerAddRunKeepsEarlierAttempts proves a retry extends the scrollback
+// instead of replacing it: both attempts stay retained, in run insertion order.
+func TestTailerAddRunKeepsEarlierAttempts(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "first try"), runMsg(4, 1, "failed")},
+		9: {runMsg(9, 0, "second try")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	tailer.AddRun(9)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll after AddRun: %v", err)
+	}
+
+	want := []string{"first try", "failed", "second try"}
+	if len(vm.Events) != len(want) {
+		t.Fatalf("Events = %d, want %d: %+v", len(vm.Events), len(want), vm.Events)
+	}
+	for i, text := range want {
+		if vm.Events[i].Text != text {
+			t.Errorf("Events[%d].Text = %q, want %q", i, vm.Events[i].Text, text)
+		}
+	}
+	if vm.Events[2].AgentRunID != 9 {
+		t.Errorf("Events[2].AgentRunID = %d, want 9", vm.Events[2].AgentRunID)
+	}
+	if len(vm.RunOrder) != 2 || vm.RunOrder[0] != 4 || vm.RunOrder[1] != 9 {
+		t.Errorf("RunOrder = %v, want [4 9]", vm.RunOrder)
+	}
+}
+
+// TestTailerAddRunReadsNewRunFromFirstSeq proves each attempt carries its own
+// cursor: the new run's seq-0 event is not skipped by the older run's cursor.
+func TestTailerAddRunReadsNewRunFromFirstSeq(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "a"), runMsg(4, 1, "b"), runMsg(4, 2, "c")},
+		9: {runMsg(9, 0, "retry")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	tailer.AddRun(9)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll after AddRun: %v", err)
+	}
+
+	if got := store.calls[len(store.calls)-1]; got != [2]int64{9, -1} {
+		t.Errorf("last read = run %d after seq %d, want run 9 after seq -1", got[0], got[1])
+	}
+}
+
+// TestTailerAddRunIgnoresAKnownRun proves AddRun is idempotent, so a repeated
+// roster poll cannot duplicate an attempt or its divider.
+func TestTailerAddRunIgnoresAKnownRun(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{4: {runMsg(4, 0, "a")}}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	tailer.AddRun(4)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(vm.RunOrder) != 1 || len(vm.Events) != 1 {
+		t.Errorf("RunOrder = %v, Events = %+v, want one run and one event", vm.RunOrder, vm.Events)
+	}
+}
+
+// TestTailerReattachDropsEarlierAttempts proves Reattach still starts a fresh
+// history: it is the reader-gap recovery, not the retry path.
+func TestTailerReattachDropsEarlierAttempts(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "first try")},
+		9: {runMsg(9, 0, "second try")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	tailer.Reattach(9)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll after Reattach: %v", err)
+	}
+
+	if len(vm.Events) != 1 || vm.Events[0].Text != "second try" {
+		t.Errorf("Events = %+v, want the second attempt alone", vm.Events)
+	}
+	if len(vm.RunOrder) != 1 || vm.RunOrder[0] != 9 {
+		t.Errorf("RunOrder = %v, want [9]", vm.RunOrder)
+	}
+}
+
+// TestTailerPartialPollHoldsScrollAnchor proves a read failure on a later
+// attempt still commits the bookkeeping for the events it already appended: a
+// scrolled-back window must not slide under the operator.
+func TestTailerPartialPollHoldsScrollAnchor(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "a"), runMsg(4, 1, "b"), runMsg(4, 2, "c")},
+	}}
+	store.errFor = map[int64]error{9: errors.New("boom")}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	tailer.SetHeight(2)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	tailer.ScrollUp(1)
+	tailer.AddRun(9)
+	store.runs[4] = append(store.runs[4], runMsg(4, 3, "d"))
+
+	vm, err := tailer.Poll(context.Background())
+	if err == nil {
+		t.Fatal("Poll: want the failed attempt's error")
+	}
+	if len(vm.Events) != 2 || vm.Events[0].Text != "a" || vm.Events[1].Text != "b" {
+		t.Errorf("Events = %+v, want the anchored window [a b]", vm.Events)
+	}
+}
+
+// TestTailerScrollAnchorHoldsAcrossAnEarlierAttempt proves the scrollback
+// anchors on an event, not on a distance from the tail: a late event that sorts
+// in ahead of the visible window must not slide the window.
+func TestTailerScrollAnchorHoldsAcrossAnEarlierAttempt(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "a"), runMsg(4, 1, "b"), runMsg(4, 2, "c")},
+		9: {runMsg(9, 0, "p"), runMsg(9, 1, "q"), runMsg(9, 2, "r"), runMsg(9, 3, "s")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	tailer.AddRun(9)
+	tailer.SetHeight(2)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll 1: %v", err)
+	}
+	tailer.ScrollUp(2)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll 2: %v", err)
+	}
+	if vm.Events[0].Text != "p" || vm.Events[1].Text != "q" {
+		t.Fatalf("scrolled window = %+v, want [p q]", vm.Events)
+	}
+
+	// The earlier attempt reports one more event, which sorts before the window.
+	store.runs[4] = append(store.runs[4], runMsg(4, 3, "late"))
+	vm, err = tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll 3: %v", err)
+	}
+	if len(vm.Events) != 2 || vm.Events[0].Text != "p" || vm.Events[1].Text != "q" {
+		t.Fatalf("window = %+v, want the anchor held at [p q]", vm.Events)
+	}
+}
+
+// TestTailerOrdersLateEventByRunInsertion proves the retained window reads in
+// run insertion order: a late event from an earlier attempt sorts back into its
+// own attempt instead of adding a second, out-of-order divider.
+func TestTailerOrdersLateEventByRunInsertion(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "first try")},
+		9: {runMsg(9, 0, "second try")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 100)
+	tailer.AddRun(9)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	store.runs[4] = append(store.runs[4], runMsg(4, 1, "late failure"))
+
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+
+	want := []string{"first try", "late failure", "second try"}
+	if len(vm.Events) != len(want) {
+		t.Fatalf("Events = %+v, want %v", vm.Events, want)
+	}
+	for i, text := range want {
+		if vm.Events[i].Text != text {
+			t.Errorf("Events[%d].Text = %q, want %q", i, vm.Events[i].Text, text)
+		}
 	}
 }
