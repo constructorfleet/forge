@@ -1170,10 +1170,14 @@ const defaultFlushInterval = 250 * time.Millisecond
 // persistingTranscriptSink is an agent.TranscriptSink that persists the
 // transcript to storage in append-only batches: Emit records into a bounded
 // agent.TranscriptRecorder and schedules a debounced flush on defaultFlushInterval,
-// and Close performs a final synchronous flush on a cancel-immune context so
-// a killed/timed-out run's tail survives (issue 36, 489). Persisting only
-// unflushed seqs keeps every event monotonic and UNIQUE(agent_run_id, seq).
+// and Close performs a final synchronous flush so a killed/timed-out run's tail
+// survives (issue 36, 489). Persisting only unflushed seqs keeps every event
+// monotonic and UNIQUE(agent_run_id, seq).
 type persistingTranscriptSink struct {
+	// ctx is cancel-immune (issue 454). Best-effort capture must outlive the
+	// run it describes: a run cancelled before it streams anything emits only
+	// its diagnostic fallback, and database/sql rejects a write on an already
+	// cancelled context, which would leave a blank transcript.
 	ctx                  context.Context
 	store                transcriptStore
 	executionID, issueID string
@@ -1195,7 +1199,7 @@ type persistingTranscriptSink struct {
 
 func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, phase, subagent string, now func() time.Time) *persistingTranscriptSink {
 	return &persistingTranscriptSink{
-		ctx:            ctx,
+		ctx:            context.WithoutCancel(ctx),
 		store:          store,
 		executionID:    executionID,
 		issueID:        issueID,
@@ -1263,10 +1267,10 @@ func (s *persistingTranscriptSink) flushLocked() {
 	s.lastFlushedSeq = highWater
 }
 
-// Close performs the run's final synchronous flush on context.WithoutCancel so
-// the tail survives a cancelled run. Barrier-synchronized with the debounced
-// async flush: the monotonic watermark prevents either from double-appending a
-// seq. Emit after Close is a no-op.
+// Close performs the run's final synchronous flush, so the tail survives a
+// cancelled run. Barrier-synchronized with the debounced async flush: the
+// monotonic watermark prevents either from double-appending a seq. Emit after
+// Close is a no-op.
 func (s *persistingTranscriptSink) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1277,7 +1281,6 @@ func (s *persistingTranscriptSink) Close() {
 	if s.timer != nil {
 		s.timer.Stop()
 	}
-	s.ctx = context.WithoutCancel(s.ctx)
 	s.flushLocked()
 }
 

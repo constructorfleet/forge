@@ -81,6 +81,11 @@ func toStorageTranscriptEvents(events []agent.TranscriptEvent, phase, subagent s
 // it: engine depends on the lower-level packages, not the reverse, so
 // planning must not import it.
 type persistingTranscriptSink struct {
+	// ctx is cancel-immune (issue 454). Best-effort capture must outlive the
+	// invocation it describes: an invocation cancelled before it streams
+	// anything emits only its diagnostic fallback, and database/sql rejects a
+	// write on an already cancelled context, which would leave a blank
+	// transcript.
 	ctx                  context.Context
 	store                TranscriptStore
 	executionID, issueID string
@@ -100,7 +105,7 @@ type persistingTranscriptSink struct {
 
 func newPersistingTranscriptSink(ctx context.Context, store TranscriptStore, executionID, issueID string, agentRunID int64, subagent string, now func() time.Time) *persistingTranscriptSink {
 	return &persistingTranscriptSink{
-		ctx:            ctx,
+		ctx:            context.WithoutCancel(ctx),
 		store:          store,
 		executionID:    executionID,
 		issueID:        issueID,
@@ -169,10 +174,10 @@ func (s *persistingTranscriptSink) flushLocked() {
 	s.lastFlushedSeq = highWater
 }
 
-// Close performs the run's final synchronous flush on context.WithoutCancel so
-// the tail survives a cancelled run. Barrier-synchronized with the debounced
-// async flush: the monotonic watermark prevents either from double-appending a
-// seq. Emit after Close is a no-op.
+// Close performs the run's final synchronous flush, so the tail survives a
+// cancelled run. Barrier-synchronized with the debounced async flush: the
+// monotonic watermark prevents either from double-appending a seq. Emit after
+// Close is a no-op.
 func (s *persistingTranscriptSink) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -183,7 +188,6 @@ func (s *persistingTranscriptSink) Close() {
 	if s.timer != nil {
 		s.timer.Stop()
 	}
-	s.ctx = context.WithoutCancel(s.ctx)
 	s.flushLocked()
 }
 
