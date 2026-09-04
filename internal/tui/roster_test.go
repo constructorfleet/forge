@@ -18,9 +18,13 @@ type fakeRosterStore struct {
 	state   storage.ExecutionState
 	claims  map[string]storage.WorkerClaim
 	claimOK map[string]bool
+	loadErr error
 }
 
 func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	if f.loadErr != nil {
+		return storage.ExecutionState{}, f.loadErr
+	}
 	return f.state, nil
 }
 

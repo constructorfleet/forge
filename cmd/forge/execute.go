@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Teagan42/forge/internal/scheduler"
-	"github.com/Teagan42/forge/internal/tui"
 )
 
 // runExecute implements `forge execute <issue-number> [<issue-number> ...]`
@@ -114,7 +113,7 @@ func runExecute(args []string) int {
 // in the background. The roster is the observer: quitting it early (q/Ctrl+C)
 // never cancels the run; when Scheduler.Run returns, the roster is stopped and
 // the final per-Issue states are printed.
-func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store tui.RosterStore, executionID string, issueIDs []string) int {
+func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string) int {
 	rosterCtx, cancelRoster := context.WithCancel(context.Background())
 	defer cancelRoster()
 	rosterDone := make(chan error, 1)
