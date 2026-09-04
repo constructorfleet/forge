@@ -65,9 +65,28 @@ func drainBatch(t *testing.T, m *tui.LiveModel, cmd tea.Cmd) (tea.Cmd, bool) {
 		return cmd, true
 	}
 	for _, c := range batch[:len(batch)-1] {
-		m.Update(c())
+		runImmediateCmd(t, m, c)
 	}
 	return batch[len(batch)-1], true
+}
+
+// runImmediateCmd delivers a command and every command the model returns from
+// that message. It is for commands that do store work now; it must not receive
+// the sleeping tick command.
+func runImmediateCmd(t *testing.T, m *tui.LiveModel, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runImmediateCmd(t, m, c)
+		}
+		return
+	}
+	_, next := m.Update(msg)
+	runImmediateCmd(t, m, next)
 }
 
 // TestLiveModelPollTickFetchesAndRenders proves a poll tick resolves state
@@ -360,10 +379,18 @@ func TestLiveModelKeyPressServedDuringASlowRead(t *testing.T) {
 	store.block = release
 	m.SetFeed(tui.NewTranscriptFeed(store))
 
-	// Start the pass, then hold the read open by not draining its command yet.
+	// Start the pass, then hold the feed read open by not draining it yet.
 	_, cmd := m.Update(pollTick(t, m))
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("poll tick returned no roster command")
+	}
+	_, readCmd := m.Update(batch[0]())
+	if readCmd == nil {
+		t.Fatal("roster read returned no feed command")
+	}
 	read := make(chan tea.Msg, 1)
-	go func() { read <- cmd() }()
+	go func() { read <- readCmd() }()
 
 	_, quit := m.Update(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
 	assertQuitCmd(t, quit)
@@ -374,6 +401,39 @@ func TestLiveModelKeyPressServedDuringASlowRead(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the feed read never returned")
 	}
+}
+
+// TestLiveModelKeyPressServedDuringASlowRosterFetch proves the roster store
+// read runs off the update goroutine. A poll tick returns a command while the
+// store is still blocked, so a key press can quit the model.
+func TestLiveModelKeyPressServedDuringASlowRosterFetch(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, store := liveFixture(t, now)
+	release := make(chan struct{})
+	store.blockLoad = release
+
+	done := make(chan tea.Cmd, 1)
+	go func() {
+		_, cmd := m.Update(pollTick(t, m))
+		done <- cmd
+	}()
+
+	var cmd tea.Cmd
+	select {
+	case cmd = <-done:
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		t.Fatal("poll tick blocked on the roster fetch")
+	}
+	if cmd == nil {
+		close(release)
+		t.Fatal("poll tick returned nil cmd, want read and tick commands")
+	}
+
+	_, quit := m.Update(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
+	assertQuitCmd(t, quit)
+
+	close(release)
 }
 
 // TestLiveModelOnlyOneReadInFlight proves a tick starts no second read while one
@@ -405,7 +465,13 @@ func countReads(t *testing.T, m *tui.LiveModel) int {
 		// The tick alone: no read started.
 		return 0
 	}
-	return len(batch) - 1
+	for _, c := range batch[:len(batch)-1] {
+		_, next := m.Update(c())
+		if next != nil {
+			return 1
+		}
+	}
+	return 0
 }
 
 // pollTick returns the model's own first poll-tick message.

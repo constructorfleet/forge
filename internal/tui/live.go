@@ -24,6 +24,13 @@ const diffReadTimeout = 2 * time.Second
 // clock does.
 type pollTickMsg struct{ now time.Time }
 
+// rosterReadMsg carries one finished roster read back to the update loop. The
+// read runs in a command, so the store never blocks the key handler.
+type rosterReadMsg struct {
+	vm  ViewModel
+	err error
+}
+
 // transcriptReadMsg carries one finished feed read back to the update loop. The
 // read runs in a command, so the store never blocks the key handler; the model
 // commits it here, where it is the only writer of the pane. feed names the reader,
@@ -49,6 +56,9 @@ type LiveModel struct {
 	// feed drives the transcript pane for the selected Worker. It is the pane's
 	// one owner: a nil feed renders the roster alone.
 	feed *TranscriptFeed
+	// rosterReading records a roster read in flight, so a tick starts no second
+	// one while a slow store still reads.
+	rosterReading bool
 	// reading records a feed read in flight, so a tick starts no second one.
 	reading bool
 	// ctx bounds the feed reads the poll commands run, so quitting the program
@@ -96,26 +106,11 @@ func (m *LiveModel) Init() tea.Cmd {
 func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
-		vm, err := m.Roster.Fetch(m.ctx, m.ExecutionID, msg.now)
-		m.lastErr = err
-		if err != nil {
-			// A silent poll failure is indistinguishable from an idle roster.
-			// Fetch returns a zero ViewModel on error, so hold the last good
-			// rows: one transient read must not blank the frame for a tick.
-			m.vm.Notice = err.Error()
-		} else {
-			// The roster refresh keeps the operator's pane and focus: they are
-			// not the roster's to reset. The feed read the tick starts owns the
-			// pane, and it detaches the pane and returns focus to the roster
-			// when the selected row disappears.
-			vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
-			vm.ActionNotice = m.vm.ActionNotice
-			m.vm = vm
-		}
-		// The feed read comes first in the batch, so a caller that drives the
-		// model by hand reaches it without waiting out the tick.
 		next := tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
-		return m, tea.Batch(m.readTranscript(), next)
+		return m, tea.Batch(m.readRoster(msg.now), next)
+	case rosterReadMsg:
+		m.applyRoster(msg)
+		return m, m.readTranscript()
 	case transcriptReadMsg:
 		m.applyTranscript(msg)
 	case tea.KeyPressMsg:
@@ -144,6 +139,41 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// readRoster returns the command that reads the roster state. The read runs in
+// the command, off the update goroutine, so a slow store cannot delay a key
+// press.
+func (m *LiveModel) readRoster(now time.Time) tea.Cmd {
+	if m.rosterReading {
+		return nil
+	}
+	m.rosterReading = true
+	roster, ctx, executionID := m.Roster, m.ctx, m.ExecutionID
+	return func() tea.Msg {
+		vm, err := roster.Fetch(ctx, executionID, now)
+		return rosterReadMsg{vm: vm, err: err}
+	}
+}
+
+// applyRoster commits a finished roster read and preserves pane-owned state. A
+// read failure holds the last good rows: one transient read must not blank the
+// frame for a tick.
+func (m *LiveModel) applyRoster(msg rosterReadMsg) {
+	m.rosterReading = false
+	m.lastErr = msg.err
+	if msg.err != nil {
+		// A silent poll failure is indistinguishable from an idle roster.
+		m.vm.Notice = msg.err.Error()
+		return
+	}
+	vm := msg.vm
+	// The roster refresh keeps the operator's pane and focus. The feed read owns
+	// the pane, and it detaches the pane when the selected row disappears.
+	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
+	vm.ActionNotice = m.vm.ActionNotice
+	vm.TranscriptNotice = m.vm.TranscriptNotice
+	m.vm = vm
 }
 
 // openSelectedDiff reads the selected Worker's stored Review diff and defers it
