@@ -212,7 +212,7 @@ func Render(vm ViewModel) string {
 	// it describes and a long pane cannot push the two apart.
 	if vm.TranscriptNotice != "" {
 		b.WriteString(vm.TranscriptNotice)
-  }
+	}
 	if vm.ActionNotice != "" {
 		b.WriteString(vm.ActionNotice)
 		b.WriteByte('\n')
