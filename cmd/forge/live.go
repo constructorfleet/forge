@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,7 +20,9 @@ func runLiveRoster(ctx context.Context, store tui.RosterStore, executionID strin
 	roster := tui.NewRoster(store, time.Now)
 	model := tui.NewLiveModel(roster, executionID, 0)
 	p := tea.NewProgram(model, tea.WithContext(ctx))
-	if _, err := p.Run(); err != nil {
+	// The caller cancels ctx to stop the observer once the run ends, so a
+	// cancellation is the normal exit, not a failure to report.
+	if _, err := p.Run(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("forge: run live roster: %w", err)
 	}
 	return nil

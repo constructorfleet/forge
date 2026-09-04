@@ -130,6 +130,10 @@ type ViewModel struct {
 	Selection int
 	Workers   []WorkerRow
 
+	// Notice explains an empty roster: the Execution does not exist yet, or a
+	// poll pass failed. An empty frame with no words reads as a broken TUI.
+	Notice string
+
 	// Transcript is the selected Worker's transcript pane. Nil renders the
 	// roster alone.
 	Transcript *TranscriptPane
@@ -166,13 +170,17 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	return keys
 }
 
-// Render draws the whole frame: one line per Worker, the transcript pane, a
-// detail strip for the focused pane's selection, and a footer of legal keys.
-// Pure and headless.
+// Render draws the whole frame: one line per Worker, a notice when the roster
+// is empty, the transcript pane, a detail strip for the focused pane's
+// selection, and a footer of legal keys. Pure and headless.
 func Render(vm ViewModel) string {
 	var b strings.Builder
 	for i, row := range vm.Workers {
 		b.WriteString(rowLine(row, i == vm.Selection))
+		b.WriteByte('\n')
+	}
+	if len(vm.Workers) == 0 && vm.Notice != "" {
+		b.WriteString(vm.Notice)
 		b.WriteByte('\n')
 	}
 	if vm.Transcript != nil {

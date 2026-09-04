@@ -167,6 +167,33 @@ func TestRosterFetchPropagatesStoreError(t *testing.T) {
 	}
 }
 
+// TestRosterFetchAwaitsMissingExecution proves the roster, which starts before
+// the Scheduler writes the Execution, reports a wait notice instead of an error.
+func TestRosterFetchAwaitsMissingExecution(t *testing.T) {
+	r := tui.NewRoster(&missingExecutionRosterStore{}, time.Now)
+
+	vm, err := r.Fetch(context.Background(), "ex-1", time.Now())
+	if err != nil {
+		t.Fatalf("Fetch: want nil error for a missing execution, got %v", err)
+	}
+	if len(vm.Workers) != 0 {
+		t.Fatalf("Fetch: want no rows, got %d", len(vm.Workers))
+	}
+	if vm.Notice == "" {
+		t.Fatal("Fetch: want a notice explaining the empty roster")
+	}
+}
+
+type missingExecutionRosterStore struct{}
+
+func (missingExecutionRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	return storage.ExecutionState{}, storage.ErrNotFound
+}
+
+func (missingExecutionRosterStore) WorkerClaim(_ context.Context, _, _ string) (storage.WorkerClaim, error) {
+	return storage.WorkerClaim{}, storage.ErrNotFound
+}
+
 type failingLoadRosterStore struct {
 	fake *fakeRosterStore
 }

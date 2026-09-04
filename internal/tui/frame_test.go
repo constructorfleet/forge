@@ -160,6 +160,20 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestRenderEmptyRoster(t *testing.T) {
+	// The first frame arrives before any row, so an empty roster must not panic.
+	if got, want := tui.Render(tui.ViewModel{}), "[q] quit\n"; got != want {
+		t.Fatalf("Render(empty) = %q, want %q", got, want)
+	}
+}
+
+func TestRenderEmptyRosterShowsNotice(t *testing.T) {
+	vm := tui.ViewModel{Notice: "waiting"}
+	if got, want := tui.Render(vm), "waiting\n[q] quit\n"; got != want {
+		t.Fatalf("Render(notice) = %q, want %q", got, want)
+	}
+}
+
 func TestRenderColorNeverLoadBearing(t *testing.T) {
 	// The frame must carry no ANSI colour so it works in a no-colour terminal.
 	vm := tui.ViewModel{

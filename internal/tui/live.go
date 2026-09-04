@@ -52,10 +52,18 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
 		vm, err := m.Roster.Fetch(context.Background(), m.ExecutionID, msg.now)
-		// A poll refreshes the roster only. Pane attachment and focus are the
-		// operator's, so a tick must never reset them.
-		vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
-		m.vm, m.lastErr = vm, err
+		m.lastErr = err
+		if err != nil {
+			// A silent poll failure is indistinguishable from an idle roster.
+			// Fetch returns a zero ViewModel on error, so hold the last good
+			// rows: one transient read must not blank the frame for a tick.
+			m.vm.Notice = err.Error()
+		} else {
+			// A poll refreshes the roster only. Pane attachment and focus are
+			// the operator's, so a tick must never reset them.
+			vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
+			m.vm = vm
+		}
 		return m, tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
 	case tea.KeyPressMsg:
 		key := uv.Key(msg.Key())
