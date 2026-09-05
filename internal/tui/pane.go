@@ -307,29 +307,59 @@ func (p *TranscriptPane) MoveSelection(n int) {
 	p.Select(target)
 }
 
+// pageSize returns one page of scrollback: the current window's event count,
+// or 1 while the window holds none.
+func (p *TranscriptPane) pageSize() int {
+	if n := len(p.view.Events); n > 0 {
+		return n
+	}
+	return 1
+}
+
+// PageUp moves the window one page towards the retained start and anchors
+// the selection to the window's own top entry, so an operator reaches
+// scrollback in a few key presses instead of one event at a time. An inert
+// request (already at the retained start) changes no state.
+func (p *TranscriptPane) PageUp() {
+	if p.requestScroll(p.pageSize()) {
+		p.Select(0)
+	}
+}
+
+// PageDown moves the window one page towards the tail and anchors the
+// selection to the window's own bottom entry. An inert request (already at
+// the tail) changes no state.
+func (p *TranscriptPane) PageDown() {
+	if p.requestScroll(-p.pageSize()) {
+		p.Select(p.eventEdge())
+	}
+}
+
 // requestScroll asks for n events of scrollback (negative n moves towards the
-// tail) and records the move for the window that answers. A request the window
-// cannot serve is dropped, so an inert key press never pins the selection. Both
-// edges guard: no scroller, no newer events at the tail, no older events at the
-// retained start. The tailer clamps such a scroll to a no-op, so without the
-// guard the pane would leave tail-following on a key press that moves nothing.
-func (p *TranscriptPane) requestScroll(n int) {
+// tail) and records the move for the window that answers, reporting whether it
+// asked. A request the window cannot serve is dropped, so an inert key press
+// never pins the selection. Both edges guard: no scroller, no newer events at
+// the tail, no older events at the retained start. The tailer clamps such a
+// scroll to a no-op, so without the guard the pane would leave tail-following
+// on a key press that moves nothing.
+func (p *TranscriptPane) requestScroll(n int) bool {
 	if p.scroller == nil || n == 0 {
-		return
+		return false
 	}
 	if n < 0 {
 		if p.view.AtTail {
-			return
+			return false
 		}
 		p.scroller.ScrollDown(-n)
 	} else {
 		if p.view.AtStart {
-			return
+			return false
 		}
 		p.scroller.ScrollUp(n)
 	}
 	p.pendingMove = -n
 	p.pinned = true
+	return true
 }
 
 // ToggleExpand expands the selected tool call, or collapses it when it is
@@ -455,6 +485,9 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 	}
 	if len(p.entries) > 1 || !p.view.AtTail {
 		keys = append(keys, KeyBinding{Key: "k", Label: "up"}, KeyBinding{Key: "j", Label: "down"})
+	}
+	if p.scroller != nil && (!p.view.AtStart || !p.view.AtTail) {
+		keys = append(keys, KeyBinding{Key: "pgup", Label: "page up"}, KeyBinding{Key: "pgdown", Label: "page down"})
 	}
 	if p.scroller != nil && !p.tailRequested && (!p.view.AtTail || p.pinned) {
 		keys = append(keys, KeyBinding{Key: "G", Label: "follow tail"})
