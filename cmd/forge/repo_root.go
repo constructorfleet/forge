@@ -28,3 +28,11 @@ func discoverRepoRoot() (string, error) {
 	}
 	return root, nil
 }
+
+func discoverRepoRootOrCWD() (string, error) {
+	repoRoot, err := discoverRepoRoot()
+	if err == nil {
+		return repoRoot, nil
+	}
+	return os.Getwd()
+}

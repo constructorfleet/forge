@@ -16,14 +16,19 @@ import (
 )
 
 // FileArtifactLoader reads and writes a Feature's Planning Artifacts under
-// .forge/features/<feature-id>, relative to the process's current working
-// directory. It carries no state: every method takes the Feature ID it
-// operates on.
-type FileArtifactLoader struct{}
+// .forge/features/<feature-id>, relative to RepoRoot. An empty RepoRoot uses
+// the process's current directory.
+type FileArtifactLoader struct {
+	RepoRoot string
+}
+
+func (f *FileArtifactLoader) featureDir(featureID string) string {
+	return filepath.Join(f.RepoRoot, ".forge", "features", featureID)
+}
 
 // LoadGoal reads and parses the Feature's goal Artifact.
 func (f *FileArtifactLoader) LoadGoal(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "goal.md")
+	path := filepath.Join(f.featureDir(featureID), "goal.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -34,7 +39,7 @@ func (f *FileArtifactLoader) LoadGoal(ctx context.Context, featureID string) (*p
 // SaveGoal renders and writes the Feature's goal Artifact, creating the
 // Feature's directory on first use.
 func (f *FileArtifactLoader) SaveGoal(ctx context.Context, featureID string, goal *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
+	dir := f.featureDir(featureID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -47,7 +52,7 @@ func (f *FileArtifactLoader) SaveGoal(ctx context.Context, featureID string, goa
 // Feature, keyed by decision ID (the NNN-slug filename stem). A Feature with
 // no decisions directory yet returns an empty map, not an error.
 func (f *FileArtifactLoader) LoadDecisions(ctx context.Context, featureID string) (map[string]*planning.Artifact, error) {
-	dir := filepath.Join(".forge", "features", featureID, "decisions")
+	dir := filepath.Join(f.featureDir(featureID), "decisions")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -80,7 +85,7 @@ func (f *FileArtifactLoader) LoadDecisions(ctx context.Context, featureID string
 // .forge/features/<feature>/decisions/<id>.md, creating the directory on
 // the Feature's first Decision.
 func (f *FileArtifactLoader) SaveDecision(ctx context.Context, featureID, decisionID string, decision *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID, "decisions")
+	dir := filepath.Join(f.featureDir(featureID), "decisions")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -89,7 +94,7 @@ func (f *FileArtifactLoader) SaveDecision(ctx context.Context, featureID, decisi
 
 // SaveSpec renders and writes the Feature's spec Artifact.
 func (f *FileArtifactLoader) SaveSpec(ctx context.Context, featureID string, spec *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
+	dir := f.featureDir(featureID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -101,7 +106,7 @@ func (f *FileArtifactLoader) SaveSpec(ctx context.Context, featureID string, spe
 // LoadSpec reads and parses the Feature's spec Artifact. A Feature with no
 // spec yet returns a nil Artifact, not an error.
 func (f *FileArtifactLoader) LoadSpec(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "spec.md")
+	path := filepath.Join(f.featureDir(featureID), "spec.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -115,7 +120,7 @@ func (f *FileArtifactLoader) LoadSpec(ctx context.Context, featureID string) (*p
 // LoadTicketPlan reads and parses the Feature's ticket-plan Artifact. A
 // Feature with no ticket plan yet returns a nil Artifact, not an error.
 func (f *FileArtifactLoader) LoadTicketPlan(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "ticket-plan.md")
+	path := filepath.Join(f.featureDir(featureID), "ticket-plan.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -128,7 +133,7 @@ func (f *FileArtifactLoader) LoadTicketPlan(ctx context.Context, featureID strin
 
 // SaveTicketPlan renders and writes the Feature's ticket-plan Artifact.
 func (f *FileArtifactLoader) SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
+	dir := f.featureDir(featureID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

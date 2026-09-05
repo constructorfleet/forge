@@ -78,7 +78,7 @@ func runPlan(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	loader := &fileArtifactLoader{}
+	loader := &fileArtifactLoader{RepoRoot: repoRoot}
 
 	goalArtifact, err := loader.LoadGoal(ctx, featureID)
 	if err != nil {

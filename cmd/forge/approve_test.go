@@ -128,6 +128,40 @@ func TestApprove_DispatchesSpecAndTicketsIndependently(t *testing.T) {
 	}
 }
 
+func TestApproveSpec_FromSubdirectoryApprovesRepoRootSpec(t *testing.T) {
+	bin := buildBinary(t)
+	dir := initGitFixture(t)
+	featureID := "widget"
+	sub := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	specArtifact := &planning.Artifact{
+		Kind: planning.KindSpec,
+		Sections: []planning.Section{
+			{Heading: "Requirements", Body: "REQ-001: do the thing\n"},
+		},
+	}
+	specArtifact.Revision = planning.ComputeRevision(specArtifact)
+	writeSpecFixture(t, dir, featureID, specArtifact)
+
+	cmd := exec.Command(bin, "approve", featureID, "spec")
+	cmd.Dir = sub
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("forge approve %s spec failed: %v\n%s", featureID, err, out)
+	}
+
+	approvedSpec := readSpecFixture(t, dir, featureID)
+	if !planning.Approved(approvedSpec) {
+		t.Fatalf("expected spec to be Approved()")
+	}
+	if _, err := os.Stat(filepath.Join(sub, ".forge", "features", featureID)); !os.IsNotExist(err) {
+		t.Fatalf("artifact directory under cwd exists or failed unexpectedly: %v", err)
+	}
+}
+
 func writeSpecFixture(t *testing.T, dir, featureID string, a *planning.Artifact) {
 	t.Helper()
 	featureDir := filepath.Join(dir, ".forge", "features", featureID)

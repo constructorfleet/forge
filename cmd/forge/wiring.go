@@ -259,7 +259,7 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// trigger as a created/reopened Decision under
 	// .forge/features/<id>/decisions/.
 	eng.PlanningLease = planengine.New(store)
-	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{}}
+	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{RepoRoot: repoRoot}}
 	if cfg.PullRequests.WatchCI {
 		// The CI Supervisor's checks/merge-requirements seam is CI-domain
 		// work, composed independently of Tracker/SCM per cfg.CI.Type — see

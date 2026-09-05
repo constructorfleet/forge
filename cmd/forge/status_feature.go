@@ -20,8 +20,8 @@ import (
 // directory on disk (.forge/features/<id>), the signal `forge status` uses
 // to route to the feature-scoped report instead of treating id as an
 // Execution ID.
-func isFeatureID(id string) bool {
-	info, err := os.Stat(filepath.Join(".forge", "features", id))
+func isFeatureID(id, repoRoot string) bool {
+	info, err := os.Stat(filepath.Join(repoRoot, ".forge", "features", id))
 	return err == nil && info.IsDir()
 }
 
@@ -69,8 +69,8 @@ type FeatureStatusReport struct {
 
 // loadFeatureStatus computes a FeatureStatusReport for featureID from its
 // Planning Artifacts on disk and its Planning Executions in store.
-func loadFeatureStatus(ctx context.Context, store storage.Store, featureID string) (FeatureStatusReport, error) {
-	loader := &fileArtifactLoader{}
+func loadFeatureStatus(ctx context.Context, store storage.Store, featureID, repoRoot string) (FeatureStatusReport, error) {
+	loader := &fileArtifactLoader{RepoRoot: repoRoot}
 
 	goal, err := loader.LoadGoal(ctx, featureID)
 	if err != nil && !os.IsNotExist(err) {
@@ -243,7 +243,7 @@ func nextAction(r FeatureStatusReport, goal *planning.Artifact) string {
 }
 
 // runFeatureStatus implements `forge status <feature-id>`.
-func runFeatureStatus(featureID, dbPath string) int {
+func runFeatureStatus(featureID, dbPath, repoRoot string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -254,7 +254,7 @@ func runFeatureStatus(featureID, dbPath string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	report, err := loadFeatureStatus(ctx, store, featureID)
+	report, err := loadFeatureStatus(ctx, store, featureID, repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
 		return 1

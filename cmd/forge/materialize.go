@@ -66,7 +66,7 @@ func runMaterialize(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	loader := &fileArtifactLoader{}
+	loader := &fileArtifactLoader{RepoRoot: repoRoot}
 
 	specArtifact, err := loader.LoadSpec(ctx, featureID)
 	if err != nil {

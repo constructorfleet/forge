@@ -99,7 +99,7 @@ func runWatch(args []string) int {
 
 	ctx := context.Background()
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRootOrCWD()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
@@ -161,7 +161,7 @@ func runWatch(args []string) int {
 
 	answerer := resolveAnswerer(ctx, cfg, repoRoot)
 	if !target.isCoding {
-		if err := runPlanningRoster(ctx, store, target.id, answerer); err != nil {
+		if err := runPlanningRoster(ctx, store, target.id, answerer, repoRoot); err != nil {
 			fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 			return 1
 		}

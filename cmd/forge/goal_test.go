@@ -99,6 +99,28 @@ func TestRunGoalInit_CreatesValidSkeleton(t *testing.T) {
 	}
 }
 
+func TestRunGoalInit_FromSubdirectoryWritesRepoRootGoal(t *testing.T) {
+	repoRoot := initGitFixture(t)
+	sub := filepath.Join(repoRoot, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	chdirTemp(t, sub)
+
+	if code := runGoalInit([]string{"init", "foo"}); code != 0 {
+		t.Fatalf("runGoalInit = %d, want 0", code)
+	}
+
+	rootPath := filepath.Join(repoRoot, ".forge", "features", "foo", "goal.md")
+	if _, err := os.Stat(rootPath); err != nil {
+		t.Fatalf("expected goal.md under repo root: %v", err)
+	}
+	cwdPath := filepath.Join(sub, ".forge", "features", "foo", "goal.md")
+	if _, err := os.Stat(cwdPath); !os.IsNotExist(err) {
+		t.Fatalf("goal.md under cwd exists or failed unexpectedly: %v", err)
+	}
+}
+
 // TestRunGoalInit_NoClobber confirms that re-running without --force exits
 // non-zero and leaves the existing file byte-identical.
 func TestRunGoalInit_NoClobber(t *testing.T) {
