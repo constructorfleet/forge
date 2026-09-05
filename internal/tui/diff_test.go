@@ -240,6 +240,51 @@ func TestLiveModelActionNoticeSurvivesAPollTick(t *testing.T) {
 	}
 }
 
+// TestLiveModelKeyPressServedDuringASlowDiffRead proves the diff key's store
+// read runs off the update goroutine: pressing "d" returns a command at once,
+// and a key press still resolves while that command's read is still blocked
+// on the store, instead of freezing the frame until a large diff blob loads.
+func TestLiveModelKeyPressServedDuringASlowDiffRead(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	m := diffFixture(t, now)
+	nextPollTick(t, m)
+
+	release := make(chan struct{})
+	store := m.Roster.Store.(*fakeRosterStore)
+	store.blockDiff = release
+
+	done := make(chan tea.Cmd, 1)
+	go func() {
+		_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))
+		done <- cmd
+	}()
+
+	var cmd tea.Cmd
+	select {
+	case cmd = <-done:
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		t.Fatal("the diff key blocked on the store read")
+	}
+	if cmd == nil {
+		close(release)
+		t.Fatal("the diff key returned no command, want the read command")
+	}
+
+	read := make(chan tea.Msg, 1)
+	go func() { read <- cmd() }()
+
+	_, quit := m.Update(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
+	assertQuitCmd(t, quit)
+
+	close(release)
+	select {
+	case <-read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the diff read never returned")
+	}
+}
+
 // TestLiveModelQuitRemovesTheDiffArtifacts proves the temp diff files do not
 // outlive the session: a pager killed before its callback runs leaves a file,
 // so quit removes the whole session directory.
