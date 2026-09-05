@@ -28,7 +28,7 @@ func runResume(args []string) int {
 	}
 	executionID := fs.Arg(0)
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
 		return 1
@@ -37,7 +37,9 @@ func runResume(args []string) int {
 		fmt.Fprintln(os.Stderr, msg)
 	}
 
-	cfg, err := loadConfig(*configPath)
+	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
 		return 1
@@ -51,7 +53,7 @@ func runResume(args []string) int {
 		return 1
 	}
 
-	store, err := openStore(ctx, *dbPath)
+	store, err := openStore(ctx, resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
 		return 1

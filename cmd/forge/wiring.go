@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -46,14 +47,45 @@ import (
 )
 
 // defaultConfigPath is where `forge execute`/`forge status` look for
-// .forge.yaml, relative to the current working directory. Its absence is
-// not an error: loadConfig falls back to config.Default().
+// .forge.yaml, relative to the discovered repo root (see
+// resolveConfigDBPaths). Its absence is not an error: loadConfig falls back
+// to config.Default().
 const defaultConfigPath = ".forge.yaml"
 
 // defaultDBPath is where the SQLite Store lives, under the same .forge/
 // directory the Workspace manager uses for worktrees (see IDEATION.md
-// "Workspace manager").
+// "Workspace manager"), relative to the discovered repo root (see
+// resolveConfigDBPaths).
 const defaultDBPath = ".forge/forge.db"
+
+// resolveConfigDBPaths resolves a command's --config/--db flags for use
+// against repoRoot rather than the process's own working directory (issue
+// #576, applying the same fix issue #459 made for `forge retry`). An
+// explicit --config/--db override is used exactly as typed (so it stays
+// relative to the process's working directory, matching the flag's
+// documented behavior); an unset flag instead resolves its default
+// (defaultConfigPath/defaultDBPath) against repoRoot, so a run from a
+// subdirectory of a Forge repo checkout finds the real .forge.yaml/
+// forge.db rather than a fresh, empty one under the subdirectory.
+func resolveConfigDBPaths(fs *flag.FlagSet, repoRoot, configPath, dbPath string) (resolvedConfigPath, resolvedDBPath string) {
+	explicitConfig, explicitDB := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "config":
+			explicitConfig = true
+		case "db":
+			explicitDB = true
+		}
+	})
+	resolvedConfigPath, resolvedDBPath = configPath, dbPath
+	if !explicitConfig {
+		resolvedConfigPath = filepath.Join(repoRoot, defaultConfigPath)
+	}
+	if !explicitDB {
+		resolvedDBPath = filepath.Join(repoRoot, defaultDBPath)
+	}
+	return resolvedConfigPath, resolvedDBPath
+}
 
 // loadConfig loads .forge.yaml from the current working directory, falling
 // back to config.Default() when the file does not exist (the zero-config
@@ -331,17 +363,20 @@ func absoluteAgainst(base, path string) string {
 // whole watch or execute run over a control that a Failed Worker may never
 // need.
 //
-// configPath and dbPath are absolutized against the process's own working
-// directory, exactly how runExecute/runWatch already load them (loadConfig/
-// openStore take *configPath/*dbPath as typed, relative to os.Getwd(), never
-// to the git top level). Resolving them against the discovered repo root
-// instead — as an earlier version of this function did — pointed the retry
-// child at a different config and, critically, a different database than
-// the one the running Execution actually uses whenever the process runs
-// from a subdirectory of the repo, reintroducing the #459 bug class this
-// same issue guards against. The child's own working directory is still the
-// discovered git top level (#459 again, for the child's own relative-path
-// resolution), independent of where its --config/--db flags point.
+// configPath and dbPath must already be resolved exactly the way the caller
+// itself loaded them: runExecute passes resolveConfigDBPaths' result (an
+// explicit override as typed, an unset flag's default joined onto the
+// discovered repo root), runWatch still passes its flags as typed relative
+// to os.Getwd(). Either way, absoluteAgainst below only needs to make a
+// relative path absolute against the process's own working directory (a
+// no-op for the already-absolute repo-root-joined case); resolving a
+// relative path against the discovered repo root instead — as an earlier
+// version of this function did — pointed the retry child at a different
+// config and, critically, a different database than the one the caller
+// actually loaded, reintroducing the #459 bug class this same issue guards
+// against. The child's own working directory is still the discovered git
+// top level (#459 again, for the child's own relative-path resolution),
+// independent of where its --config/--db flags point.
 func resolveRetrier(configPath, dbPath string) tui.Retrier {
 	cwd, err := os.Getwd()
 	if err != nil {

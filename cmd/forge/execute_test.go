@@ -120,3 +120,15 @@ func TestBuildExecuteRuntimeWiresProviderLimitController(t *testing.T) {
 		t.Fatal("LostExecutionController should stay nil for the local backend")
 	}
 }
+
+// TestRunExecute_FailsLoudlyOutsideGitRepo covers issue #576: `forge
+// execute` must discover the repo root via git (as `forge retry` already
+// does for issue #459) instead of silently treating an arbitrary cwd as
+// the repo root.
+func TestRunExecute_FailsLoudlyOutsideGitRepo(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	if code := runExecute([]string{"1"}); code != 1 {
+		t.Fatalf("runExecute outside a git repo = %d, want 1", code)
+	}
+}

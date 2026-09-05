@@ -47,13 +47,17 @@ func runMaterialize(args []string) int {
 	}
 	featureID := fs.Arg(0)
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge materialize: %v\n", err)
 		return 1
 	}
+	// forge materialize has no --db flag (it never opens the state
+	// database), so only --config needs the same explicit-override-vs-
+	// repo-root-relative-default resolution issue #576 applies elsewhere.
+	resolvedConfigPath, _ := resolveConfigDBPaths(fs, repoRoot, *configPath, defaultDBPath)
 
-	cfg, err := loadConfig(*configPath)
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge materialize: %v\n", err)
 		return 1

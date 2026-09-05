@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -1157,4 +1158,63 @@ func TestLostRecoveryEnabled(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveConfigDBPaths_DefaultsJoinRepoRootExplicitStaysAsTyped covers
+// issue #576: an unset --config/--db flag must resolve its default against
+// repoRoot (not the process's cwd), while an explicit override is used
+// exactly as typed, mirroring retry.go's #459 fix.
+func TestResolveConfigDBPaths_DefaultsJoinRepoRootExplicitStaysAsTyped(t *testing.T) {
+	repoRoot := string(filepath.Separator) + filepath.Join("repo", "root")
+
+	t.Run("both unset resolve against repoRoot", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		configPath := fs.String("config", defaultConfigPath, "")
+		dbPath := fs.String("db", defaultDBPath, "")
+		if err := fs.Parse(nil); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+
+		gotConfig, gotDB := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+		if want := filepath.Join(repoRoot, defaultConfigPath); gotConfig != want {
+			t.Errorf("resolvedConfigPath = %q, want %q", gotConfig, want)
+		}
+		if want := filepath.Join(repoRoot, defaultDBPath); gotDB != want {
+			t.Errorf("resolvedDBPath = %q, want %q", gotDB, want)
+		}
+	})
+
+	t.Run("explicit config and db are used as typed", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		configPath := fs.String("config", defaultConfigPath, "")
+		dbPath := fs.String("db", defaultDBPath, "")
+		if err := fs.Parse([]string{"--config", "custom.yaml", "--db", "custom.db"}); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+
+		gotConfig, gotDB := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+		if gotConfig != "custom.yaml" {
+			t.Errorf("resolvedConfigPath = %q, want %q (typed, not joined onto repoRoot)", gotConfig, "custom.yaml")
+		}
+		if gotDB != "custom.db" {
+			t.Errorf("resolvedDBPath = %q, want %q (typed, not joined onto repoRoot)", gotDB, "custom.db")
+		}
+	})
+
+	t.Run("only config explicit leaves db defaulted against repoRoot", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		configPath := fs.String("config", defaultConfigPath, "")
+		dbPath := fs.String("db", defaultDBPath, "")
+		if err := fs.Parse([]string{"--config", "custom.yaml"}); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+
+		gotConfig, gotDB := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+		if gotConfig != "custom.yaml" {
+			t.Errorf("resolvedConfigPath = %q, want %q", gotConfig, "custom.yaml")
+		}
+		if want := filepath.Join(repoRoot, defaultDBPath); gotDB != want {
+			t.Errorf("resolvedDBPath = %q, want %q", gotDB, want)
+		}
+	})
 }

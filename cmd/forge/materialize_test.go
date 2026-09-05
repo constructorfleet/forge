@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -130,5 +132,88 @@ func TestMaterialize_ApprovedPlan_ReachesTrackerStage(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "origin") {
 		t.Errorf("expected failure to be about the missing 'origin' remote, got: %s", out)
+	}
+}
+
+// TestMaterialize_FailsLoudlyOutsideGitRepo covers issue #576: `forge
+// materialize` must discover the repo root via git (as `forge retry`
+// already does for issue #459) instead of silently treating an arbitrary
+// cwd as the repo root.
+func TestMaterialize_FailsLoudlyOutsideGitRepo(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+
+	cmd := exec.Command(bin, "materialize", "widget")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected an error outside a git repository, got success: %s", out)
+	}
+	if !strings.Contains(string(out), "not inside a git repository") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
+// TestMaterialize_ResolvesConfigFromSubdirectory covers issue #576: running
+// `forge materialize` from a subdirectory must use the repo root's
+// .forge.yaml, not silently fall back to config.Default() the way a
+// cwd-relative --config default would from any directory but the repo
+// root. The fixture's .forge.yaml selects the GitLab tracker, so a repo-
+// root-resolved config fails on the GitLab-specific missing-token check;
+// falling back to config.Default()'s GitHub tracker would instead fail on
+// the missing 'origin' remote (as TestMaterialize_ApprovedPlan_
+// ReachesTrackerStage's repo-root run does).
+func TestMaterialize_ResolvesConfigFromSubdirectory(t *testing.T) {
+	t.Setenv("GITLAB_TOKEN", "")
+
+	bin := buildBinary(t)
+	dir := initGitFixture(t)
+	featureID := "widget"
+
+	if err := os.WriteFile(filepath.Join(dir, ".forge.yaml"), []byte("version: 1\ntracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// The Planning Artifact loader resolves .forge/features/<feature-id>
+	// relative to the process's cwd (a separate, pre-existing gap from
+	// this issue's --config/--db scope — see the FAILED->follow-ups note),
+	// so the fixtures live under sub, not dir, to isolate this test to only
+	// the --config resolution issue #576 actually fixes here.
+	sub := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	specArtifact := &planning.Artifact{
+		Kind: planning.KindSpec,
+		Sections: []planning.Section{
+			{Heading: "Requirements", Body: "REQ-001: do the thing\n"},
+		},
+	}
+	specArtifact.Revision = planning.ComputeRevision(specArtifact)
+	specArtifact.ApprovedRevision = specArtifact.Revision
+	writeSpecFixture(t, sub, featureID, specArtifact)
+
+	tpArtifact := &planning.Artifact{
+		Kind: planning.KindTicketPlan,
+		DerivedFrom: []planning.DerivedFromEntry{
+			{Kind: planning.KindSpec, ID: "spec", Revision: "spec-rev"},
+		},
+		Sections: []planning.Section{
+			{Heading: "Ticket: TKT-001", Body: "### Objective\nDo the thing.\n### Requirements\nREQ-001\n### Acceptance Criteria\n- done\n"},
+		},
+	}
+	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
+	tpArtifact.ApprovedRevision = tpArtifact.Revision
+	writeTicketPlanFixture(t, sub, featureID, tpArtifact)
+
+	cmd := exec.Command(bin, "materialize", featureID)
+	cmd.Dir = sub
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected an error (missing GITLAB_TOKEN), got success: %s", out)
+	}
+	if !strings.Contains(string(out), "GITLAB_TOKEN") {
+		t.Errorf("expected failure to be about the missing GitLab token (proving the repo root's .forge.yaml was loaded), got: %s", out)
 	}
 }

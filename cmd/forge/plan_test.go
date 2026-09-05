@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,7 +106,7 @@ func TestBuildSpecEngine_CompilesFullRepositoryContext(t *testing.T) {
 // exit (not an error) when a Feature has no goal.md yet, rather than
 // treating the missing file as a failure.
 func TestRunPlan_NoGoal_StopsCleanly(t *testing.T) {
-	dir := t.TempDir()
+	dir, _ := newTempRepo(t)
 	chdirTemp(t, dir)
 
 	if code := runPlan([]string{"widget"}); code != 0 {
@@ -488,5 +489,65 @@ func TestRunPlan_PausedPlanningExecution_StopsAtNeedsHumanGate(t *testing.T) {
 	}
 	if reloaded.Status != domain.PlanningStatusNeedsHuman {
 		t.Errorf("planning execution status = %s, want NEEDS_HUMAN (untouched)", reloaded.Status)
+	}
+}
+
+// TestRunPlan_FailsLoudlyOutsideGitRepo covers issue #576: `forge plan` must
+// discover the repo root via git (as `forge retry` already does for issue
+// #459) instead of silently treating an arbitrary cwd as the repo root.
+func TestRunPlan_FailsLoudlyOutsideGitRepo(t *testing.T) {
+	bin := buildBinary(t)
+	dir := t.TempDir()
+
+	cmd := exec.Command(bin, "plan", "widget")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected an error outside a git repository, got success: %s", out)
+	}
+	if !strings.Contains(string(out), "not inside a git repository") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
+// TestRunPlan_ResolvesConfigFromSubdirectory covers issue #576: running
+// `forge plan` from a subdirectory must use the repo root's .forge.yaml,
+// not silently fall back to config.Default() the way a cwd-relative
+// --config default would from any directory but the repo root. The
+// fixture's .forge.yaml selects the GitLab tracker, so a repo-root-resolved
+// config fails on the GitLab-specific missing-token check during
+// wayfinding; falling back to config.Default()'s GitHub tracker would
+// instead fail on the missing 'origin' remote.
+//
+// The goal.md fixture lives under sub, not repoRoot, because the Planning
+// Artifact loader resolves .forge/features/<feature-id> relative to the
+// process's cwd — a separate, pre-existing gap outside this issue's
+// --config/--db scope — so this isolates the test to only the --config
+// resolution behavior issue #576 fixes here.
+func TestRunPlan_ResolvesConfigFromSubdirectory(t *testing.T) {
+	bin := buildBinary(t)
+	repoRoot := planFixtureRepo(t)
+	// planFixtureRepo's own .forge.yaml selects git.base: main; overwrite it
+	// with a GitLab tracker instead so a repo-root-resolved config reaches a
+	// distinguishable, token-shaped failure.
+	if err := os.WriteFile(filepath.Join(repoRoot, ".forge.yaml"), []byte("version: 1\ngit:\n  base: main\ntracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	sub := filepath.Join(repoRoot, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	writeGoalFixture(t, sub, "widget")
+
+	cmd := exec.Command(bin, "plan", "widget")
+	cmd.Dir = sub
+	cmd.Env = append(os.Environ(), "GITLAB_TOKEN=")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected an error (missing GITLAB_TOKEN), got success: %s", out)
+	}
+	if !strings.Contains(string(out), "GITLAB_TOKEN") {
+		t.Errorf("expected failure to be about the missing GitLab token (proving the repo root's .forge.yaml was loaded), got: %s", out)
 	}
 }

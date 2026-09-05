@@ -52,7 +52,7 @@ func runExecute(args []string) int {
 	}
 	issueIDs := fs.Args()
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
@@ -61,7 +61,9 @@ func runExecute(args []string) int {
 		fmt.Fprintln(os.Stderr, msg)
 	}
 
-	cfg, err := loadConfig(*configPath)
+	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
@@ -75,7 +77,7 @@ func runExecute(args []string) int {
 		return 1
 	}
 
-	store, err := openStore(ctx, *dbPath)
+	store, err := openStore(ctx, resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge execute: %v\n", err)
 		return 1
@@ -114,7 +116,7 @@ func runExecute(args []string) int {
 		// controls: it satisfies both narrow seams. The retry control uses a
 		// separate detached forge child.
 		operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
-		retrier := resolveRetrier(*configPath, *dbPath)
+		retrier := resolveRetrier(resolvedConfigPath, resolvedDBPath)
 		answerer := resolveAnswerer(ctx, cfg, repoRoot)
 		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, operationalEngine, retrier, operationalEngine, answerer)
 	}

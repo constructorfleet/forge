@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
@@ -40,27 +39,7 @@ func runRetry(args []string) int {
 		fmt.Fprintln(os.Stderr, msg)
 	}
 
-	// --config/--db default to cwd-relative paths (defaultConfigPath,
-	// defaultDBPath); an explicit override is used as typed, but the
-	// unmodified default is instead resolved against the discovered repo
-	// root, so a subdirectory run finds the real .forge.yaml/forge.db
-	// rather than a fresh, empty one under the subdirectory.
-	explicitConfig, explicitDB := false, false
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "config":
-			explicitConfig = true
-		case "db":
-			explicitDB = true
-		}
-	})
-	resolvedConfigPath, resolvedDBPath := *configPath, *dbPath
-	if !explicitConfig {
-		resolvedConfigPath = filepath.Join(repoRoot, defaultConfigPath)
-	}
-	if !explicitDB {
-		resolvedDBPath = filepath.Join(repoRoot, defaultDBPath)
-	}
+	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
 
 	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {

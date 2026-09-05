@@ -23,12 +23,13 @@ func runCancel(args []string) int {
 		return 2
 	}
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge cancel: %v\n", err)
 		return 1
 	}
-	cfg, err := loadConfig(*configPath)
+	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge cancel: %v\n", err)
 		return 1
@@ -37,7 +38,7 @@ func runCancel(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	store, err := openStore(ctx, *dbPath)
+	store, err := openStore(ctx, resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge cancel: %v\n", err)
 		return 1
