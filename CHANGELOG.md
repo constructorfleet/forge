@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.2](https://github.com/constructorfleet/forge/compare/forge-v0.44.1...forge-v0.44.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* forge resume uses any execution error as a signal to retry as a planning resume ([#648](https://github.com/constructorfleet/forge/issues/648)) ([56b72e7](https://github.com/constructorfleet/forge/commit/56b72e7f3cb3a810e2def63721611ef60fb14132)), closes [#472](https://github.com/constructorfleet/forge/issues/472)
+
 ## [0.44.1](https://github.com/constructorfleet/forge/compare/forge-v0.44.0...forge-v0.44.1) (2026-09-05)
 
 
