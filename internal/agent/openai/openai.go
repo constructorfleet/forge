@@ -103,7 +103,7 @@ func timedOutResult(backendName string, reqCtx context.Context, d time.Duration)
 	if !errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
 		return agent.AgentResult{}, false
 	}
-	return failedResult(fmt.Sprintf("%s adapter: agent timed out after %s", backendName, d), ""), true
+	return failedResult(fmt.Sprintf("%s adapter: agent timed out after %s (bounds the whole request, not an idle period)", backendName, d), ""), true
 }
 
 // buildResult resolves backendName's extracted response text into an

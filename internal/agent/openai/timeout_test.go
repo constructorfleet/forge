@@ -42,6 +42,13 @@ func TestResponsesAdapter_TimeoutBoundsStalledRequest(t *testing.T) {
 	if !strings.Contains(res.Summary, "timed out") {
 		t.Fatalf("Summary = %q, want it to report a timeout", res.Summary)
 	}
+	// agent.timeout is an idle bound for the CLI providers but a whole-request
+	// bound here (issue 468) — the message must say so, since an operator
+	// moving from a CLI provider with an unchanged config otherwise has no
+	// signal that the same value now behaves differently.
+	if !strings.Contains(res.Summary, "whole request") {
+		t.Fatalf("Summary = %q, want it to clarify this bounds the whole request, not an idle period", res.Summary)
+	}
 }
 
 func TestChatCompletionsAdapter_TimeoutBoundsStalledRequest(t *testing.T) {
@@ -57,6 +64,9 @@ func TestChatCompletionsAdapter_TimeoutBoundsStalledRequest(t *testing.T) {
 	}
 	if !strings.Contains(res.Summary, "timed out") {
 		t.Fatalf("Summary = %q, want it to report a timeout", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "whole request") {
+		t.Fatalf("Summary = %q, want it to clarify this bounds the whole request, not an idle period", res.Summary)
 	}
 }
 
