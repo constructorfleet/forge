@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.49.0](https://github.com/constructorfleet/forge/compare/forge-v0.48.2...forge-v0.49.0) (2026-09-05)
+
+
+### Features
+
+* A local wedged Execution still has no heartbeat to distinguish working from wedged ([#679](https://github.com/constructorfleet/forge/issues/679)) ([0ffad8e](https://github.com/constructorfleet/forge/commit/0ffad8ed75950857c4c2890dcc0bcc94f8cc12f6)), closes [#463](https://github.com/constructorfleet/forge/issues/463)
+* Decide whether the engine's belt-and-braces deadline should also bound the quality-gate phase ([#686](https://github.com/constructorfleet/forge/issues/686)) ([a272955](https://github.com/constructorfleet/forge/commit/a272955992ffe5274b9db37906d94dc32646b871)), closes [#669](https://github.com/constructorfleet/forge/issues/669)
+
+
+### Bug Fixes
+
+* CancelExecution and RetryIssue do not serialize against each other ([#685](https://github.com/constructorfleet/forge/issues/685)) ([69a8808](https://github.com/constructorfleet/forge/commit/69a88086e9d65edff4a470c3a23d0bbbc3c87529)), closes [#552](https://github.com/constructorfleet/forge/issues/552)
+* CancelExecution takes no lock and serializes with retry only by chance ([#690](https://github.com/constructorfleet/forge/issues/690)) ([36b6a85](https://github.com/constructorfleet/forge/commit/36b6a859725af3ad5ee0ccd08f910ae32abc5c9f)), closes [#554](https://github.com/constructorfleet/forge/issues/554)
+
 ## [0.48.2](https://github.com/constructorfleet/forge/compare/forge-v0.48.1...forge-v0.48.2) (2026-09-05)
 
 
