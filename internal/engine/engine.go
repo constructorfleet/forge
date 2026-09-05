@@ -1938,13 +1938,21 @@ func (e *Engine) failOut(ctx context.Context, executionID, issueID string, env e
 		}
 	}
 
+	// writeCtx detaches the terminal write from ctx's cancellation.
+	// Without this, database/sql rejects the transition and claim-release
+	// writes once ctx is cancelled, and the Issue stays stuck mid-flight
+	// with its claim held. The timeout keeps a wedged database from
+	// hanging exit.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelWrite()
+
 	target := domain.StateFailed
 	if cancelled {
 		target = domain.StateCancelled
 	}
-	if _, err := e.transition(ctx, executionID, issueID, target); err != nil {
+	if _, err := e.transition(writeCtx, executionID, issueID, target); err != nil {
 		if target != domain.StateCancelled {
-			if _, err := e.transition(ctx, executionID, issueID, domain.StateCancelled); err != nil {
+			if _, err := e.transition(writeCtx, executionID, issueID, domain.StateCancelled); err != nil {
 				errs = append(errs, fmt.Errorf("engine: drive issue %s to a terminal state: %w", issueID, err))
 			}
 		} else {
@@ -1952,7 +1960,11 @@ func (e *Engine) failOut(ctx context.Context, executionID, issueID string, env e
 		}
 	}
 	if cancelled {
-		if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issueID); err != nil {
+		// ExecuteInExecution already defers a cancel-immune release right
+		// after it claims the Worker, so this call is a no-op there. It is
+		// load-bearing for RepairCIFailure callers, which install no such
+		// defer.
+		if err := e.Store.ReleaseWorkerClaim(writeCtx, executionID, issueID); err != nil {
 			errs = append(errs, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))
 		}
 	}
