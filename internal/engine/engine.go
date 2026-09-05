@@ -1065,11 +1065,25 @@ func (e *Engine) continueAgent(ctx context.Context, executionID, issueID string,
 // future Adapter that forgets to plumb Timeout through, or any other path
 // that reaches env.Agent().Execute without its own internal bound — stays
 // unbounded. This deadline catches that gap. It does not cover Workspace
-// setup or the quality-gate phase, which run before or after this call and
-// stay unbounded by this change. It stays a strict multiple, not equal to
-// Timeout, so it never pre-empts an Adapter's own idle timeout on a run
+// setup, which runs before this call and stays unbounded by this change.
+// The quality-gate phase gets its own, separate deadline: see
+// qualityDeadlineMultiplier (constructorfleet/forge#669). It stays a
+// strict multiple, not equal to Timeout, so it never pre-empts an
+// Adapter's own idle timeout on a run
 // that is still making progress.
 const agentDeadlineMultiplier = 3
+
+// qualityDeadlineMultiplier sets the engine's own belt-and-braces deadline
+// for one Quality Gate command as a multiple of Config.Quality.Timeout
+// (constructorfleet/forge#669), the same structural guarantee
+// agentDeadlineMultiplier gives one Agent invocation (#467). A Quality Gate
+// command runs through env.Execute, not env.Agent().Execute, and its
+// expected duration has no link to how long one Agent turn takes, so it
+// gets its own config field and its own multiplier rather than reusing
+// agentDeadlineMultiplier. It stays a strict multiple, not equal to
+// Timeout, for the same reason agentDeadlineMultiplier does: so it never
+// pre-empts a gate command that is still making progress right at Timeout.
+const qualityDeadlineMultiplier = 3
 
 // executeAgent invokes the Agent through env.Agent() — in the Workspace
 // env wraps (constructorfleet/forge#302) — rather than through Engine's
@@ -1613,10 +1627,15 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID strin
 // the command never ran to completion (e.g. the container exited
 // unexpectedly) — as distinct from a Result reporting a non-zero exit code,
 // which is an ordinary gate failure. The caller (runQualityGates) treats the
-// two differently (constructorfleet/forge#391).
+// two differently (constructorfleet/forge#391). A gate command that hangs
+// past qualityDeadlineMultiplier*Config.Quality.Timeout also surfaces here
+// as a non-nil error (constructorfleet/forge#669), the same belt-and-braces
+// guarantee executeAgent's own deadline gives one Agent invocation (#467).
 func (e *Engine) runQualityGate(ctx context.Context, env execbackend.ExecutionEnvironment, g config.QualityGate) (gate.Result, error) {
 	started := e.Now()
-	result, err := env.Execute(ctx, execbackend.Command{Name: g.Name, Command: g.Command})
+	gateCtx, cancel := context.WithTimeout(ctx, qualityDeadlineMultiplier*e.Config.Quality.Timeout)
+	defer cancel()
+	result, err := env.Execute(gateCtx, execbackend.Command{Name: g.Name, Command: g.Command})
 	finished := e.Now()
 	if err != nil {
 		return gate.Result{}, err

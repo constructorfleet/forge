@@ -83,6 +83,9 @@ func TestDefault_ZeroConfig(t *testing.T) {
 	if cfg.Quality.MaxOutputBytes != 20000 {
 		t.Errorf("Quality.MaxOutputBytes = %d, want 20000", cfg.Quality.MaxOutputBytes)
 	}
+	if cfg.Quality.Timeout != 10*time.Minute {
+		t.Errorf("Quality.Timeout = %v, want 10m", cfg.Quality.Timeout)
+	}
 
 	// Default() must itself be a valid config.
 	if err := validate(cfg); err != nil {
@@ -127,6 +130,7 @@ quality:
     - name: lint
       command: make lint
   max_output_bytes: 5000
+  timeout: 15m
 pull_requests:
   enabled: true
   watch_ci: true
@@ -180,6 +184,9 @@ dependencies:
 	}
 	if cfg.Quality.MaxOutputBytes != 5000 {
 		t.Errorf("Quality.MaxOutputBytes = %d, want 5000", cfg.Quality.MaxOutputBytes)
+	}
+	if cfg.Quality.Timeout != 15*time.Minute {
+		t.Errorf("Quality.Timeout = %v, want 15m", cfg.Quality.Timeout)
 	}
 }
 
@@ -952,6 +959,18 @@ func TestLoad_NonPositiveMaxOutputBytes(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "quality.max_output_bytes") {
 		t.Errorf("Load() error = %v, want it to identify quality.max_output_bytes", err)
+	}
+}
+
+func TestLoad_NonPositiveQualityTimeout(t *testing.T) {
+	path := writeTemp(t, "quality:\n  timeout: 0s\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "quality.timeout") {
+		t.Errorf("Load() error = %v, want it to identify quality.timeout", err)
 	}
 }
 
