@@ -699,6 +699,12 @@ type Store interface {
 	// repeats (ticket 15a).
 	SaveDecisionCheckpoint(ctx context.Context, checkpoint DecisionCheckpoint) error
 
+	// SaveDecisionCheckpointWithEvent persists checkpoint and appends event
+	// in one transaction, so a Decision's NEEDS_HUMAN pause/resume audit
+	// Event ("decision.paused"/"decision.resumed") is never recorded
+	// without the checkpoint it describes, or vice versa.
+	SaveDecisionCheckpointWithEvent(ctx context.Context, checkpoint DecisionCheckpoint, event Event) error
+
 	// GetDecisionCheckpoint reloads the NEEDS_HUMAN checkpoint for one
 	// Decision within a Planning Execution. Returns ErrNotFound if none
 	// has been recorded.

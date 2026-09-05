@@ -51,6 +51,23 @@ func appendClaimEvent(ctx context.Context, tx *sql.Tx, executionID, issueID, wor
 	})
 }
 
+// MarshalEvent builds an Event for executionID/eventType at occurredAt,
+// JSON-encoding payload, so callers across packages (internal/planengine,
+// internal/wayfinding) share one marshal-then-construct step instead of each
+// duplicating it.
+func MarshalEvent(executionID, eventType string, occurredAt time.Time, payload any) (Event, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return Event{}, fmt.Errorf("marshal %s event payload: %w", eventType, err)
+	}
+	return Event{
+		ExecutionID: executionID,
+		Type:        eventType,
+		Data:        string(data),
+		OccurredAt:  occurredAt,
+	}, nil
+}
+
 // AppendEvent records a standalone Event.
 func (s *SQLiteStore) AppendEvent(ctx context.Context, event Event) error {
 	if event.OccurredAt.IsZero() {
