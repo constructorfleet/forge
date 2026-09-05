@@ -30,6 +30,11 @@ type fakeTracker struct {
 	issues   map[string]domain.Issue
 	comments map[string][]tracker.Comment
 	labels   map[string][]string
+
+	// removeLabelErr, when set, is returned by every RemoveLabel call
+	// instead of applying it, standing in for a tracker-side fault (e.g. the
+	// API being unreachable) during status reflection's label swap.
+	removeLabelErr error
 }
 
 func newFakeTracker() *fakeTracker {
@@ -97,6 +102,9 @@ func (f *fakeTracker) AddHumanComment(id, author, body string, at time.Time) {
 func (f *fakeTracker) RemoveLabel(_ context.Context, id string, label string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.removeLabelErr != nil {
+		return f.removeLabelErr
+	}
 	kept := f.labels[id][:0]
 	for _, l := range f.labels[id] {
 		if l != label {

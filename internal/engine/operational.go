@@ -17,6 +17,44 @@ import (
 // operator it is a no-op, not a failure.
 var ErrRetryAlreadyClaimed = errors.New("engine: another actor already claimed this retry")
 
+// RetryStartDeferredError reports that RetryIssue's claim committed, but a
+// step after the claim (reflecting the transition to the tracker, recording
+// the issue.retry_requested event, or an early failure inside resumeIssue's
+// own re-entry) then failed while the Issue was still READY. Unlike a failed
+// claim, this is not undone: the Issue keeps its claimed, reset retry budget
+// and released Worker claim, the shape the scheduler already treats as ready
+// to run. Callers must report this as a deferred start, not a failed retry:
+// the retry itself succeeded, and the scheduler picks the Issue up on its
+// own.
+type RetryStartDeferredError struct {
+	Err error
+}
+
+func (e *RetryStartDeferredError) Error() string {
+	return fmt.Sprintf("retry claimed; start deferred to the scheduler: %v", e.Err)
+}
+
+func (e *RetryStartDeferredError) Unwrap() error { return e.Err }
+
+// RetryResumeStuckError reports that RetryIssue's claim committed and
+// resumeIssue then advanced the Issue past READY (for example to CLAIMED or
+// PREPARING, by claiming the Issue and transitioning it forward) before it
+// failed. Unlike RetryStartDeferredError, the scheduler does not pick this
+// up on its own: the Issue is left mid-resume with no Worker claim, and
+// continuing it needs an explicit operator-run `forge resume
+// <execution-id>`. Callers must report this as a failed retry that needs
+// operator action, not a deferred start.
+type RetryResumeStuckError struct {
+	Err   error
+	State domain.IssueState
+}
+
+func (e *RetryResumeStuckError) Error() string {
+	return fmt.Sprintf("retry claimed but stuck mid-resume at %s; run forge resume: %v", e.State, e.Err)
+}
+
+func (e *RetryResumeStuckError) Unwrap() error { return e.Err }
+
 // RebaseConflictError is returned by RetryIssue when refreshing a retried
 // Issue's Worker base (ticket 29) hits a rebase conflict onto the target
 // branch's new tip. The Issue is left FAILED (RetryIssue rolls its retry
@@ -151,9 +189,16 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 // The claim therefore comes first, before the base refresh, and a refresh
 // that fails is rolled back with Store.AbortRetry — a rebase conflict must
 // leave the Issue FAILED, which is what the operator then acts on. The
-// rollback covers the base refresh only. A failure after that leaves the
-// Issue READY with a reset budget, which the scheduler picks up as a normal
-// retry.
+// rollback covers the base refresh only. A failure in a step after that
+// (applyTransitionEffects, the issue.retry_requested event, or resumeIssue)
+// is not rolled back. If the Issue is still READY when the failure surfaces,
+// it keeps its claimed, reset budget, which the scheduler picks up as a
+// normal retry, and RetryIssue reports the failure wrapped in
+// RetryStartDeferredError so the caller does not read it as a failed retry.
+// resumeIssue's own re-entry can instead advance the Issue past READY (to
+// CLAIMED or PREPARING) before failing further in; that leaves the Issue
+// mid-resume with no automatic follow-up, so RetryIssue reports it wrapped
+// in RetryResumeStuckError instead, naming the operator action needed.
 //
 // Claiming first also publishes the Issue as READY with no Worker claim for
 // the duration of the base refresh, and a concurrent `forge resume` reads
@@ -184,12 +229,36 @@ func (e *Engine) RetryIssue(ctx context.Context, executionID, issueID string) (d
 		return domain.Issue{}, err
 	}
 	if err := e.applyTransitionEffects(ctx, executionID, issueID, claim.From, claim.Issue.State); err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, &RetryStartDeferredError{Err: err}
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "issue.retry_requested", map[string]string{}); err != nil {
-		return domain.Issue{}, err
+		return domain.Issue{}, &RetryStartDeferredError{Err: err}
 	}
-	return e.resumeIssue(ctx, state.Execution, claim.Issue)
+	issue, err = e.resumeIssue(ctx, state.Execution, claim.Issue)
+	if err != nil {
+		return domain.Issue{}, e.deferredOrStuckResumeError(ctx, executionID, issueID, err)
+	}
+	return issue, nil
+}
+
+// deferredOrStuckResumeError classifies a resumeIssue failure that surfaces
+// during RetryIssue, after the retry claim has already committed.
+// resumeIssue's re-entry to a READY Issue (resumeFromReady) claims it and
+// transitions it to CLAIMED and then PREPARING before it can fail further
+// in, so only a failure that never reaches that code leaves the Issue in
+// the READY/unclaimed shape the scheduler already treats as ready to run.
+// A failure once resumeIssue has moved the Issue past READY leaves it
+// stuck mid-resume instead, which needs an explicit operator-run `forge
+// resume`, not automatic scheduler pickup.
+func (e *Engine) deferredOrStuckResumeError(ctx context.Context, executionID, issueID string, cause error) error {
+	reloaded, reloadErr := e.Store.GetIssue(ctx, executionID, issueID)
+	if reloadErr != nil {
+		return fmt.Errorf("engine: retry issue %s: resume failed (%w) and reload to classify it also failed: %w", issueID, cause, reloadErr)
+	}
+	if reloaded.State == domain.StateReady {
+		return &RetryStartDeferredError{Err: cause}
+	}
+	return &RetryResumeStuckError{Err: cause, State: reloaded.State}
 }
 
 // retryClaimError maps a lost retry claim to the reason the operator needs.
