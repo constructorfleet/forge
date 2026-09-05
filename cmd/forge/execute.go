@@ -28,6 +28,12 @@ import (
 // way) it additionally attaches the live roster; the roster is an observer,
 // so quitting (q / Ctrl+C) never stops the run, and the terminal restore
 // makes a second Ctrl+C fall through to the default handler that cancels it.
+//
+// forge execute never renders the planning-phase view (issue #592): it
+// attaches to one coding Execution over the Issues it is given, and it
+// never starts or owns a Planning Execution. Only `forge watch <id>` reaches
+// PlanningModel, by probing planning_executions (see planning_watch.go and
+// docs/specs/live-agent-tui.md section 6).
 func runExecute(args []string) int {
 	fs := flag.NewFlagSet("forge execute", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
