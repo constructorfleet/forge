@@ -58,7 +58,7 @@ agent:
 #    provider: claude-code
     permission_mode: bypassPermissions
     provider: codex
-    timeout: 20m0s
+    idle_timeout: 20m0s
 dependencies:
     overrides: {}
 status_reflection:

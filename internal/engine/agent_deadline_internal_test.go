@@ -56,7 +56,7 @@ func newDeadlineTestEngine(t *testing.T, timeout time.Duration) (*Engine, *stora
 		Agent:          poisonAgent{t: t},
 		Now:            time.Now,
 		NewExecutionID: func() string { return "exec-1" },
-		Config:         config.Config{Agent: config.AgentConfig{Timeout: timeout}},
+		Config:         config.Config{Agent: config.AgentConfig{IdleTimeout: timeout}},
 	}
 
 	execRow, err := eng.StartExecution(ctx, "base-sha")
@@ -72,7 +72,7 @@ func newDeadlineTestEngine(t *testing.T, timeout time.Duration) (*Engine, *stora
 
 // TestExecuteAgent_AppliesDeadlineAsMultipleOfAgentTimeout proves executeAgent
 // (constructorfleet/forge#467) derives its own deadline for env.Agent().Execute
-// from Config.Agent.Timeout, strictly greater than Timeout itself so it never
+// from Config.Agent.IdleTimeout, strictly greater than Timeout itself so it never
 // pre-empts an adapter's own idle timeout (constructorfleet/forge#455).
 func TestExecuteAgent_AppliesDeadlineAsMultipleOfAgentTimeout(t *testing.T) {
 	const timeout = 2 * time.Minute
@@ -102,7 +102,7 @@ func TestExecuteAgent_AppliesDeadlineAsMultipleOfAgentTimeout(t *testing.T) {
 
 	deadline, ok := capturedCtx.Deadline()
 	if !ok {
-		t.Fatal("ctx passed to Execute has no deadline, want one derived from Config.Agent.Timeout")
+		t.Fatal("ctx passed to Execute has no deadline, want one derived from Config.Agent.IdleTimeout")
 	}
 
 	minDeadline := before.Add(timeout)

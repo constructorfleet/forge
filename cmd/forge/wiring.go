@@ -997,22 +997,26 @@ func buildAgent(cfg config.Config) (agent.Agent, error) {
 	case "claude-code", "":
 		return &claude.Adapter{
 			PermissionMode:      string(cfg.Agent.PermissionMode),
-			Timeout:             cfg.Agent.Timeout,
+			Timeout:             cfg.Agent.EffectiveTimeout(),
 			ExtraEnvPassthrough: cfg.Agent.EnvPassthrough,
 		}, nil
-	// agent.timeout is provider-neutral, so every Adapter receives it: an
-	// operator who sets it must get a bounded run whichever provider runs
-	// (issue #455).
+	// EffectiveTimeout resolves to agent.idle_timeout for every CLI Adapter
+	// and to agent.request_timeout for every HTTP Adapter (issue #455,
+	// split from agent.timeout and centralized by issue #668).
+	// config.IsHTTPProvider names the same CLI-vs-HTTP split this switch
+	// uses to pick an Adapter type; TestBuildAgent_MatchesIsHTTPProvider
+	// (wiring_test.go) asserts the two stay in agreement for every case
+	// below.
 	case "codex":
-		return &codex.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
+		return &codex.Adapter{Timeout: cfg.Agent.EffectiveTimeout(), ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "opencode":
-		return &opencode.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
+		return &opencode.Adapter{Timeout: cfg.Agent.EffectiveTimeout(), ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "pi":
-		return &pi.Adapter{Timeout: cfg.Agent.Timeout, ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
+		return &pi.Adapter{Timeout: cfg.Agent.EffectiveTimeout(), ExtraEnvPassthrough: cfg.Agent.EnvPassthrough}, nil
 	case "openai-responses":
-		return &openai.ResponsesAdapter{Timeout: cfg.Agent.Timeout}, nil
+		return &openai.ResponsesAdapter{Timeout: cfg.Agent.EffectiveTimeout()}, nil
 	case "openai-chat-completions":
-		return &openai.ChatCompletionsAdapter{Timeout: cfg.Agent.Timeout}, nil
+		return &openai.ChatCompletionsAdapter{Timeout: cfg.Agent.EffectiveTimeout()}, nil
 	default:
 		return nil, fmt.Errorf("forge: unknown agent provider %q", cfg.Agent.Provider)
 	}

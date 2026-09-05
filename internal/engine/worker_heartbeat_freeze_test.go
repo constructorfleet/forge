@@ -36,7 +36,7 @@ var _ agent.Agent = blockingThenImplementingAgent{}
 // Agent produces no transcript output for longer than HeartbeatStallAfter,
 // workers.last_heartbeat stops advancing — a real "working vs. wedged"
 // signal an operator (or the TUI's liveness badge, #453/#494) can read
-// long before the Config.Agent.Timeout adapter timeout would fire.
+// long before the Config.Agent.IdleTimeout adapter timeout would fire.
 func TestExecute_WorkerHeartbeatFreezesWhileAgentStalled(t *testing.T) {
 	repoRoot, base := gittest.NewTempRepo(t)
 	store := openTestStore(t)
