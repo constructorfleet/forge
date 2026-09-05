@@ -50,9 +50,11 @@ func LatestNeedsInfoCheckpoint(ctx context.Context, store RosterStore, execution
 // stripCommentMarker removes Forge's own hidden comment marker (see
 // needsinfo.CommentMarker) from text, so a question or context read back
 // from a tracker comment never leaks the marker into the operator-facing
-// $EDITOR artifact.
-func stripCommentMarker(text, executionID, itemID string) string {
-	marker := needsinfo.CommentMarker(needsinfo.KindNeedsInfo, executionID, itemID)
+// $EDITOR artifact. kind namespaces the marker by pause type — KindNeedsInfo
+// for an Issue, KindNeedsHuman for a planning Decision — matching whichever
+// kind posted the comment being displayed.
+func stripCommentMarker(text, kind, executionID, itemID string) string {
+	marker := needsinfo.CommentMarker(kind, executionID, itemID)
 	return strings.TrimRight(strings.Replace(text, "\n\n"+marker, "", 1), "\n")
 }
 
@@ -64,10 +66,10 @@ func renderNeedsInfoQuestion(c storage.NeedsInfoCheckpoint) string {
 	var b strings.Builder
 	b.WriteString("# Write your answer below. Lines starting with # are ignored.\n#\n")
 	b.WriteString("# Question:\n")
-	writeCommentedLines(&b, stripCommentMarker(c.Question, c.ExecutionID, c.IssueID))
+	writeCommentedLines(&b, stripCommentMarker(c.Question, needsinfo.KindNeedsInfo, c.ExecutionID, c.IssueID))
 	if c.Context != "" {
 		b.WriteString("#\n# Context:\n")
-		writeCommentedLines(&b, stripCommentMarker(c.Context, c.ExecutionID, c.IssueID))
+		writeCommentedLines(&b, stripCommentMarker(c.Context, needsinfo.KindNeedsInfo, c.ExecutionID, c.IssueID))
 	}
 	b.WriteString("\n")
 	return b.String()

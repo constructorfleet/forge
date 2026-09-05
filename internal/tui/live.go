@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -53,17 +52,14 @@ type LiveModel struct {
 	vm          ViewModel
 	lastErr     error
 
-	// feed drives the transcript pane for the selected Worker. It is the pane's
-	// one owner: a nil feed renders the roster alone.
-	feed *TranscriptFeed
+	// transcriptController owns the transcript feed, the read-in-flight
+	// guard, ctx, winHeight, and the pager artifact directory, shared with
+	// PlanningModel.
+	transcriptController
+
 	// rosterReading records a roster read in flight, so a tick starts no second
 	// one while a slow store still reads.
 	rosterReading bool
-	// reading records a feed read in flight, so a tick starts no second one.
-	reading bool
-	// ctx bounds the feed reads the poll commands run, so quitting the program
-	// cancels an in-flight store read instead of waiting it out.
-	ctx context.Context
 
 	// OpenDiff defers a diff to $PAGER, writing its artifact under the given
 	// directory. Injected so a test drives the whole key path without spawning
@@ -116,16 +112,6 @@ type LiveModel struct {
 	// through AddComment returning — so a second answer key press on the
 	// same row cannot double-post it.
 	answerFlow actionFlow
-
-	// winHeight is the last terminal height the runtime reported. Zero means the
-	// runtime has sent no size yet: the frame then clips nothing and the tailer
-	// keeps its own default.
-	winHeight int
-
-	// artifactDir holds this session's pager artifacts (diffs and replan
-	// checkpoints). A pager killed before its own cleanup callback runs leaves
-	// a file, so quit removes the directory.
-	artifactDirPath string
 }
 
 // NewLiveModel builds a live roster model over r for executionID, polling
@@ -134,16 +120,14 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 	if poll <= 0 {
 		poll = pollInterval
 	}
-	return &LiveModel{Roster: r, ExecutionID: executionID, poll: poll, ctx: context.Background()}
-}
-
-// SetContext bounds every store read the model performs. Pass the program's own
-// context, so a quit cancels an in-flight read.
-func (m *LiveModel) SetContext(ctx context.Context) {
-	if ctx == nil {
-		ctx = context.Background()
+	return &LiveModel{
+		Roster:      r,
+		ExecutionID: executionID,
+		poll:        poll,
+		transcriptController: transcriptController{
+			ctx: context.Background(),
+		},
 	}
-	m.ctx = ctx
 }
 
 // Init returns a command that paints the first frame immediately, then the
@@ -177,7 +161,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Any key press answers the last action notice, so it clears here.
 		m.vm.ActionNotice = ""
 		if key.MatchString("q", "ctrl+c") {
-			m.removeDiffArtifacts()
+			m.removeArtifacts()
 			return m, tea.Quit
 		}
 		if m.confirming {
@@ -249,7 +233,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyAnswerResult(msg)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
-		m.removeDiffArtifacts()
+		m.removeArtifacts()
 		return m, tea.Quit
 	}
 	return m, nil
@@ -343,61 +327,19 @@ func (m *LiveModel) openDiff(dir, diff string) tea.Cmd {
 // artifactDir returns this session's pager-artifact directory (diffs and
 // replan checkpoints), creating it on first use.
 func (m *LiveModel) artifactDir() (string, error) {
-	if m.artifactDirPath != "" {
-		return m.artifactDirPath, nil
-	}
-	dir, err := os.MkdirTemp("", "forge-diffs-*")
-	if err != nil {
-		return "", fmt.Errorf("tui: create pager artifact directory: %w", err)
-	}
-	m.artifactDirPath = dir
-	return dir, nil
+	return m.transcriptController.artifactDir("forge-diffs-*")
 }
 
 // Close drops every pager artifact the session wrote. The caller defers it
 // around the Bubble Tea program, so an exit path other than the quit keys — a
 // context cancellation, a signal, or a panic — leaks no temp directory.
-func (m *LiveModel) Close() { m.removeDiffArtifacts() }
-
-// removeDiffArtifacts drops every artifact the session wrote. A failure is
-// silent: an observer never aborts on temp-file cleanup.
-func (m *LiveModel) removeDiffArtifacts() {
-	if m.artifactDirPath == "" {
-		return
-	}
-	_ = os.RemoveAll(m.artifactDirPath)
-	m.artifactDirPath = ""
-}
+func (m *LiveModel) Close() { m.removeArtifacts() }
 
 // handleTranscriptKey applies the pane keys. Tab moves focus; the movement
 // and expand keys act only while the pane holds focus, so a roster key and a
 // pane key can share a rune without collision.
 func (m *LiveModel) handleTranscriptKey(key uv.Key) {
-	pane := m.vm.Transcript
-	if pane == nil {
-		return
-	}
-	if key.MatchString("tab") {
-		if m.vm.Focus == PaneTranscript {
-			m.vm.Focus = PaneRoster
-			return
-		}
-		m.vm.Focus = PaneTranscript
-		return
-	}
-	if m.vm.Focus != PaneTranscript {
-		return
-	}
-	switch {
-	case key.MatchString("k", "up"):
-		pane.MoveSelection(-1)
-	case key.MatchString("j", "down"):
-		pane.MoveSelection(1)
-	case key.MatchString("enter"):
-		pane.ToggleExpand()
-	case key.MatchString("G"):
-		pane.FollowTail()
-	}
+	m.transcriptController.handleTranscriptKey(key, m.vm.Transcript, &m.vm.Focus)
 }
 
 // readTranscript returns the command that reads the selected Worker's
@@ -430,15 +372,7 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 // read failure keeps the pane the feed already holds and reports the failure in
 // TranscriptNotice, so a transient failure never blanks the transcript.
 func (m *LiveModel) applyTranscript(msg transcriptReadMsg) {
-	if m.feed == nil || msg.feed != m.feed {
-		return
-	}
-	m.reading = false
-	pane := m.feed.Apply(msg.read)
-	m.vm.TranscriptNotice = msg.read.Err()
-	if pane != nil {
-		m.vm.Transcript = pane
-	}
+	m.transcriptController.applyTranscript(msg, &m.vm.TranscriptNotice, &m.vm.Transcript)
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript row
@@ -449,11 +383,7 @@ func (m *LiveModel) applyTranscript(msg transcriptReadMsg) {
 // when a feed is attached.
 func (m *LiveModel) applyTranscriptHeight() {
 	m.vm.Height = m.winHeight
-	rows := TranscriptRows(m.vm)
-	if m.feed == nil || rows <= 0 {
-		return
-	}
-	m.feed.SetHeight(rows)
+	m.sizeFeed(TranscriptRows(m.vm))
 }
 
 // SetFeed attaches the transcript feed each poll drives. It is the pane's one
