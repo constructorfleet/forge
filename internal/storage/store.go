@@ -652,10 +652,10 @@ type Store interface {
 	// Returns ErrNotFound if no active lease exists.
 	FeaturePlanningLease(ctx context.Context, featureID string) (PlanningLease, error)
 
-	// UpdatePlanningLeaseOwner records the OS process ID currently owning
-	// the active planning lease for featureID, the lease analogue of
-	// UpdateWorkerOwner.
-	UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int) error
+	// UpdatePlanningLeaseOwner records the OS process ID and process
+	// identity token currently owning the active planning lease for
+	// featureID, the lease analogue of UpdateWorkerOwner.
+	UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int, ownerToken string) error
 
 	// ReleaseFeaturePlanningLease removes the active planning lease for
 	// featureID. Releasing a missing lease is a no-op.

@@ -170,7 +170,7 @@ func TestUpdatePlanningLeaseOwner(t *testing.T) {
 		t.Fatalf("ClaimFeaturePlanningLease: %v", err)
 	}
 
-	if err := store.UpdatePlanningLeaseOwner(ctx, exec.FeatureID, 4242); err != nil {
+	if err := store.UpdatePlanningLeaseOwner(ctx, exec.FeatureID, 4242, "start-4242"); err != nil {
 		t.Fatalf("UpdatePlanningLeaseOwner: %v", err)
 	}
 	lease, err := store.FeaturePlanningLease(ctx, exec.FeatureID)
@@ -180,13 +180,16 @@ func TestUpdatePlanningLeaseOwner(t *testing.T) {
 	if lease.OwnerPID != 4242 {
 		t.Fatalf("expected owner pid 4242, got %d", lease.OwnerPID)
 	}
+	if lease.OwnerToken != "start-4242" {
+		t.Fatalf("expected owner token %q, got %q", "start-4242", lease.OwnerToken)
+	}
 }
 
 func TestUpdatePlanningLeaseOwnerNotFound(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	if err := store.UpdatePlanningLeaseOwner(ctx, "missing-feature", 1); !errors.Is(err, storage.ErrNotFound) {
+	if err := store.UpdatePlanningLeaseOwner(ctx, "missing-feature", 1, "token"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

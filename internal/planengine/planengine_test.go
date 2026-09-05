@@ -41,6 +41,7 @@ func newTestRuntime(store *storage.SQLiteStore) *planengine.Runtime {
 	r.Now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 	r.OwnerPID = func() int { return 100 }
 	r.ProcessRunning = func(pid int) (bool, error) { return false, nil }
+	r.ProcessStartToken = func(_ context.Context, pid int) string { return fmt.Sprintf("start-%d", pid) }
 	return r
 }
 
@@ -148,6 +149,74 @@ func TestStartTreatsOwnRestartAsReclaim(t *testing.T) {
 	}
 	if exec.ID != first.ID {
 		t.Fatalf("expected restart to reuse %s, got %s", first.ID, exec.ID)
+	}
+}
+
+// TestStartTreatsRecycledPIDAsAbandonedLease covers issue 557: a bare pid
+// equality test cannot tell a live owner from a dead one whose pid the
+// operating system already reused for an unrelated process. ProcessRunning
+// alone says pid 100 is alive, but its process-identity token no longer
+// matches the token the lease recorded, so Start must treat the lease as
+// abandoned and reclaim it rather than reporting a live conflict.
+func TestStartTreatsRecycledPIDAsAbandonedLease(t *testing.T) {
+	store := openTestStore(t)
+	r := newTestRuntime(store)
+
+	first, err := r.Start(context.Background(), "feature-1", "base-rev")
+	if err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+
+	resumer := newTestRuntime(store)
+	resumer.OwnerPID = func() int { return 999 }
+	resumer.ProcessRunning = func(pid int) (bool, error) { return true, nil } // pid 100 "alive" but reused
+	resumer.ProcessStartToken = func(_ context.Context, pid int) string { return "recycled-" + fmt.Sprint(pid) }
+
+	resumed, err := resumer.Start(context.Background(), "feature-1", "base-rev")
+	if err != nil {
+		t.Fatalf("resume Start: %v", err)
+	}
+	if resumed.ID != first.ID {
+		t.Fatalf("expected resumed execution to reuse %s, got %s", first.ID, resumed.ID)
+	}
+
+	lease, err := store.FeaturePlanningLease(context.Background(), "feature-1")
+	if err != nil {
+		t.Fatalf("FeaturePlanningLease: %v", err)
+	}
+	if lease.OwnerPID != 999 {
+		t.Fatalf("expected lease reclaimed by pid 999, got %d", lease.OwnerPID)
+	}
+}
+
+// TestStartRejectsLiveOwnerWithMatchingToken ensures the token check does
+// not weaken the existing conflict path: a pid that is running and whose
+// token still matches the lease's recorded token is the same live process,
+// so Start must still report a conflict.
+func TestStartRejectsLiveOwnerWithMatchingToken(t *testing.T) {
+	store := openTestStore(t)
+	r := newTestRuntime(store)
+
+	first, err := r.Start(context.Background(), "feature-1", "base-rev")
+	if err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+
+	other := newTestRuntime(store)
+	other.OwnerPID = func() int { return 200 }
+	other.ProcessRunning = func(pid int) (bool, error) { return true, nil }
+	other.ProcessStartToken = func(_ context.Context, pid int) string { return fmt.Sprintf("start-%d", pid) }
+
+	_, err = other.Start(context.Background(), "feature-1", "base-rev")
+	if err == nil {
+		t.Fatal("expected an error starting planning while a live process with a matching token owns the lease")
+	}
+	var conflict *storage.PlanningLeaseConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected *storage.PlanningLeaseConflictError, got %v", err)
+	}
+	if conflict.OwningExecutionID != first.ID {
+		t.Fatalf("expected conflict to reference %s, got %s", first.ID, conflict.OwningExecutionID)
 	}
 }
 
