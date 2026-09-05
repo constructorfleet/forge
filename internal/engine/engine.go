@@ -246,14 +246,16 @@ type Engine struct {
 	// Workspaces are created under.
 	RepoRoot string
 
-	// IssueLock serializes CancelExecution and RetryIssue per Issue (issue
-	// 552). Both commands mutate one Issue's state and Worker claim across
-	// several separate Store calls rather than inside one transaction, so
-	// without a shared lock a cancel can land between RetryIssue's
-	// Store.ClaimRetry and its resumeIssue call, letting a Worker start on
-	// an Issue the operator just cancelled. New wires the production
-	// repolock.Locker, which serializes across processes as well as
-	// goroutines; see withIssueLock.
+	// IssueLock serializes CancelExecution, ResumeExecution, and RetryIssue
+	// per Issue (issue 552, issue 684). Each command mutates one Issue's
+	// state and Worker claim across several separate Store calls rather
+	// than inside one transaction, so without a shared lock a concurrent
+	// cancel or resume can land between RetryIssue's Store.ClaimRetry and
+	// its resumeIssue call: a concurrent cancel can release the claim
+	// under an in-flight retry's already-running worker, and a concurrent
+	// resume can start a second worker in the same Workspace the retry is
+	// using. New wires the production repolock.Locker, which serializes
+	// across processes as well as goroutines; see withIssueLock.
 	IssueLock IssueLocker
 
 	// Semantic is the SemanticProvider seam (internal/semantic) fulfilling
