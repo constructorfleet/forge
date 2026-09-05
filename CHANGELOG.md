@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.38.0](https://github.com/constructorfleet/forge/compare/forge-v0.37.1...forge-v0.38.0) (2026-09-05)
+
+
+### Features
+
+* TUI: answer NEEDS_INFO / Decision (EDITOR) ([#590](https://github.com/constructorfleet/forge/issues/590)) ([d223ea4](https://github.com/constructorfleet/forge/commit/d223ea422798e3ec43910e099ba451326403b29b)), closes [#505](https://github.com/constructorfleet/forge/issues/505)
+* TUI: Colorization and layout ([#597](https://github.com/constructorfleet/forge/issues/597)) ([6e93dff](https://github.com/constructorfleet/forge/commit/6e93dffcba91cd9c764b4b5cf2fda5d1823fb863)), closes [#581](https://github.com/constructorfleet/forge/issues/581)
+* TUI: planning-phase view ([#594](https://github.com/constructorfleet/forge/issues/594)) ([86fb4d0](https://github.com/constructorfleet/forge/commit/86fb4d0bf9cbd4ceb7abbe8a5def432c53c02820)), closes [#506](https://github.com/constructorfleet/forge/issues/506)
+* TUI: Sequential executions only first is shown ([#595](https://github.com/constructorfleet/forge/issues/595)) ([b7f7bac](https://github.com/constructorfleet/forge/commit/b7f7bac84007fe64be353c38fa00aeaf77028029)), closes [#585](https://github.com/constructorfleet/forge/issues/585)
+
 ## [0.37.1](https://github.com/constructorfleet/forge/compare/forge-v0.37.0...forge-v0.37.1) (2026-09-05)
 
 
