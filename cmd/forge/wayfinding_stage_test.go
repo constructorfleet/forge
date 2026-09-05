@@ -7,18 +7,21 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/tracker"
 )
 
-// TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution drives
+// TestRunWayfindingStage_ResolvesDecisionAndLeavesExecutionActive drives
 // runWayfindingStage directly (not through the built binary): a single
-// open Decision resolves, the readiness review reports READY_FOR_SPEC, and
-// the Planning Execution reaches COMPLETE with its lease released so a
-// subsequent `forge plan` call would start fresh rather than reclaim it.
-func TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution(t *testing.T) {
-	repoRoot, _ := gittest.NewTempRepo(t)
+// open Decision resolves and the readiness review reports READY_FOR_SPEC.
+// runWayfindingStage no longer owns Start/Finish (issue #470 -- the whole
+// `forge plan` pipeline shares one Planning Execution), so completing
+// wayfinding must leave the execution ACTIVE with its lease still held,
+// not COMPLETE: the pipeline still has spec/ticket-plan stages to run.
+func TestRunWayfindingStage_ResolvesDecisionAndLeavesExecutionActive(t *testing.T) {
+	repoRoot, base := gittest.NewTempRepo(t)
 	ctx := context.Background()
 
 	store, err := openStore(ctx, repoRoot+"/.forge/forge.db")
@@ -30,6 +33,12 @@ func TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution(t *testing.T) 
 	cfg := config.Default()
 	cfg.Git.Base = "main"
 	trk := tracker.NewFakeTracker()
+
+	planRuntime := planengine.New(store)
+	exec, err := planRuntime.Start(ctx, "widget", base)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	goal := &planning.Artifact{Kind: planning.KindGoal, Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}}}
 	goal.Revision = planning.ComputeRevision(goal)
@@ -53,23 +62,23 @@ func TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution(t *testing.T) 
 	backend.ProgramResult("decision-resolution", `{"outcome":"SQLite"}`)
 	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
-	paused, executionID, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", goal, decisions, loader)
+	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader)
 	if err != nil {
 		t.Fatalf("runWayfindingStage: %v", err)
 	}
 	if paused {
-		t.Fatalf("expected wayfinding to complete, got paused (execution %s)", executionID)
+		t.Fatalf("expected wayfinding to complete, got paused (execution %s)", exec.ID)
 	}
 
-	exec, err := store.LoadPlanningExecution(ctx, executionID)
+	reloaded, err := store.LoadPlanningExecution(ctx, exec.ID)
 	if err != nil {
 		t.Fatalf("LoadPlanningExecution: %v", err)
 	}
-	if exec.Status != domain.PlanningStatusComplete {
-		t.Errorf("planning execution status = %s, want COMPLETE", exec.Status)
+	if reloaded.Status != domain.PlanningStatusActive {
+		t.Errorf("planning execution status = %s, want ACTIVE (wayfinding is only one stage of the pipeline)", reloaded.Status)
 	}
-	if _, err := store.FeaturePlanningLease(ctx, "widget"); err == nil {
-		t.Errorf("expected the planning lease to be released once the execution completed")
+	if _, err := store.FeaturePlanningLease(ctx, "widget"); err != nil {
+		t.Errorf("expected the planning lease to remain held after wayfinding alone completes: %v", err)
 	}
 }
 
@@ -79,7 +88,7 @@ func TestRunWayfindingStage_ResolvesDecisionAndCompletesExecution(t *testing.T) 
 // is required for the pause path itself (label and comment are recorded
 // in-memory).
 func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
-	repoRoot, _ := gittest.NewTempRepo(t)
+	repoRoot, base := gittest.NewTempRepo(t)
 	ctx := context.Background()
 
 	store, err := openStore(ctx, repoRoot+"/.forge/forge.db")
@@ -92,6 +101,12 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 	cfg.Git.Base = "main"
 	trk := tracker.NewFakeTracker()
 	trk.AddIssue(domain.Issue{ID: "widget"})
+
+	planRuntime := planengine.New(store)
+	exec, err := planRuntime.Start(ctx, "widget", base)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	goal := &planning.Artifact{Kind: planning.KindGoal, Sections: []planning.Section{{Heading: "Goal", Body: "Build a widget"}}}
 	goal.Revision = planning.ComputeRevision(goal)
@@ -111,7 +126,7 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 	backend.ProgramResult("decision-resolution", `{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`)
 	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
-	paused, executionID, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", goal, decisions, loader)
+	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader)
 	if err != nil {
 		t.Fatalf("runWayfindingStage: %v", err)
 	}
@@ -119,12 +134,12 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 		t.Fatalf("expected wayfinding to pause on needs-human")
 	}
 
-	exec, err := store.LoadPlanningExecution(ctx, executionID)
+	reloaded, err := store.LoadPlanningExecution(ctx, exec.ID)
 	if err != nil {
 		t.Fatalf("LoadPlanningExecution: %v", err)
 	}
-	if exec.Status != domain.PlanningStatusNeedsHuman {
-		t.Errorf("planning execution status = %s, want NEEDS_HUMAN", exec.Status)
+	if reloaded.Status != domain.PlanningStatusNeedsHuman {
+		t.Errorf("planning execution status = %s, want NEEDS_HUMAN", reloaded.Status)
 	}
 
 	labels := trk.Labels("widget")
