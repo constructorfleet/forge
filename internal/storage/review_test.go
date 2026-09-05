@@ -26,6 +26,22 @@ func seedIssueForReviewRun(t *testing.T, store *storage.SQLiteStore, executionID
 	}
 }
 
+// seedIssueOnExistingExecution adds another Issue to an Execution a prior
+// seedIssueForReviewRun call already created, for tests spanning multiple
+// Issues within one Execution.
+func seedIssueOnExistingExecution(t *testing.T, store *storage.SQLiteStore, executionID, issueID string) {
+	t.Helper()
+	ctx := context.Background()
+	issue := domain.Issue{
+		ID: issueID, ExecutionID: executionID,
+		State: domain.StatePending, Scope: domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(domain.RetryLimits{Gate: 3, Review: 3, CI: 3}),
+	}
+	if err := store.CreateIssue(ctx, issue); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+}
+
 func TestRecordReviewRun_ApprovedPersistsWithNoFindings(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -266,61 +282,87 @@ func TestReviewRunsByIssue_ReturnsEmptyForIssueWithNoReviewRuns(t *testing.T) {
 	}
 }
 
-// TestLatestReviewOutcome_ReadsTheLastRunWithoutTheDiff proves the observer
-// seam returns the current verdict plus whether a diff exists, and never the
-// diff body: a poll must not read a blob it discards.
-func TestLatestReviewOutcome_ReadsTheLastRunWithoutTheDiff(t *testing.T) {
+// TestLatestReviewVerdicts_ReturnsOneRowPerIssueFromTheHighestRun proves the
+// roster's whole-Execution read collapses to one query: every Issue with a
+// recorded Review run comes back keyed by IssueID, carrying the verdict from
+// its highest review_runs.id and whether that run stored a diff — never the
+// diff body itself.
+func TestLatestReviewVerdicts_ReturnsOneRowPerIssueFromTheHighestRun(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
-	seedIssueForReviewRun(t, store, "exec-review-6", "issue-review-6")
+	seedIssueForReviewRun(t, store, "exec-verdicts", "issue-a")
+	seedIssueOnExistingExecution(t, store, "exec-verdicts", "issue-b")
 
+	// issue-a: two runs, the later one APPROVED with no diff.
 	first := storage.ReviewRun{
-		ExecutionID: "exec-review-6",
-		IssueID:     "issue-review-6",
+		ExecutionID: "exec-verdicts",
+		IssueID:     "issue-a",
 		Verdict:     "CHANGES_REQUIRED",
-		Summary:     "first pass",
 		Diff:        "diff --git a/a.go b/a.go\n",
 		StartedAt:   time.Now().UTC(),
 		FinishedAt:  time.Now().UTC(),
 	}
 	if err := store.RecordReviewRun(ctx, first); err != nil {
-		t.Fatalf("RecordReviewRun: %v", err)
+		t.Fatalf("RecordReviewRun first: %v", err)
 	}
 	second := first
 	second.Verdict = "APPROVED"
-	second.Summary = "second pass"
 	second.Diff = ""
 	if err := store.RecordReviewRun(ctx, second); err != nil {
-		t.Fatalf("RecordReviewRun: %v", err)
+		t.Fatalf("RecordReviewRun second: %v", err)
 	}
 
-	got, err := store.LatestReviewOutcome(ctx, "exec-review-6", "issue-review-6")
+	// issue-b: one run, with a diff.
+	onlyRun := storage.ReviewRun{
+		ExecutionID: "exec-verdicts",
+		IssueID:     "issue-b",
+		Verdict:     "CHANGES_REQUIRED",
+		Diff:        "diff --git a/b.go b/b.go\n",
+		StartedAt:   time.Now().UTC(),
+		FinishedAt:  time.Now().UTC(),
+	}
+	if err := store.RecordReviewRun(ctx, onlyRun); err != nil {
+		t.Fatalf("RecordReviewRun onlyRun: %v", err)
+	}
+
+	got, err := store.LatestReviewVerdicts(ctx, "exec-verdicts")
 	if err != nil {
-		t.Fatalf("LatestReviewOutcome: %v", err)
+		t.Fatalf("LatestReviewVerdicts: %v", err)
 	}
-	if !got.Recorded {
-		t.Fatal("Recorded = false, want true")
+	if len(got) != 2 {
+		t.Fatalf("got %d verdicts, want 2: %+v", len(got), got)
 	}
-	if got.Verdict != "APPROVED" {
-		t.Errorf("Verdict = %q, want APPROVED", got.Verdict)
+
+	a, ok := got["issue-a"]
+	if !ok {
+		t.Fatal("missing issue-a")
 	}
-	if got.HasDiff {
-		t.Error("HasDiff = true, want false for a run that stored an empty diff")
+	if !a.Recorded || a.Verdict != "APPROVED" || a.HasDiff {
+		t.Errorf("issue-a = %+v, want Recorded true, Verdict APPROVED, HasDiff false", a)
+	}
+
+	b, ok := got["issue-b"]
+	if !ok {
+		t.Fatal("missing issue-b")
+	}
+	if !b.Recorded || b.Verdict != "CHANGES_REQUIRED" || !b.HasDiff {
+		t.Errorf("issue-b = %+v, want Recorded true, Verdict CHANGES_REQUIRED, HasDiff true", b)
 	}
 }
 
-// TestLatestReviewOutcome_WithoutARunReportsNothing proves an unreviewed Issue
-// reports no outcome instead of an error.
-func TestLatestReviewOutcome_WithoutARunReportsNothing(t *testing.T) {
+// TestLatestReviewVerdicts_OmitsIssuesWithNoReviewRun proves an Issue with no
+// recorded Review run is absent from the map rather than present with a zero
+// outcome, so the caller's presence check ("ok") is the recorded signal.
+func TestLatestReviewVerdicts_OmitsIssuesWithNoReviewRun(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
-	seedIssueForReviewRun(t, store, "exec-review-7", "issue-review-7")
+	seedIssueForReviewRun(t, store, "exec-verdicts-2", "issue-unreviewed")
 
-	got, err := store.LatestReviewOutcome(ctx, "exec-review-7", "issue-review-7")
+	got, err := store.LatestReviewVerdicts(ctx, "exec-verdicts-2")
 	if err != nil {
-		t.Fatalf("LatestReviewOutcome: %v", err)
+		t.Fatalf("LatestReviewVerdicts: %v", err)
 	}
-	if got.Recorded || got.Verdict != "" || got.HasDiff {
-		t.Errorf("outcome = %+v, want a zero outcome", got)
+	if _, ok := got["issue-unreviewed"]; ok {
+		t.Errorf("got %+v, want no entry for an unreviewed issue", got)
 	}
 }

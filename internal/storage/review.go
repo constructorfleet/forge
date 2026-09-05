@@ -157,36 +157,12 @@ func (s *SQLiteStore) ReviewRunsByIssue(ctx context.Context, executionID, issueI
 	return out, nil
 }
 
-// LatestReviewOutcome returns the current Review verdict for one Issue and
-// whether that run stored a diff. It reads one row and returns no diff body, so
-// a per-second poll costs the same whatever the review history holds. Use
-// ReviewRunsByIssue only where the caller needs the runs themselves.
-func (s *SQLiteStore) LatestReviewOutcome(ctx context.Context, executionID, issueID string) (ReviewOutcome, error) {
-	var out ReviewOutcome
-	err := s.db.QueryRowContext(ctx, `
-		SELECT verdict, LENGTH(diff) > 0
-		FROM review_runs
-		WHERE execution_id = ? AND issue_id = ?
-		ORDER BY id DESC
-		LIMIT 1`,
-		executionID, issueID,
-	).Scan(&out.Verdict, &out.HasDiff)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ReviewOutcome{}, nil
-	}
-	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("storage: latest review outcome for issue %s/%s: %w", executionID, issueID, err)
-	}
-	out.Recorded = true
-	return out, nil
-}
-
 // LatestReviewDiff returns the current Review run's stored diff for one Issue.
 // It reads the one diff column alone, with no findings and no axis envelopes, so
 // the on-request pager read never loads the whole review history. An Issue with
 // no Review run, or a run that stored an empty diff, returns "".
 //
-// It repeats LatestReviewOutcome's "highest id wins" rule, so the strip's
+// It repeats LatestReviewVerdicts's "highest id wins" rule, so the strip's
 // verdict and the pager's diff always name one run.
 func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID string) (string, error) {
 	var diff string
@@ -205,6 +181,47 @@ func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID
 		return "", fmt.Errorf("storage: latest review diff for issue %s/%s: %w", executionID, issueID, err)
 	}
 	return diff, nil
+}
+
+// LatestReviewVerdicts returns the current Review verdict for every Issue in
+// executionID that has at least one recorded Review run, keyed by IssueID.
+// It reads no diff body, one query for the whole Execution rather than one
+// per Issue: a roster poll pass costs a single round trip whatever the Issue
+// count. An Issue with no Review run is absent from the map.
+func (s *SQLiteStore) LatestReviewVerdicts(ctx context.Context, executionID string) (map[string]ReviewOutcome, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rr.issue_id, rr.verdict, LENGTH(rr.diff) > 0
+		FROM review_runs rr
+		JOIN (
+			SELECT issue_id, MAX(id) AS max_id
+			FROM review_runs
+			WHERE execution_id = ?
+			GROUP BY issue_id
+		) latest ON latest.issue_id = rr.issue_id AND latest.max_id = rr.id
+		WHERE rr.execution_id = ?`,
+		executionID, executionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: latest review verdicts for execution %s: %w", executionID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string]ReviewOutcome)
+	for rows.Next() {
+		var (
+			issueID string
+			outcome ReviewOutcome
+		)
+		if err := rows.Scan(&issueID, &outcome.Verdict, &outcome.HasDiff); err != nil {
+			return nil, fmt.Errorf("storage: scan latest review verdict: %w", err)
+		}
+		outcome.Recorded = true
+		out[issueID] = outcome
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: latest review verdicts for execution %s: %w", executionID, err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64) ([]ReviewFinding, error) {
