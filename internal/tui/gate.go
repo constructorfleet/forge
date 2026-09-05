@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -76,7 +78,7 @@ func boundGateOutput(stdout, stderr string) string {
 			parts = append(parts, s)
 		}
 	}
-	joined := strings.Join(parts, "\n")
+	joined := expandTabs(strings.Join(parts, "\n"))
 	if joined == "" {
 		return ""
 	}
@@ -88,6 +90,14 @@ func boundGateOutput(stdout, stderr string) string {
 	kept := []string{fmt.Sprintf("… %d earlier lines not shown", dropped)}
 	kept = append(kept, lines[dropped:]...)
 	return strings.Join(kept, "\n")
+}
+
+// expandTabs replaces every tab with a single space. A gate tool such as `go
+// test` tab-separates its output columns, and the pane's cell-grid renderer
+// draws a bare tab with no width, so the columns run together with no visible
+// space. A tab becomes one space instead, which the renderer always draws.
+func expandTabs(text string) string {
+	return strings.ReplaceAll(text, "\t", " ")
 }
 
 // gateEntries turns gate rows into synthetic entries and derives each row's
@@ -118,7 +128,7 @@ func gateOutcome(g GateRow) string {
 // expanded to its command, exit code, and bounded output. The collapsed preview
 // keeps the last output line, which holds a gate tool's verdict.
 func gateLines(g GateRow, cur string, expanded bool) []string {
-	head := header(headerParts{cursor: cur, glyph: gateGlyph(g), text: fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g))})
+	head := header(headerParts{cursor: cur, glyph: gateGlyph(g), text: fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g))}, lipgloss.Style{})
 	if !expanded {
 		if last := lastLine(g.Output); last != "" {
 			return []string{head, indented(last)}

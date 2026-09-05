@@ -30,6 +30,26 @@ func TestConvertGateRunJoinsBoundedOutput(t *testing.T) {
 	}
 }
 
+// TestConvertGateRunExpandsTabsToSpaces proves a raw `go test` line, which
+// tab-separates the package path from the run time, renders with a visible
+// space between the two: the pane's renderer treats a bare tab as zero
+// width, so a run time such as "7.376s" would otherwise sit flush against
+// the package path.
+func TestConvertGateRunExpandsTabsToSpaces(t *testing.T) {
+	run := storage.GateRun{
+		Name:   "test",
+		Stdout: "ok  \tgithub.com/Teagan42/forge/internal/workspace\t7.376s\n",
+	}
+	row := ConvertGateRun(run)
+	if strings.Contains(row.Output, "\t") {
+		t.Fatalf("output keeps a raw tab: %q", row.Output)
+	}
+	want := "ok   github.com/Teagan42/forge/internal/workspace 7.376s"
+	if row.Output != want {
+		t.Fatalf("output = %q, want %q", row.Output, want)
+	}
+}
+
 func TestConvertGateRunBoundsOutputLines(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < maxGateOutputLines+10; i++ {

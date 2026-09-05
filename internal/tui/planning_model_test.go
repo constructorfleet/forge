@@ -98,6 +98,16 @@ func TestPlanningModelPollTickFetchesAndRenders(t *testing.T) {
 	}
 }
 
+// TestPlanningModelViewRunsInAltScreen proves the planning view claims the
+// terminal's alternate screen buffer, so a frame taller than the last never
+// scrolls earlier frames above the visible window.
+func TestPlanningModelViewRunsInAltScreen(t *testing.T) {
+	m, _ := planningFixture(t, domain.PlanningStatusActive)
+	if !m.View().AltScreen {
+		t.Fatal("View().AltScreen = false, want true")
+	}
+}
+
 // TestPlanningModelNeverAcceptsCancelKey proves the planning model has no
 // cancel control: pressing 'c' does nothing, whatever the Feature's status.
 func TestPlanningModelNeverAcceptsCancelKey(t *testing.T) {
