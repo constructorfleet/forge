@@ -124,6 +124,7 @@ func NewPlanningModel(r *PlanningRoster, featureID string, poll time.Duration) *
 		Roster:    r,
 		FeatureID: featureID,
 		poll:      poll,
+		vm:        PlanningViewModel{Style: DefaultStyle()},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -232,6 +233,9 @@ func (m *PlanningModel) applyRoster(msg planningRosterReadMsg) {
 	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 	vm.ActionNotice = m.vm.ActionNotice
 	vm.TranscriptNotice = m.vm.TranscriptNotice
+	// The colour scheme is set once at construction; a poll's fresh view-model
+	// carries the zero Style, so copy it over or every poll would render plain.
+	vm.Style = m.vm.Style
 	m.vm = vm
 }
 

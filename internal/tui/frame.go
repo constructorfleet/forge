@@ -167,6 +167,12 @@ type ViewModel struct {
 	// rows the chrome leaves, so the frame never draws past the terminal bottom.
 	// Zero means the runtime has sent no size yet and Render clips nothing.
 	Height int
+
+	// Style is the frame's colour scheme: the selected row, the footer keys, and
+	// the notices render through it. The zero value applies no colour, which
+	// every headless render test relies on; the live view sets forge's real
+	// scheme.
+	Style Style
 }
 
 // KeyBinding is one legal key and its label, rendered in the footer.
@@ -248,25 +254,25 @@ func TranscriptRows(vm ViewModel) int {
 // transcript and the rows below it.
 func chromeLines(vm ViewModel) (above, below []string) {
 	for i, row := range vm.Workers {
-		above = append(above, rowLine(row, i == vm.Selection))
+		above = append(above, rowLine(row, i == vm.Selection, vm.Style))
 	}
 	// A notice also carries a failed poll pass, which holds the last good rows.
 	// It must render with those rows, or the failure is invisible.
 	if vm.Notice != "" {
-		above = append(above, vm.Notice)
+		above = append(above, vm.Style.Notice.Render(vm.Notice))
 	}
 	// The notice renders above the pane, so the failure sits with the transcript
 	// it describes and a long pane cannot push the two apart.
 	if vm.TranscriptNotice != "" {
-		above = append(above, vm.TranscriptNotice)
+		above = append(above, vm.Style.Notice.Render(vm.TranscriptNotice))
 	}
 	if vm.ActionNotice != "" {
-		above = append(above, vm.ActionNotice)
+		above = append(above, vm.Style.Notice.Render(vm.ActionNotice))
 	}
 	if strip, ok := stripLine(vm); ok {
 		below = append(below, strip)
 	}
-	return above, append(below, footerLine(frameKeys(vm)))
+	return above, append(below, footerLine(frameKeys(vm), vm.Style))
 }
 
 // assembleFrame joins the chrome rows above and below the transcript with the
@@ -373,14 +379,18 @@ func selectedWorker(vm ViewModel) (WorkerRow, bool) {
 
 // rowLine renders one Worker. Cursor marks the selection; the coarse state and
 // issue id are fixed-width so the title takes whatever width remains.
-func rowLine(row WorkerRow, selected bool) string {
+func rowLine(row WorkerRow, selected bool, style Style) string {
 	cur := " "
 	if selected {
 		cur = ">"
 	}
 	att := AttentionGlyph(DeriveAttention(row.State, row.Tool))
 	live := LivenessGlyph(DeriveLiveness(row.HasHeartbeat, row.HeartbeatAge))
-	return fmt.Sprintf("%s %s %s %-8s %-10s %s", cur, att, live, row.State.Group(), row.IssueID, row.Title)
+	line := fmt.Sprintf("%s %s %s %-8s %-10s %s", cur, att, live, row.State.Group(), row.IssueID, row.Title)
+	if selected {
+		return style.Selection.Render(line)
+	}
+	return line
 }
 
 // detailLine renders the verbatim state, elapsed, heartbeat age, attempt
@@ -402,11 +412,13 @@ func detailLine(row WorkerRow) string {
 		row.State, formatDuration(row.Elapsed), beat, row.Attempt, row.Budget, tool, verdict)
 }
 
-// footerLine joins legal keys into one space-separated footer.
-func footerLine(keys []KeyBinding) string {
+// footerLine joins legal keys into one space-separated footer. style colours
+// the [k] key token apart from its label. A zero style renders each key as
+// KeyBinding.String does, so a headless footer stays plain.
+func footerLine(keys []KeyBinding, style Style) string {
 	parts := make([]string, len(keys))
 	for i, k := range keys {
-		parts[i] = k.String()
+		parts[i] = style.Key.Render("["+k.Key+"]") + " " + k.Label
 	}
 	return strings.Join(parts, " ")
 }

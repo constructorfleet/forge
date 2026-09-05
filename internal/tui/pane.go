@@ -470,7 +470,7 @@ func RenderTranscript(p *TranscriptPane) string {
 		}
 	}
 	if p.view.Evicted {
-		writeWrapped(evictionLine(p.view.Dropped))
+		writeWrapped(p.style.Truncation.Render(evictionLine(p.view.Dropped)))
 	}
 	attempts := attemptNumbers(p.view.RunOrder)
 	divide := len(p.view.RunOrder) > 1
@@ -480,7 +480,7 @@ func RenderTranscript(p *TranscriptPane) string {
 		// carries no attempt number and draws no divider rather than a wrong one.
 		if divide && !e.IsGate() && (i == 0 || e.Event.AgentRunID != prevRun) {
 			if n, ok := attempts[e.Event.AgentRunID]; ok {
-				writeWrapped(fmt.Sprintf("── attempt %d ──", n))
+				writeWrapped(p.style.Truncation.Render(fmt.Sprintf("── attempt %d ──", n)))
 			}
 		}
 		if !e.IsGate() {
@@ -522,26 +522,27 @@ func entryLines(e TranscriptEntry, selected, expanded bool, style Style) []strin
 		cur = ">"
 	}
 	if e.Gate != nil {
-		return gateLines(*e.Gate, cur, expanded)
+		return gateLines(*e.Gate, cur, expanded, style)
 	}
 	glyph := TranscriptGlyph(e.Event)
 	switch e.Event.Type {
 	case eventToolCall:
-		return toolCallLines(e, cur, glyph, expanded, style.Tool)
+		return toolCallLines(e, cur, glyph, expanded, style)
 	case eventToolResult:
-		return withFirstOutput([]string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style.Tool)}, e.Event.ToolOutput)
+		return withFirstOutput([]string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style.Tool, style.Axis)}, e.Event.ToolOutput)
 	case eventTruncation:
-		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)}, lipgloss.Style{})}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)}, style.Truncation, style.Axis)}
 	default:
-		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)}, style.Message)}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)}, style.Message, style.Axis)}
 	}
 }
 
 // toolCallLines renders a tool call: collapsed to its name plus the first
 // output line of its result, or expanded to the whole call and result. style
-// colours both the call's and the result's header.
-func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style lipgloss.Style) []string {
-	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style)}
+// colours both the call's and the result's header through style.Tool, with the
+// axis label apart in style.Axis.
+func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style Style) []string {
+	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style.Tool, style.Axis)}
 	if !expanded {
 		if e.Result != nil {
 			lines = withFirstOutput(lines, e.Result.ToolOutput)
@@ -550,7 +551,7 @@ func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style li
 	}
 	lines = append(lines, indentedBlock(e.Event.ToolInput)...)
 	if e.Result != nil {
-		lines = append(lines, header(headerParts{cursor: " ", glyph: TranscriptGlyph(*e.Result), axis: e.Result.Subagent, text: e.Result.ToolName}, style))
+		lines = append(lines, header(headerParts{cursor: " ", glyph: TranscriptGlyph(*e.Result), axis: e.Result.Subagent, text: e.Result.ToolName}, style.Tool, style.Axis))
 		lines = append(lines, indentedBlock(e.Result.ToolOutput)...)
 	}
 	return lines
@@ -611,17 +612,22 @@ type headerParts struct {
 }
 
 // header renders one entry's first line: cursor, glyph column, inline axis
-// label, then text, through style. The three review axes interleave in the
-// one pane, so every entry kind carries its label from here: the label is the
-// only separation. The zero Style applies no colour, so a headless render
-// stays plain.
-func header(h headerParts, style lipgloss.Style) string {
-	label := ""
-	if h.axis != "" {
-		label = "[" + h.axis + "] "
+// label, then text. textStyle colours the cursor, glyph, and text; axisStyle
+// colours the [axis] label apart from them, so the review axis reads as its own
+// hue. The three review axes interleave in the one pane, so every entry kind
+// carries its label from here: the label is the only separation. A zero
+// textStyle and a zero axisStyle both apply no colour, so a headless render
+// stays plain and byte-identical.
+func header(h headerParts, textStyle, axisStyle lipgloss.Style) string {
+	left := fmt.Sprintf("%s %s", h.cursor, h.glyph)
+	if h.axis == "" {
+		return textStyle.Render(strings.TrimRight(left+" "+h.text, " "))
 	}
-	line := strings.TrimRight(fmt.Sprintf("%s %s %s%s", h.cursor, h.glyph, label, h.text), " ")
-	return style.Render(line)
+	line := textStyle.Render(left) + " " + axisStyle.Render("["+h.axis+"]")
+	if h.text != "" {
+		line += " " + textStyle.Render(h.text)
+	}
+	return line
 }
 
 // indented renders one continuation line under an entry's header.
