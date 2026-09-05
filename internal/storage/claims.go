@@ -87,6 +87,26 @@ func (s *SQLiteStore) UpdateWorkerOwner(ctx context.Context, executionID, issueI
 	return nil
 }
 
+// ClearWorkerOwner zeroes owner_pid and owner_token for every active Worker
+// claim owned by pid, across every Execution. A process that exits cleanly
+// calls this before it exits, so a stale pid does not sit in the owner
+// columns waiting for a later process to prove it is gone through the
+// process-identity test (issue 457). A no-op pid (<= 0) does nothing.
+func (s *SQLiteStore) ClearWorkerOwner(ctx context.Context, pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE workers
+		SET owner_pid = 0, owner_token = ''
+		WHERE owner_pid = ?`,
+		pid,
+	); err != nil {
+		return fmt.Errorf("storage: clear worker owner for pid %d: %w", pid, err)
+	}
+	return nil
+}
+
 // WorkerClaim reloads the active Worker claim for one Issue.
 func (s *SQLiteStore) WorkerClaim(ctx context.Context, executionID, issueID string) (WorkerClaim, error) {
 	row := s.db.QueryRowContext(ctx, `

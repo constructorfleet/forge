@@ -431,6 +431,13 @@ type Store interface {
 	// executionID. Releasing a missing claim is a no-op.
 	ReleaseWorkerClaim(ctx context.Context, executionID, issueID string) error
 
+	// ClearWorkerOwner zeroes owner_pid and owner_token for every active
+	// Worker claim owned by pid, across every Execution. A cleanly exiting
+	// process calls this so a stale pid does not wait for a later process's
+	// identity test to prove it is gone (issue 457). A no-op pid (<= 0) does
+	// nothing.
+	ClearWorkerOwner(ctx context.Context, pid int) error
+
 	// HeartbeatWorker stamps the active Worker claim for issueID within
 	// executionID with the time it was last observed alive. Display-only:
 	// no state machine or loss-detection logic reads it, but the TUI's

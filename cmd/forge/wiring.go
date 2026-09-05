@@ -90,6 +90,19 @@ func openStore(ctx context.Context, dbPath string) (*storage.SQLiteStore, error)
 	return store, nil
 }
 
+// clearOwnedWorkerClaims zeroes owner_pid and owner_token for every Worker
+// claim this process's own pid still owns (issue 563). `forge execute` and
+// `forge resume` call this right before they exit, so a clean shutdown
+// closes the stale-pid window itself rather than leaving it for a later
+// process's process-identity check (issue 457) to detect. It reports a
+// failure rather than returning it, because a cleanup step must never turn
+// an otherwise successful run into a failed exit code.
+func clearOwnedWorkerClaims(ctx context.Context, store *storage.SQLiteStore) {
+	if err := store.ClearWorkerOwner(ctx, os.Getpid()); err != nil {
+		fmt.Fprintf(os.Stderr, "forge: %v\n", err)
+	}
+}
+
 // buildEngine wires the concrete adapters (GitHub tracker, git-worktree
 // Workspace manager, Agent per cfg.Agent.Provider) behind engine.Engine's
 // interfaces. Engine's core flow never imports these packages directly;

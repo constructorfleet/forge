@@ -527,3 +527,66 @@ func TestTransitionIssueRecordsStateChangedAt(t *testing.T) {
 		t.Fatalf("StateChangedAt mismatch: %v vs %v", reloaded.StateChangedAt, got.StateChangedAt)
 	}
 }
+
+// TestClearWorkerOwnerZeroesOwnerColumnsForPID pins issue 563: a clean
+// process shutdown zeroes owner_pid and owner_token for every claim the
+// exiting pid owns, rather than leaving a stale pid discoverable until the
+// claim is separately released.
+func TestClearWorkerOwnerZeroesOwnerColumnsForPID(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateReady)
+
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.UpdateWorkerOwner(ctx, "exec-1", "issue-1", 4242, "token-a"); err != nil {
+		t.Fatalf("UpdateWorkerOwner: %v", err)
+	}
+
+	if err := store.ClearWorkerOwner(ctx, 4242); err != nil {
+		t.Fatalf("ClearWorkerOwner: %v", err)
+	}
+
+	claim, err := store.WorkerClaim(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if claim.OwnerPID != 0 {
+		t.Fatalf("OwnerPID = %d, want 0", claim.OwnerPID)
+	}
+	if claim.OwnerToken != "" {
+		t.Fatalf("OwnerToken = %q, want empty", claim.OwnerToken)
+	}
+}
+
+// TestClearWorkerOwnerLeavesOtherPIDsUntouched pins that clearing one pid's
+// owned claims does not disturb a claim owned by a different, still-live
+// process.
+func TestClearWorkerOwnerLeavesOtherPIDsUntouched(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-1", "issue-1", domain.StateReady)
+
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.UpdateWorkerOwner(ctx, "exec-1", "issue-1", 4242, "token-a"); err != nil {
+		t.Fatalf("UpdateWorkerOwner: %v", err)
+	}
+
+	if err := store.ClearWorkerOwner(ctx, 9999); err != nil {
+		t.Fatalf("ClearWorkerOwner: %v", err)
+	}
+
+	claim, err := store.WorkerClaim(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if claim.OwnerPID != 4242 {
+		t.Fatalf("OwnerPID = %d, want 4242", claim.OwnerPID)
+	}
+	if claim.OwnerToken != "token-a" {
+		t.Fatalf("OwnerToken = %q, want %q", claim.OwnerToken, "token-a")
+	}
+}
