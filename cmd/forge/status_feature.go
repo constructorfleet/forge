@@ -6,13 +6,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/decisiongraph"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planning"
+	"github.com/Teagan42/forge/internal/planningfs"
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -21,7 +21,7 @@ import (
 // to route to the feature-scoped report instead of treating id as an
 // Execution ID.
 func isFeatureID(id, repoRoot string) bool {
-	info, err := os.Stat(filepath.Join(repoRoot, ".forge", "features", id))
+	info, err := os.Stat(planningfs.FeatureDir(repoRoot, id))
 	return err == nil && info.IsDir()
 }
 

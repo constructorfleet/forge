@@ -22,8 +22,13 @@ type FileArtifactLoader struct {
 	RepoRoot string
 }
 
+// FeatureDir returns the Planning Artifact directory for a Feature.
+func FeatureDir(repoRoot, featureID string) string {
+	return filepath.Join(repoRoot, ".forge", "features", featureID)
+}
+
 func (f *FileArtifactLoader) featureDir(featureID string) string {
-	return filepath.Join(f.RepoRoot, ".forge", "features", featureID)
+	return FeatureDir(f.RepoRoot, featureID)
 }
 
 // LoadGoal reads and parses the Feature's goal Artifact.

@@ -26,6 +26,14 @@ func chdirTemp(t *testing.T, dir string) {
 	})
 }
 
+func TestFeatureDirResolvesUnderRepoRoot(t *testing.T) {
+	got := FeatureDir("/repo", "widget")
+	want := filepath.Join("/repo", ".forge", "features", "widget")
+	if got != want {
+		t.Fatalf("FeatureDir = %q, want %q", got, want)
+	}
+}
+
 func TestFileArtifactLoader_SaveGoal_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)

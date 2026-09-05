@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
@@ -44,16 +43,7 @@ func runStatus(args []string) int {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
 		return 1
 	}
-	explicitDB := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "db" {
-			explicitDB = true
-		}
-	})
-	resolvedDBPath := *dbPath
-	if !explicitDB {
-		resolvedDBPath = filepath.Join(repoRoot, defaultDBPath)
-	}
+	_, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, defaultConfigPath, *dbPath)
 
 	// A single argument naming a Feature (one with a
 	// .forge/features/<id> Planning Artifact directory) is `forge status

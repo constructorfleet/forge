@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/planning"
+	"github.com/Teagan42/forge/internal/planningfs"
 )
 
 const goalUsage = `Usage: forge goal init <feature-id> [--force] [--from <path>] [--from-issue [<n>]] [--edit]
@@ -58,7 +59,7 @@ func runGoalInit(args []string) int {
 		return 1
 	}
 
-	path := filepath.Join(repoRoot, ".forge", "features", featureID, "goal.md")
+	path := filepath.Join(planningfs.FeatureDir(repoRoot, featureID), "goal.md")
 	if !force {
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(os.Stderr, "forge goal init: %s already exists; rerun with --force to overwrite\n", path)
