@@ -198,6 +198,22 @@ func (s *SQLiteStore) AgentRunsByIssue(ctx context.Context, executionID, issueID
 	return scanAgentRuns(rows, fmt.Sprintf("storage: agent runs for issue %s/%s", executionID, issueID))
 }
 
+// LatestAgentRunID returns the id of the Issue's most recently recorded
+// AgentRun, so a caller recording a GateRun can tag it to the attempt it
+// belongs to (issue 596). It returns nil, not an error, when the Issue has
+// no recorded AgentRun yet.
+func LatestAgentRunID(ctx context.Context, store Store, executionID, issueID string) (*int64, error) {
+	runs, err := store.AgentRunsByIssue(ctx, executionID, issueID)
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	id := runs[len(runs)-1].ID
+	return &id, nil
+}
+
 func scanAgentRuns(rows *sql.Rows, contextMsg string) ([]AgentRun, error) {
 	defer func() { _ = rows.Close() }()
 

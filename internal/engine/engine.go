@@ -1446,6 +1446,11 @@ func (c *reviewTranscriptCoordinator) finalize(coverage []review.AxisCoverage) {
 // the same fact by comparing the returned Issue's State against
 // domain.StateReviewing.
 func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, issue domain.Issue) (_ domain.Issue, passed bool, _ []gate.Result, failed *gate.Result, _ error) {
+	agentRunID, err := storage.LatestAgentRunID(ctx, e.Store, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, false, nil, nil, fmt.Errorf("engine: load latest agent run for issue %s: %w", issueID, err)
+	}
+
 	var results []gate.Result
 	for _, g := range e.Config.Quality.Gates {
 		res, err := e.runQualityGate(ctx, env, g)
@@ -1471,6 +1476,7 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID strin
 			Stdout:      res.Stdout,
 			Stderr:      res.Stderr,
 			Passed:      res.Passed,
+			AgentRunID:  agentRunID,
 		}); err != nil {
 			return domain.Issue{}, false, nil, nil, fmt.Errorf("engine: record gate run %s for issue %s: %w", res.Name, issueID, err)
 		}

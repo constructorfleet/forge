@@ -34,6 +34,11 @@ type GateRow struct {
 	// FinishedAt is the run's finish time. It orders the rows and feeds the
 	// cross-poll key, so a retry of one gate keeps its own identity.
 	FinishedAt time.Time
+	// AgentRunID is the AgentRun this gate row belongs to, so
+	// currentAttemptGateRuns can scope rows to the current attempt by id.
+	// Nil for a row recorded outside any AgentRun, or for one persisted
+	// before gate_runs carried this column.
+	AgentRunID *int64
 	// key identifies the row across polls, so a pinned selection holds it.
 	// gateEntries is the one place that derives it (see gateEntries).
 	key string
@@ -49,6 +54,7 @@ func ConvertGateRun(run storage.GateRun) GateRow {
 		Passed:     run.Passed,
 		Output:     boundGateOutput(run.Stdout, run.Stderr),
 		FinishedAt: run.FinishedAt,
+		AgentRunID: run.AgentRunID,
 	}
 }
 
@@ -66,22 +72,30 @@ func ConvertGateRuns(runs []storage.GateRun) []GateRow {
 	return rows
 }
 
-// currentAttemptGateRuns keeps only the gate rows that ran during the Issue's
+// currentAttemptGateRuns keeps only the gate rows that belong to the Issue's
 // latest recorded AgentRun, dropping rows from an earlier, reimplemented
-// attempt. A gate run carries no AgentRun id to join against (gate_runs has
-// no such column), so this joins on time instead: a gate that finished before
-// the latest AgentRun started belongs to an earlier attempt and must not
-// linger in the pane once that attempt has been superseded. With no recorded
-// AgentRun yet (a planning or gate-only Issue), every row is kept, because
-// there is no later attempt to have superseded it.
+// attempt. A gate row recorded with an AgentRunID (gate_runs.agent_run_id)
+// is kept only if it names the latest AgentRun's id — a direct join, not a
+// heuristic. A gate row with no AgentRunID (recorded before that column
+// existed, or outside any AgentRun) falls back to the pre-existing
+// time-window heuristic: a gate that finished before the latest AgentRun
+// started belongs to an earlier attempt. With no recorded AgentRun yet (a
+// planning or gate-only Issue), every row is kept, because there is no
+// later attempt to have superseded it.
 func currentAttemptGateRuns(runs []storage.AgentRun, gates []GateRow) []GateRow {
 	if len(runs) == 0 {
 		return gates
 	}
-	latestStart := runs[len(runs)-1].StartedAt
+	latest := runs[len(runs)-1]
 	kept := make([]GateRow, 0, len(gates))
 	for _, g := range gates {
-		if !g.FinishedAt.Before(latestStart) {
+		if g.AgentRunID != nil {
+			if *g.AgentRunID == latest.ID {
+				kept = append(kept, g)
+			}
+			continue
+		}
+		if !g.FinishedAt.Before(latest.StartedAt) {
 			kept = append(kept, g)
 		}
 	}

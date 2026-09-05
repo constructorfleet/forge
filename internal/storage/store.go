@@ -76,6 +76,12 @@ type GateRun struct {
 	Stdout      string
 	Stderr      string
 	Passed      bool
+	// AgentRunID is the AgentRun this gate run belongs to, so a reader can
+	// scope gate rows to one attempt by id instead of by a time-window
+	// heuristic. Nil for a gate run recorded outside any AgentRun (e.g. a
+	// conflict-repair candidate) or for a row written before this field
+	// existed.
+	AgentRunID *int64
 }
 
 // AgentRun is one persisted implementation-agent invocation for an Issue.

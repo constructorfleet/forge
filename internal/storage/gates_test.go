@@ -97,6 +97,80 @@ func TestRecordGateRun_PersistsAndAppendsEvent(t *testing.T) {
 	}
 }
 
+func TestRecordGateRun_PersistsAgentRunID(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForGateRun(t, store, "exec-gate-agent", "issue-gate-agent")
+
+	agentRunID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-gate-agent",
+		IssueID:     "issue-gate-agent",
+		Backend:     "test-backend",
+		StartedAt:   time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	started := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	run := storage.GateRun{
+		ExecutionID: "exec-gate-agent",
+		IssueID:     "issue-gate-agent",
+		Name:        "lint",
+		Command:     "make lint",
+		StartedAt:   started,
+		FinishedAt:  started.Add(time.Second),
+		ExitCode:    0,
+		Passed:      true,
+		AgentRunID:  &agentRunID,
+	}
+	if err := store.RecordGateRun(ctx, run); err != nil {
+		t.Fatalf("RecordGateRun: %v", err)
+	}
+
+	runs, err := store.GateRunsByIssue(ctx, "exec-gate-agent", "issue-gate-agent")
+	if err != nil {
+		t.Fatalf("GateRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d gate runs, want 1", len(runs))
+	}
+	if runs[0].AgentRunID == nil || *runs[0].AgentRunID != agentRunID {
+		t.Errorf("AgentRunID = %v, want %d", runs[0].AgentRunID, agentRunID)
+	}
+}
+
+func TestRecordGateRun_NilAgentRunIDPersistsAsNil(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForGateRun(t, store, "exec-gate-noagent", "issue-gate-noagent")
+
+	run := storage.GateRun{
+		ExecutionID: "exec-gate-noagent",
+		IssueID:     "issue-gate-noagent",
+		Name:        "lint",
+		Command:     "make lint",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		ExitCode:    0,
+		Passed:      true,
+	}
+	if err := store.RecordGateRun(ctx, run); err != nil {
+		t.Fatalf("RecordGateRun: %v", err)
+	}
+
+	runs, err := store.GateRunsByIssue(ctx, "exec-gate-noagent", "issue-gate-noagent")
+	if err != nil {
+		t.Fatalf("GateRunsByIssue: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d gate runs, want 1", len(runs))
+	}
+	if runs[0].AgentRunID != nil {
+		t.Errorf("AgentRunID = %v, want nil", runs[0].AgentRunID)
+	}
+}
+
 func TestRecordGateRun_MultipleRunsOrderedByInsertion(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
