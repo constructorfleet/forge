@@ -99,11 +99,27 @@ func runRetry(args []string) int {
 
 // reportRetryError reports err and returns the exit code for it. A retry
 // another actor already claimed is a no-op, not a failure: it prints on out
-// and exits 0. Every other error prints on errOut and exits 1.
+// and exits 0. A retry whose claim committed but whose start deferred to the
+// scheduler (engine.RetryStartDeferredError) is likewise not a failure: the
+// Issue is claimed and will run, so it also prints on out and exits 0. A
+// retry that got stuck mid-resume (engine.RetryResumeStuckError) is a real
+// failure: the Issue needs an explicit `forge resume`, so it prints on
+// errOut and exits 1. Every other error also prints on errOut and exits 1.
 func reportRetryError(out, errOut io.Writer, executionID, issueID string, err error) int {
 	if errors.Is(err, engine.ErrRetryAlreadyClaimed) {
 		fmt.Fprintf(out, "issue %s/%s: another actor already claimed this retry; nothing to do\n", executionID, issueID)
 		return 0
+	}
+	var deferred *engine.RetryStartDeferredError
+	if errors.As(err, &deferred) {
+		fmt.Fprintf(out, "issue %s/%s: retry claimed; start deferred to the scheduler: %v\n", executionID, issueID, deferred.Err)
+		return 0
+	}
+	var stuck *engine.RetryResumeStuckError
+	if errors.As(err, &stuck) {
+		fmt.Fprintf(errOut, "forge retry: issue %s/%s: retry claimed but stuck mid-resume at %s; run forge resume %s: %v\n",
+			executionID, issueID, stuck.State, executionID, stuck.Err)
+		return 1
 	}
 	fmt.Fprintf(errOut, "forge retry: %v\n", err)
 	return 1
