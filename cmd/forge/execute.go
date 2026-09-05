@@ -75,6 +75,7 @@ func runExecute(args []string) int {
 		return 1
 	}
 	defer func() { _ = store.Close() }()
+	defer clearOwnedWorkerClaims(context.Background(), store)
 
 	val, set := tui.wasSet()
 	useTUI := shouldUseTUI(val, set, isTerminalSession())

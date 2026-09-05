@@ -94,6 +94,48 @@ func TestOpenStore_CreatesParentDirAndMigrates(t *testing.T) {
 	}
 }
 
+// TestClearOwnedWorkerClaims_ZeroesOwnerColumnsForThisProcess pins issue
+// 563: `forge execute`/`forge resume` call this helper on a clean exit, so a
+// claim this process still owns does not keep a stale pid discoverable
+// after the process is gone.
+func TestClearOwnedWorkerClaims_ZeroesOwnerColumnsForThisProcess(t *testing.T) {
+	store := openPlanningStore(t)
+	ctx := context.Background()
+
+	if err := store.CreateExecution(ctx, domain.Execution{ID: "exec-1", BaseRevision: "base"}); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := store.CreateIssue(ctx, domain.Issue{
+		ID:          "issue-1",
+		ExecutionID: "exec-1",
+		Title:       "clear owner",
+		State:       domain.StateReady,
+		Scope:       domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(config.Default().Retry),
+	}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if err := store.ClaimIssue(ctx, "exec-1", "issue-1", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.UpdateWorkerOwner(ctx, "exec-1", "issue-1", os.Getpid(), "token-a"); err != nil {
+		t.Fatalf("UpdateWorkerOwner: %v", err)
+	}
+
+	clearOwnedWorkerClaims(ctx, store)
+
+	claim, err := store.WorkerClaim(ctx, "exec-1", "issue-1")
+	if err != nil {
+		t.Fatalf("WorkerClaim: %v", err)
+	}
+	if claim.OwnerPID != 0 {
+		t.Fatalf("OwnerPID = %d, want 0", claim.OwnerPID)
+	}
+	if claim.OwnerToken != "" {
+		t.Fatalf("OwnerToken = %q, want empty", claim.OwnerToken)
+	}
+}
+
 func TestResolveBaseRevision_ResolvesRefToSHA(t *testing.T) {
 	root, base := newTempRepo(t)
 

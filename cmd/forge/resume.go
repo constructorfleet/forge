@@ -57,6 +57,7 @@ func runResume(args []string) int {
 		return 1
 	}
 	defer func() { _ = store.Close() }()
+	defer clearOwnedWorkerClaims(context.Background(), store)
 
 	// First try to resume as a coding execution
 	eng, err := buildEngine(store, cfg, repoRoot)
