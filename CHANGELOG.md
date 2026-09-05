@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.2](https://github.com/constructorfleet/forge/compare/forge-v0.48.1...forge-v0.48.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* TUI: add Bubble Tea v2 framework and the pure frame renderer ([#675](https://github.com/constructorfleet/forge/issues/675)) ([2719993](https://github.com/constructorfleet/forge/commit/27199936309fdc7195154c29f08c95922825ab6d))
+
 ## [0.48.1](https://github.com/constructorfleet/forge/compare/forge-v0.48.0...forge-v0.48.1) (2026-09-05)
 
 
