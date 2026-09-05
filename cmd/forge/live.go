@@ -25,13 +25,16 @@ type liveStore interface {
 // without touching the store. canceller wires the cancel key to the
 // in-process operational Engine (ADR 0031); a nil canceller leaves the
 // control present but inert, and the key explains itself instead of quietly
-// doing nothing.
-func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller) error {
+// doing nothing. retrier wires the retry key to a detached forge child
+// (ADR 0031, issue #503); a nil retrier leaves that control present but
+// inert too.
+func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier) error {
 	roster := tui.NewRoster(store, time.Now)
 	model := tui.NewLiveModel(roster, executionID, 0)
 	model.SetContext(ctx)
 	model.SetFeed(tui.NewTranscriptFeed(store))
 	model.Canceller = canceller
+	model.Retrier = retrier
 
 	// A quit key removes the diff artifacts itself; this covers every other
 	// exit path (cancellation, signal, panic).

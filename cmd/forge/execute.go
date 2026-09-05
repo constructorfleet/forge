@@ -104,7 +104,8 @@ func runExecute(args []string) int {
 
 	if useTUI {
 		canceller := buildOperationalEngine(store, cfg, repoRoot)
-		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, canceller)
+		retrier := resolveRetrier(*configPath, *dbPath)
+		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, canceller, retrier)
 	}
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)
@@ -115,12 +116,12 @@ func runExecute(args []string) int {
 // in the background. The roster is the observer: quitting it early (q/Ctrl+C)
 // never cancels the run; when Scheduler.Run returns, the roster is stopped and
 // the final per-Issue states are printed.
-func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, canceller tui.Canceller) int {
+func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, canceller tui.Canceller, retrier tui.Retrier) int {
 	rosterCtx, cancelRoster := context.WithCancel(context.Background())
 	defer cancelRoster()
 	rosterDone := make(chan error, 1)
 	go func() {
-		rosterDone <- runLiveRoster(rosterCtx, store, executionID, canceller)
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID, canceller, retrier)
 	}()
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)

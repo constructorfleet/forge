@@ -81,6 +81,14 @@ type LiveModel struct {
 	// key press on the same call cannot double-issue it.
 	cancelling bool
 
+	// Retrier spawns a detached forge retry child. Nil disables the control:
+	// the retry key then explains itself instead of silently doing nothing.
+	Retrier Retrier
+
+	// retrying records a Retry call in flight, so a second retry key press on
+	// the same call cannot double-issue it.
+	retrying bool
+
 	// winHeight is the last terminal height the runtime reported. Zero means the
 	// runtime has sent no size yet: the frame then clips nothing and the tailer
 	// keeps its own default.
@@ -152,6 +160,9 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.MatchString("d") && m.vm.Focus == PaneRoster {
 			return m, m.openSelectedDiff()
 		}
+		if key.MatchString("r") && m.vm.Focus == PaneRoster {
+			return m, m.startRetry()
+		}
 		m.handleTranscriptKey(key)
 	case diffNoticeMsg:
 		m.vm.ActionNotice = msg.text
@@ -163,6 +174,8 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case cancelResultMsg:
 		m.applyCancelResult(msg)
+	case retryResultMsg:
+		m.applyRetryResult(msg)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
 		m.removeDiffArtifacts()

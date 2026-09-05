@@ -31,6 +31,7 @@ import (
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/tracker/gitlab"
 	"github.com/Teagan42/forge/internal/tracker/linear"
+	"github.com/Teagan42/forge/internal/tui"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -1024,6 +1025,74 @@ func TestVerifyTrackerAuth_SkipAuthPreflightIsAnEscapeHatch(t *testing.T) {
 
 	if err := verifyTrackerAuth(context.Background(), cfg, root); err != nil {
 		t.Fatalf("verifyTrackerAuth with SkipAuthPreflight: want nil, got %v", err)
+	}
+}
+
+// TestResolveRetrier_ResolvesConfigAndDBRelativeToCWDNotRepoRoot covers the
+// review finding for issue #503: runExecute/runWatch load --config/--db as
+// typed, relative to the process's own working directory (loadConfig/
+// openStore never join them onto the discovered repo root). When the process
+// runs from a subdirectory of the repo, the retry child's absolute
+// --config/--db must match that same subdirectory-relative resolution, not
+// the git top level, or the child would target a different config and
+// database than the one the running Execution actually uses (the #459 bug
+// class). The child's own working directory (RepoRoot) is still the git top
+// level, independent of where --config/--db point.
+func TestResolveRetrier_ResolvesConfigAndDBRelativeToCWDNotRepoRoot(t *testing.T) {
+	repoRoot, _ := newTempRepo(t)
+	sub := filepath.Join(repoRoot, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	chdir(t, sub)
+
+	retrier := resolveRetrier("relative.yaml", "relative.db")
+
+	pr, ok := retrier.(tui.ProcessRetrier)
+	if !ok {
+		t.Fatalf("resolveRetrier returned %T, want tui.ProcessRetrier", retrier)
+	}
+	// macOS temp dirs resolve through a symlink (/tmp -> /private/tmp);
+	// resolve the (existing) directory, then join the file name, as
+	// TestDiscoverRepoRoot_ResolvesTopLevelFromSubdirectory does for repoRoot.
+	subResolved, err := filepath.EvalSymlinks(sub)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(sub): %v", err)
+	}
+	wantConfig := filepath.Join(subResolved, "relative.yaml")
+	wantDB := filepath.Join(subResolved, "relative.db")
+	configDirResolved, err := filepath.EvalSymlinks(filepath.Dir(pr.ConfigPath))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(ConfigPath dir): %v", err)
+	}
+	if got := filepath.Join(configDirResolved, filepath.Base(pr.ConfigPath)); got != wantConfig {
+		t.Fatalf("ConfigPath = %q, want %q (resolved against cwd, matching what runExecute/runWatch actually load)", got, wantConfig)
+	}
+	dbDirResolved, err := filepath.EvalSymlinks(filepath.Dir(pr.DBPath))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(DBPath dir): %v", err)
+	}
+	if got := filepath.Join(dbDirResolved, filepath.Base(pr.DBPath)); got != wantDB {
+		t.Fatalf("DBPath = %q, want %q (resolved against cwd, matching what runExecute/runWatch actually load)", got, wantDB)
+	}
+	repoRootResolved, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(repoRoot): %v", err)
+	}
+	gotRepoRoot, err := filepath.EvalSymlinks(pr.RepoRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(pr.RepoRoot): %v", err)
+	}
+	if gotRepoRoot != repoRootResolved {
+		t.Fatalf("RepoRoot = %q, want the git top level %q", gotRepoRoot, repoRootResolved)
+	}
+}
+
+func TestResolveRetrier_NilOutsideGitRepo(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	if retrier := resolveRetrier(defaultConfigPath, defaultDBPath); retrier != nil {
+		t.Fatalf("resolveRetrier outside a git repo = %v, want nil", retrier)
 	}
 }
 
