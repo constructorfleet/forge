@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
@@ -30,12 +31,38 @@ func runRetry(args []string) int {
 		return 2
 	}
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge retry: %v\n", err)
 		return 1
 	}
-	cfg, err := loadConfig(*configPath)
+	if msg, stale := staleBinaryWarning(repoRoot, buildCommit); stale {
+		fmt.Fprintln(os.Stderr, msg)
+	}
+
+	// --config/--db default to cwd-relative paths (defaultConfigPath,
+	// defaultDBPath); an explicit override is used as typed, but the
+	// unmodified default is instead resolved against the discovered repo
+	// root, so a subdirectory run finds the real .forge.yaml/forge.db
+	// rather than a fresh, empty one under the subdirectory.
+	explicitConfig, explicitDB := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "config":
+			explicitConfig = true
+		case "db":
+			explicitDB = true
+		}
+	})
+	resolvedConfigPath, resolvedDBPath := *configPath, *dbPath
+	if !explicitConfig {
+		resolvedConfigPath = filepath.Join(repoRoot, defaultConfigPath)
+	}
+	if !explicitDB {
+		resolvedDBPath = filepath.Join(repoRoot, defaultDBPath)
+	}
+
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge retry: %v\n", err)
 		return 1
@@ -44,7 +71,12 @@ func runRetry(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	store, err := openStore(ctx, *dbPath)
+	if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "forge retry: %v\n", err)
+		return 1
+	}
+
+	store, err := openStore(ctx, resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge retry: %v\n", err)
 		return 1
