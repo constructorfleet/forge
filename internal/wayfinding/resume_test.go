@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -179,6 +180,35 @@ func TestResumeDecision_OlderComment_StaysNeedsHuman(t *testing.T) {
 	}
 }
 
+func TestResumeDecision_SharedAccountHumanReply_Resumes(t *testing.T) {
+	store := openResumeTestStore(t)
+	seedResumeExecution(t, store, "plan-exec-1", "42")
+	trackerDouble := newFakeResumeTracker()
+
+	checkpointTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	seedDecisionCheckpoint(t, store, "plan-exec-1", "001-vendor", "Which vendor?", checkpointTime, "shared-bot")
+
+	trackerDouble.comments["42"] = []tracker.Comment{
+		{
+			Author:    "shared-bot",
+			Body:      needsinfo.CommentMarker(needsinfo.KindNeedsHuman, "plan-exec-1", "001-vendor") + "\n\nWhich vendor?",
+			CreatedAt: checkpointTime,
+		},
+		// Posted from the same shared account as forge's own comment, but
+		// this is a genuine human answer -- it carries no forge marker.
+		{Author: "shared-bot", Body: "Use vendor A", CreatedAt: checkpointTime.Add(time.Hour)},
+	}
+
+	ctx := context.Background()
+	result, err := wayfinding.ResumeDecision(ctx, store, trackerDouble, "plan-exec-1", "001-vendor", time.Now)
+	if err != nil {
+		t.Fatalf("ResumeDecision: %v", err)
+	}
+	if !result.Resumed {
+		t.Fatal("Resumed = false, want true: a human answer posted from forge's own account must not be dropped")
+	}
+}
+
 func TestResumeDecision_NoCheckpoint_ReturnsError(t *testing.T) {
 	store := openResumeTestStore(t)
 	seedResumeExecution(t, store, "plan-exec-1", "42")
@@ -202,7 +232,11 @@ func TestResumeDecision_ClockSkewAndOwnComment_DoesNotFalseTrigger(t *testing.T)
 	seedDecisionCheckpoint(t, store, "plan-exec-1", "001-vendor", "Which vendor?", trackerTime, "forge-bot")
 
 	trackerDouble.comments["42"] = []tracker.Comment{
-		{Author: "forge-bot", Body: "original comment", CreatedAt: trackerTime},
+		{
+			Author:    "forge-bot",
+			Body:      needsinfo.CommentMarker(needsinfo.KindNeedsHuman, "plan-exec-1", "001-vendor") + "\n\noriginal comment",
+			CreatedAt: trackerTime,
+		},
 	}
 
 	ctx := context.Background()

@@ -172,7 +172,7 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	if len(needsInfo.comments) != 1 {
 		t.Fatalf("comments = %d, want 1", len(needsInfo.comments))
 	}
-	if !strings.Contains(needsInfo.comments[0], needsinfo.CommentMarker("exec-conflict", "30")) {
+	if !strings.Contains(needsInfo.comments[0], needsinfo.CommentMarker(needsinfo.KindNeedsInfo, "exec-conflict", "30")) {
 		t.Fatalf("comment body missing needs-info marker: %s", needsInfo.comments[0])
 	}
 

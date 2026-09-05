@@ -5,12 +5,13 @@
 -- `forge resume` can detect new human input and the NEEDS_INFO handling
 -- itself stays idempotent across repeats.
 --
--- comment_author/comment_posted_at record the tracker-server-clock
--- identity/timestamp of forge's own posted comment (as returned by
--- tracker.Tracker.AddComment), not a locally captured value — `forge
--- resume` compares candidate "new" comments against these rather than
--- created_at (a local clock) to avoid false-positive resumes from
--- local/tracker clock skew, and excludes forge's own comment by author.
+-- comment_posted_at records the tracker-server-clock timestamp of forge's
+-- own posted comment (as returned by tracker.Tracker.AddComment), not a
+-- locally captured value — `forge resume` compares candidate "new"
+-- comments against it rather than created_at (a local clock) to avoid
+-- false-positive resumes from local/tracker clock skew. comment_author is
+-- audit data only: `forge resume` excludes forge's own comment by its
+-- needsinfo.CommentMarker content, not by author.
 CREATE TABLE needs_info_checkpoints (
     execution_id      TEXT NOT NULL,
     issue_id          TEXT NOT NULL,

@@ -3,6 +3,7 @@ package wayfinding_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Teagan42/forge/internal/decisiongraph"
 	"github.com/Teagan42/forge/internal/decisionresolution"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -131,6 +133,11 @@ func TestPauseHandler_Handle_PostsChecksAndSetsStatus(t *testing.T) {
 	}
 	if got := trackerDouble.CommentCount("42"); got != 1 {
 		t.Errorf("CommentCount(42) = %d, want 1", got)
+	}
+	posted := trackerDouble.comments["42"][0]
+	wantMarker := needsinfo.CommentMarker(needsinfo.KindNeedsHuman, "plan-exec-1", "001-vendor")
+	if !strings.Contains(posted.Body, wantMarker) {
+		t.Errorf("posted comment body = %q, want it to contain marker %q", posted.Body, wantMarker)
 	}
 
 	checkpoint, err := store.GetDecisionCheckpoint(context.Background(), "plan-exec-1", "001-vendor")

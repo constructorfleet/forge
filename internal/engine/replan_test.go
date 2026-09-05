@@ -279,7 +279,7 @@ func TestExecute_ReplanRequired_FreezesReopensAndParksIssue(t *testing.T) {
 			t.Errorf("comment missing %q:\n%s", want, body)
 		}
 	}
-	if !needsinfo.IsForgeComment(body, result.ExecutionID, "7") {
+	if !needsinfo.IsForgeComment(body, needsinfo.KindNeedsInfo, result.ExecutionID, "7") {
 		t.Errorf("replan comment body does not carry forge's hidden marker: %s", body)
 	}
 

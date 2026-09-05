@@ -225,7 +225,7 @@ func (e *Engine) handleReplanRequired(ctx context.Context, executionID, issueID,
 
 	if e.Config.Blocked.Comment && e.NeedsInfoTracker != nil && !checkpoint.CommentPosted {
 		body := replanCommentBody(result.Replan, result.Summary, featureID)
-		body = needsinfo.AppendCommentMarker(body, executionID, issueID)
+		body = needsinfo.AppendCommentMarker(body, needsinfo.KindNeedsInfo, executionID, issueID)
 		posted, err := e.NeedsInfoTracker.AddComment(ctx, issueID, body)
 		if err != nil {
 			return domain.Issue{}, fmt.Errorf("engine: post replan comment on issue %s: %w", issueID, err)
