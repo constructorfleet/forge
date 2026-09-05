@@ -54,6 +54,7 @@ func Parse(raw []byte) (*Artifact, error) {
 		ApprovedRevision: meta.ApprovedRevision,
 		ApprovedBy:       meta.ApprovedBy,
 		ApprovedAt:       meta.ApprovedAt,
+		ReviewedRevision: meta.ReviewedRevision,
 		DerivedFrom:      derivedFrom,
 		Estimates:        estimates,
 		TicketKinds:      ticketKinds,

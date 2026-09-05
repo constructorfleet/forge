@@ -38,6 +38,7 @@ func Render(a *Artifact) []byte {
 		ApprovedRevision: a.ApprovedRevision,
 		ApprovedBy:       a.ApprovedBy,
 		ApprovedAt:       a.ApprovedAt,
+		ReviewedRevision: a.ReviewedRevision,
 		Kind:             string(a.Kind),
 		DerivedFrom:      derived,
 		Estimates:        estimates,

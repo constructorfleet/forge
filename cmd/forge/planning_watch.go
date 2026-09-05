@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Teagan42/forge/internal/planningapprove"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tui"
 )
@@ -25,7 +26,7 @@ func buildPlanningModel(ctx context.Context, store *storage.SQLiteStore, plannin
 	roster := tui.NewPlanningRoster(store)
 	model := tui.NewPlanningModel(roster, pe.FeatureID, 0)
 	model.SetFeed(tui.NewTranscriptFeed(store))
-	model.Approver = &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
+	model.Approver = &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}, Locks: repolock.New(repoRoot)}
 	model.Answerer = answerer
 	return model, nil
 }

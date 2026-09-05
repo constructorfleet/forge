@@ -15,6 +15,7 @@ import (
 	"github.com/Teagan42/forge/internal/initdiscovery"
 	"github.com/Teagan42/forge/internal/planningapprove"
 	"github.com/Teagan42/forge/internal/planningfs"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -165,8 +166,9 @@ specification's content revision (computed from Kind, DerivedFrom, and Sections)
 If the specification's definitional content is edited, its revision changes and
 the approval is automatically invalidated.
 
-This command requires that the Specification has passed automated review
-(VerdictApproved from SpecificationReview).
+This command requires that the Specification has passed automated review.
+SpecificationReview must return VerdictApproved, or its findings must not
+recur after every retry.
 `
 
 func runApprove(args []string) int {
@@ -203,7 +205,7 @@ func runApprove(args []string) int {
 		return 1
 	}
 
-	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}, Locks: repolock.New(repoRoot)}
 
 	currentRev, err := approver.ApproveSpec(ctx, featureID)
 	if err != nil {
@@ -222,8 +224,9 @@ ticket plan's content revision (computed from Kind, DerivedFrom, and Sections).
 If the ticket plan's definitional content is edited, its revision changes and
 the approval is automatically invalidated.
 
-This command requires that the Ticket Plan has passed automated review
-(VerdictApproved from TicketPlanReview).
+This command requires that the Ticket Plan has passed automated review.
+TicketPlanReview must return VerdictApproved, or its findings must not
+recur after every retry.
 `
 
 func runApproveTickets(args []string) int {
@@ -260,7 +263,7 @@ func runApproveTickets(args []string) int {
 		return 1
 	}
 
-	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}, Locks: repolock.New(repoRoot)}
 
 	result, err := approver.ApproveTicketPlan(ctx, featureID)
 	if err != nil {

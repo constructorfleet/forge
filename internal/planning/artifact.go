@@ -46,10 +46,11 @@ type Section struct {
 
 // Artifact is the parsed form of a Planning Artifact file.
 //
-// Revision, State, ApprovedRevision, ApprovedBy, and ApprovedAt are
-// workflow fields: they record process state but do not participate in the
-// content revision. Kind, DerivedFrom, Estimates, TicketKinds, and Sections are
-// definitional: they are exactly what ComputeRevision hashes.
+// Revision, State, ApprovedRevision, ApprovedBy, ApprovedAt, and
+// ReviewedRevision are workflow fields: they record process state but do
+// not participate in the content revision. Kind, DerivedFrom, Estimates,
+// TicketKinds, and Sections are definitional: they are exactly what
+// ComputeRevision hashes.
 type Artifact struct {
 	Kind Kind
 
@@ -66,6 +67,12 @@ type Artifact struct {
 	ApprovedRevision string
 	ApprovedBy       string
 	ApprovedAt       string
+
+	// ReviewedRevision is the content revision that passed automated
+	// review, if any. Reviewed compares it against the recomputed content
+	// revision, so a content edit after review invalidates the review the
+	// same way it invalidates approval.
+	ReviewedRevision string
 
 	DerivedFrom []DerivedFromEntry
 	Estimates   map[string]TicketEstimate

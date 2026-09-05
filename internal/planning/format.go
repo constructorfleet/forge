@@ -15,6 +15,7 @@ type metaBlock struct {
 	ApprovedRevision string                    `yaml:"approved_revision"`
 	ApprovedBy       string                    `yaml:"approved_by"`
 	ApprovedAt       string                    `yaml:"approved_at"`
+	ReviewedRevision string                    `yaml:"reviewed_revision"`
 	Kind             string                    `yaml:"kind"`
 	DerivedFrom      []derivedYAML             `yaml:"derived_from,omitempty"`
 	Estimates        map[string]TicketEstimate `yaml:"estimates,omitempty"`
