@@ -570,10 +570,13 @@ type Store interface {
 	// transactionally.
 	RecordReviewRun(ctx context.Context, run ReviewRun) error
 
-	// ReviewRunsByIssue returns every ReviewRun recorded for one Issue
-	// within an Execution, ordered by insertion (i.e. execution order), each
-	// with its Findings populated.
-	ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]ReviewRun, error)
+	// ReviewRunsByIssueWithoutDiff returns every ReviewRun recorded for one
+	// Issue within an Execution, ordered by insertion (i.e. execution
+	// order), each with its Findings and Envelopes populated and its Diff
+	// left empty, so a caller that only reads verdict/summary/Findings/
+	// Envelopes never loads the (often large) diff blob. Callers that need
+	// one run's diff read it separately with LatestReviewDiff.
+	ReviewRunsByIssueWithoutDiff(ctx context.Context, executionID, issueID string) ([]ReviewRun, error)
 
 	// RecordReviewOverride persists a non-convergent review finding (issue
 	// #375), keyed by IssueID alone so it survives into a new Execution for

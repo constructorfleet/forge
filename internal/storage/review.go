@@ -91,76 +91,143 @@ func appendReviewRunEvent(ctx context.Context, tx *sql.Tx, run ReviewRun) error 
 	})
 }
 
-// ReviewRunsByIssue returns every ReviewRun recorded for one Issue within an
-// Execution, ordered by insertion, each with its Findings populated.
-// ReviewRunsByIssue issues one findings query per ReviewRun (N+1) rather
-// than a single join. Acceptable for now: an Issue accumulates at most a
-// handful of ReviewRuns (one per Review invocation, bounded by the review
-// retry ceiling — CONTEXT.md "Retry Budget"), not an unbounded collection,
-// so this stays a small, fixed number of round trips per call rather than
-// scaling with data volume. Revisit with a single review_runs/
-// review_findings join (grouping rows as they're scanned, ordered by run
-// id then finding id) if that assumption stops holding.
-func (s *SQLiteStore) ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]ReviewRun, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, execution_id, issue_id, verdict, summary, diff, started_at, finished_at
-		FROM review_runs
-		WHERE execution_id = ? AND issue_id = ?
-		ORDER BY id`,
-		executionID, issueID,
-	)
+// ReviewRunsByIssueWithoutDiff returns every ReviewRun recorded for one
+// Issue within an Execution, ordered by insertion, each with its Findings
+// and Envelopes populated and its Diff left empty. Callers that need one
+// run's diff read it separately with LatestReviewDiff.
+func (s *SQLiteStore) ReviewRunsByIssueWithoutDiff(ctx context.Context, executionID, issueID string) ([]ReviewRun, error) {
+	runs, order, err := s.reviewRunsWithFindings(ctx, executionID, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	type indexedRun struct {
-		id  int64
-		run ReviewRun
-	}
-	var runs []indexedRun
-	for rows.Next() {
-		var (
-			id  int64
-			run ReviewRun
-		)
-		if err := rows.Scan(
-			&id, &run.ExecutionID, &run.IssueID, &run.Verdict, &run.Summary, &run.Diff,
-			&run.StartedAt, &run.FinishedAt,
-		); err != nil {
-			return nil, fmt.Errorf("storage: scan review run: %w", err)
-		}
-		run.StartedAt = run.StartedAt.UTC()
-		run.FinishedAt = run.FinishedAt.UTC()
-		runs = append(runs, indexedRun{id: id, run: run})
-	}
-	if err := rows.Err(); err != nil {
+	if err := s.attachReviewAxisEnvelopes(ctx, executionID, issueID, runs); err != nil {
 		return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
 	}
 
-	out := make([]ReviewRun, len(runs))
-	for i, ir := range runs {
-		findings, err := s.reviewFindingsByRun(ctx, ir.id)
-		if err != nil {
-			return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
-		}
-		ir.run.Findings = findings
-
-		envelopes, err := s.reviewAxisEnvelopesByRun(ctx, ir.id)
-		if err != nil {
-			return nil, fmt.Errorf("storage: review runs for issue %s/%s: %w", executionID, issueID, err)
-		}
-		ir.run.Envelopes = envelopes
-
-		out[i] = ir.run
+	out := make([]ReviewRun, len(order))
+	for i, id := range order {
+		out[i] = runs[id]
 	}
 	return out, nil
 }
 
+// reviewRunsWithFindings runs the review_runs/review_findings join and
+// returns each ReviewRun keyed by its row id, plus the ids in run order, so
+// the caller can attach Envelopes and then flatten to a slice. review_runs
+// is the left side of the join, so a ReviewRun with no Findings still
+// yields exactly one row, via a NULL right side, rather than disappearing
+// from the result.
+func (s *SQLiteStore) reviewRunsWithFindings(ctx context.Context, executionID, issueID string) (map[int64]ReviewRun, []int64, error) {
+	rows, err := s.db.QueryContext(ctx, reviewRunsFindingsQuery, executionID, issueID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	runs := map[int64]ReviewRun{}
+	var order []int64
+	for rows.Next() {
+		var (
+			id             int64
+			run            ReviewRun
+			sev, file, msg sql.NullString
+			line           sql.NullInt64
+		)
+		if err := rows.Scan(
+			&id, &run.ExecutionID, &run.IssueID, &run.Verdict, &run.Summary,
+			&run.StartedAt, &run.FinishedAt, &sev, &file, &line, &msg,
+		); err != nil {
+			return nil, nil, fmt.Errorf("scan review run: %w", err)
+		}
+
+		existing, seen := runs[id]
+		if !seen {
+			run.StartedAt = run.StartedAt.UTC()
+			run.FinishedAt = run.FinishedAt.UTC()
+			existing = run
+			order = append(order, id)
+		}
+		if sev.Valid {
+			existing.Findings = append(existing.Findings, ReviewFinding{
+				Severity: sev.String, File: file.String, Line: int(line.Int64), Message: msg.String,
+			})
+		}
+		runs[id] = existing
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return runs, order, nil
+}
+
+// attachReviewAxisEnvelopes runs the review_runs/review_axis_envelopes join
+// and appends each row's ReviewAxisEnvelope onto its ReviewRun in runs, in
+// the axis order the rows were originally inserted in.
+func (s *SQLiteStore) attachReviewAxisEnvelopes(ctx context.Context, executionID, issueID string, runs map[int64]ReviewRun) error {
+	rows, err := s.db.QueryContext(ctx, reviewRunsEnvelopesQuery, executionID, issueID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			id          int64
+			axis        sql.NullString
+			ran         sql.NullBool
+			reason      sql.NullString
+			inputTokens sql.NullInt64
+			outTokens   sql.NullInt64
+			rawEnvelope sql.NullString
+		)
+		if err := rows.Scan(&id, &axis, &ran, &reason, &inputTokens, &outTokens, &rawEnvelope); err != nil {
+			return fmt.Errorf("scan review axis envelope: %w", err)
+		}
+		if !axis.Valid {
+			continue
+		}
+		run, ok := runs[id]
+		if !ok {
+			continue
+		}
+		env := ReviewAxisEnvelope{Axis: axis.String, Ran: ran.Bool, Reason: reason.String, RawEnvelope: rawEnvelope.String}
+		if inputTokens.Valid {
+			v := int(inputTokens.Int64)
+			env.InputTokens = &v
+		}
+		if outTokens.Valid {
+			v := int(outTokens.Int64)
+			env.OutputTokens = &v
+		}
+		run.Envelopes = append(run.Envelopes, env)
+		runs[id] = run
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+const reviewRunsFindingsQuery = `
+	SELECT r.id, r.execution_id, r.issue_id, r.verdict, r.summary, r.started_at, r.finished_at,
+	       f.severity, f.file, f.line, f.message
+	FROM review_runs r
+	LEFT JOIN review_findings f ON f.review_run_id = r.id
+	WHERE r.execution_id = ? AND r.issue_id = ?
+	ORDER BY r.id, f.id`
+
+const reviewRunsEnvelopesQuery = `
+	SELECT r.id, e.axis, e.ran, e.reason, e.input_tokens, e.output_tokens, e.raw_envelope
+	FROM review_runs r
+	LEFT JOIN review_axis_envelopes e ON e.review_run_id = r.id
+	WHERE r.execution_id = ? AND r.issue_id = ?
+	ORDER BY r.id, e.id`
+
 // LatestReviewOutcome returns the current Review verdict for one Issue and
 // whether that run stored a diff. It reads one row and returns no diff body, so
 // a per-second poll costs the same whatever the review history holds. Use
-// ReviewRunsByIssue only where the caller needs the runs themselves.
+// ReviewRunsByIssueWithoutDiff where the caller needs the runs themselves,
+// or LatestReviewDiff where it needs the diff body.
 func (s *SQLiteStore) LatestReviewOutcome(ctx context.Context, executionID, issueID string) (ReviewOutcome, error) {
 	var out ReviewOutcome
 	err := s.db.QueryRowContext(ctx, `
@@ -205,73 +272,4 @@ func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID
 		return "", fmt.Errorf("storage: latest review diff for issue %s/%s: %w", executionID, issueID, err)
 	}
 	return diff, nil
-}
-
-func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64) ([]ReviewFinding, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT severity, file, line, message
-		FROM review_findings
-		WHERE review_run_id = ?
-		ORDER BY id`,
-		reviewRunID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var findings []ReviewFinding
-	for rows.Next() {
-		var f ReviewFinding
-		if err := rows.Scan(&f.Severity, &f.File, &f.Line, &f.Message); err != nil {
-			return nil, fmt.Errorf("scan review finding: %w", err)
-		}
-		findings = append(findings, f)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return findings, nil
-}
-
-// reviewAxisEnvelopesByRun returns every ReviewAxisEnvelope recorded for one
-// ReviewRun (issue #162), ordered by insertion — the same one-row-per-axis
-// order Reviewer.Review's fan-out wrote them in.
-func (s *SQLiteStore) reviewAxisEnvelopesByRun(ctx context.Context, reviewRunID int64) ([]ReviewAxisEnvelope, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT axis, ran, reason, input_tokens, output_tokens, raw_envelope
-		FROM review_axis_envelopes
-		WHERE review_run_id = ?
-		ORDER BY id`,
-		reviewRunID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	var envelopes []ReviewAxisEnvelope
-	for rows.Next() {
-		var (
-			e           ReviewAxisEnvelope
-			inputTokens sql.NullInt64
-			outTokens   sql.NullInt64
-		)
-		if err := rows.Scan(&e.Axis, &e.Ran, &e.Reason, &inputTokens, &outTokens, &e.RawEnvelope); err != nil {
-			return nil, fmt.Errorf("scan review axis envelope: %w", err)
-		}
-		if inputTokens.Valid {
-			v := int(inputTokens.Int64)
-			e.InputTokens = &v
-		}
-		if outTokens.Valid {
-			v := int(outTokens.Int64)
-			e.OutputTokens = &v
-		}
-		envelopes = append(envelopes, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return envelopes, nil
 }

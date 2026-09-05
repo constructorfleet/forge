@@ -191,9 +191,9 @@ func TestExecute_ReviewChangesRequired_RetriesThenApprovedReachesCommitting(t *t
 		t.Fatalf("got %d reviewer invocations, want 2", len(invocations))
 	}
 
-	runs, err := te.store.ReviewRunsByIssue(ctx, result.ExecutionID, "41")
+	runs, err := te.store.ReviewRunsByIssueWithoutDiff(ctx, result.ExecutionID, "41")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 2 || runs[0].Verdict != "CHANGES_REQUIRED" || runs[1].Verdict != "APPROVED" {
 		t.Fatalf("persisted review runs = %+v, want [CHANGES_REQUIRED, APPROVED]", runs)
