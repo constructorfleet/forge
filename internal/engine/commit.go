@@ -162,18 +162,29 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 		return domain.Issue{}, err
 	}
 	message := e.commitMessage(issue, summary)
+	// Commit and Push are network/IO calls with no per-line transcript output
+	// of their own for touchWorkerActivity to key off directly (unlike an
+	// Agent invocation), so without this bracket a long-but-healthy git
+	// operation would masquerade as a wedged Agent once it outlasts
+	// HeartbeatStallAfter (constructorfleet/forge#463), mirroring
+	// runQualityGates' bracket around each gate command.
+	stopKeepAlive := e.keepWorkerActivityFresh(ctx, executionID, issueID)
 	sha, err := e.Publisher.Commit(ctx, env, message)
 	if err != nil {
+		stopKeepAlive()
 		return domain.Issue{}, fmt.Errorf("engine: commit issue %s: %w", issueID, err)
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "commit.created", map[string]string{
 		"sha": sha,
 	}); err != nil {
+		stopKeepAlive()
 		return domain.Issue{}, err
 	}
 
-	if err := e.Publisher.Push(ctx, env, ws.Branch); err != nil {
-		return domain.Issue{}, fmt.Errorf("engine: push branch %s for issue %s: %w", ws.Branch, issueID, err)
+	pushErr := e.Publisher.Push(ctx, env, ws.Branch)
+	stopKeepAlive()
+	if pushErr != nil {
+		return domain.Issue{}, fmt.Errorf("engine: push branch %s for issue %s: %w", ws.Branch, issueID, pushErr)
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "branch.pushed", map[string]string{
 		"branch": ws.Branch,
@@ -203,12 +214,14 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 	if err != nil {
 		return domain.Issue{}, err
 	}
+	stopKeepAlive = e.keepWorkerActivityFresh(ctx, executionID, issueID)
 	pr, err := e.PRTracker.CreatePullRequest(ctx, tracker.PullRequestRequest{
 		Base:  base,
 		Head:  ws.Branch,
 		Title: prTitle(issue),
 		Body:  prBody(issue, summary),
 	})
+	stopKeepAlive()
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: create pull request for issue %s: %w", issueID, err)
 	}
