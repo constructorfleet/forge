@@ -59,6 +59,17 @@ type PlanningViewModel struct {
 	// layer unifies across phases (agent_runs/transcript_events share one
 	// shape). Nil renders the stage strip alone.
 	Transcript *TranscriptPane
+
+	// TranscriptLagAge is the time since the transcript pane's last
+	// committed read, as ViewModel.TranscriptLagAge. DeriveTranscriptLag
+	// compares it against PollInterval to mark the pane header, so a
+	// planning transcript that suffers the same slow-store thinning as the
+	// live roster's is visible to the operator too.
+	TranscriptLagAge time.Duration
+
+	// PollInterval is the model's own poll cadence, as ViewModel.PollInterval.
+	PollInterval time.Duration
+
 	// Focus names the pane that owns the detail strip and the footer.
 	Focus Pane
 	// Height is the terminal height in rows, as ViewModel.Height.
@@ -123,6 +134,12 @@ func planningChromeLines(vm PlanningViewModel) (above, below []string) {
 	}
 	if vm.TranscriptNotice != "" {
 		above = append(above, vm.Style.Notice.Render(vm.TranscriptNotice))
+	}
+	// A lagging transcript renders here too, mirroring chromeLines: a store
+	// slower than the poll cadence sits with the pane it describes rather
+	// than hiding behind a stage strip that keeps ticking at its own rate.
+	if DeriveTranscriptLag(vm.TranscriptLagAge, vm.PollInterval) {
+		above = append(above, vm.Style.Notice.Render(transcriptLagLine(vm.TranscriptLagAge)))
 	}
 	if vm.ActionNotice != "" {
 		above = append(above, vm.Style.Notice.Render(vm.ActionNotice))

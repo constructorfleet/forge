@@ -96,3 +96,25 @@ func TestRenderPlanningEmptyHistoryShowsNotice(t *testing.T) {
 		t.Fatalf("no controls should be legal against an empty history, got %q", out)
 	}
 }
+
+// TestRenderPlanningMarksTranscriptHeaderWhenLagging proves the planning
+// frame marks its transcript pane header once the last committed read is
+// older than transcriptLagMultiple poll intervals, mirroring
+// TestRenderMarksTranscriptHeaderWhenLagging for the live roster: a planning
+// transcript can suffer the same slow-store thinning as the live one.
+func TestRenderPlanningMarksTranscriptHeaderWhenLagging(t *testing.T) {
+	vm := tui.PlanningViewModel{PollInterval: time.Second, TranscriptLagAge: 4 * time.Second}
+	if got := tui.RenderPlanning(vm); !strings.Contains(got, "lagging") {
+		t.Fatalf("RenderPlanning does not mark a lagging transcript:\n%s", got)
+	}
+}
+
+// TestRenderPlanningOmitsLagMarkerUnderThreshold proves the header stays
+// quiet while the last committed read is still within transcriptLagMultiple
+// poll intervals, mirroring TestRenderOmitsLagMarkerUnderThreshold.
+func TestRenderPlanningOmitsLagMarkerUnderThreshold(t *testing.T) {
+	vm := tui.PlanningViewModel{PollInterval: time.Second, TranscriptLagAge: time.Second}
+	if got := tui.RenderPlanning(vm); strings.Contains(got, "lagging") {
+		t.Fatalf("RenderPlanning marks lag under the threshold:\n%s", got)
+	}
+}

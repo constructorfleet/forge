@@ -9,6 +9,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planningagent"
@@ -34,11 +35,18 @@ type PlanningRosterStore interface {
 // PlanningViewModel on demand.
 type PlanningRoster struct {
 	Store PlanningRosterStore
+
+	// Now is the clock PlanningModel measures its transcript pane's commit
+	// age against (see PlanningModel's lastCommit), mirroring Roster.Now.
+	// Planning claims no heartbeat liveness, so Fetch itself never reads
+	// this clock — only the model's own lag stamping does. Defaults to
+	// time.Now.
+	Now func() time.Time
 }
 
 // NewPlanningRoster builds a PlanningRoster over store.
 func NewPlanningRoster(store PlanningRosterStore) *PlanningRoster {
-	return &PlanningRoster{Store: store}
+	return &PlanningRoster{Store: store, Now: time.Now}
 }
 
 // Fetch performs one poll pass: it reloads featureID's planning AgentRuns

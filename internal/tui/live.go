@@ -66,9 +66,9 @@ type LiveModel struct {
 	// holds before the first commit. transcriptLagAge measures against it, so
 	// a store slower than the poll interval — which transcriptController's
 	// reading gates to one at a time — surfaces as a growing age instead of a
-	// silently thinned refresh rate. LiveModel owns this: PlanningModel has no
-	// lag indicator to feed, so the field stays out of the shared
-	// transcriptController.
+	// silently thinned refresh rate. PlanningModel keeps its own lastCommit
+	// for the same reason, so the field stays out of the shared
+	// transcriptController rather than serving both from one copy.
 	lastCommit time.Time
 
 	// OpenDiff defers a diff to $PAGER, writing its artifact under the given

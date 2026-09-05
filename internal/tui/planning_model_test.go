@@ -251,6 +251,62 @@ func planningFeedFixture(featureID string) *fakeFeedStore {
 	}
 }
 
+// TestPlanningModelMarksHeaderWhenTranscriptReadOutlivesPoll proves the
+// planning frame marks its transcript pane header once a read has outlived
+// several poll intervals, mirroring
+// TestLiveModelMarksHeaderWhenTranscriptReadOutlivesPoll: the planning
+// transcript can suffer the same slow-store thinning as the live roster's,
+// via the transcriptController read-in-flight guard the two models share.
+func TestPlanningModelMarksHeaderWhenTranscriptReadOutlivesPoll(t *testing.T) {
+	clock := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &fakePlanningRosterStore{
+		runs: []storage.AgentRun{
+			{ID: 1, ExecutionID: "feat-1", IssueID: "feat-1", Backend: "planning", FinishedAt: clock},
+		},
+		events: map[int64][]storage.TranscriptEvent{
+			1: {{Subagent: "decision-resolution"}},
+		},
+		executions: []domain.PlanningExecution{
+			{ID: "planexec-1", FeatureID: "feat-1", Status: domain.PlanningStatusActive},
+		},
+	}
+	roster := tui.NewPlanningRoster(store)
+	roster.Now = func() time.Time { return clock }
+	poll := time.Second
+	m := tui.NewPlanningModel(roster, "feat-1", poll)
+	m.SetFeed(tui.NewTranscriptFeed(planningFeedFixture("feat-1")))
+
+	// The first tick commits a read: the pane shows real content and the
+	// model records the commit at clock.
+	planningNextPollTick(t, m)
+	if got := m.View().Content; !strings.Contains(got, "starting work") {
+		t.Fatalf("the first tick did not commit a transcript read:\n%s", got)
+	}
+
+	// The second tick starts a read it never finishes (the returned command
+	// is never invoked), mirroring a store slower than the poll interval.
+	cmd := m.Init()
+	_, cmd2 := m.Update(cmd())
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("a poll tick must schedule the read and the next tick")
+	}
+	if _, next := m.Update(batch[0]()); next == nil {
+		t.Fatal("the roster read did not start a transcript read")
+	}
+
+	if got := m.View().Content; strings.Contains(got, "lagging") {
+		t.Fatalf("the frame marks lag before the outstanding read ages past the threshold:\n%s", got)
+	}
+
+	clock = clock.Add(4 * poll)
+	planningNextPollTick(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, "lagging") {
+		t.Fatalf("the frame never marks the pane header once the read has outlived several polls:\n%s", got)
+	}
+}
+
 // TestPlanningModelWindowSizeSetsTranscriptHeight proves the terminal size
 // reaches the planning feed's tailer, mirroring
 // TestLiveModelWindowSizeSetsTranscriptHeight: a short terminal drops the
