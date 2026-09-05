@@ -187,6 +187,7 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 
 		if reviewResult.Verdict == specreview.VerdictApproved {
 			// Spec approved by automated review, save and return
+			planning.MarkReviewed(specArtifact)
 			if err := loader.SaveSpec(ctx, featureID, specArtifact); err != nil {
 				return fmt.Errorf("specengine: save spec: %w", err)
 			}
@@ -206,6 +207,7 @@ func (e *SpecEngine) runSpecReviewAndRepair(
 			// genuine defect, and the spec already passed deterministic
 			// validation. Save it rather than hard-failing the feature on
 			// reviewer noise.
+			planning.MarkReviewed(specArtifact)
 			if err := loader.SaveSpec(ctx, featureID, specArtifact); err != nil {
 				return fmt.Errorf("specengine: save spec: %w", err)
 			}
@@ -491,6 +493,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 
 		if reviewResult.Verdict == ticketplanreview.VerdictApproved {
 			// Ticket plan approved by automated review, save and return
+			planning.MarkReviewed(tpArtifact)
 			if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
 				return fmt.Errorf("specengine: save ticket plan: %w", err)
 			}
@@ -510,6 +513,7 @@ func (e *SpecEngine) runTicketPlanReviewAndRepair(
 			// genuine defect, and the ticket plan already passed
 			// deterministic validation. Save it rather than hard-failing
 			// the feature on reviewer noise.
+			planning.MarkReviewed(tpArtifact)
 			if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
 				return fmt.Errorf("specengine: save ticket plan: %w", err)
 			}

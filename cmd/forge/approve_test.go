@@ -26,7 +26,8 @@ func TestApproveTickets_BindsToRevisionAndInvalidatesOnEdit(t *testing.T) {
 	featureID := "widget"
 
 	tpArtifact := &planning.Artifact{
-		Kind: planning.KindTicketPlan,
+		Kind:  planning.KindTicketPlan,
+		State: "reviewed",
 		DerivedFrom: []planning.DerivedFromEntry{
 			{Kind: planning.KindSpec, ID: "spec", Revision: "spec-rev"},
 		},
@@ -35,6 +36,7 @@ func TestApproveTickets_BindsToRevisionAndInvalidatesOnEdit(t *testing.T) {
 		},
 	}
 	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
+	tpArtifact.ReviewedRevision = tpArtifact.Revision
 	writeTicketPlanFixture(t, dir, featureID, tpArtifact)
 
 	cmd := exec.Command(bin, "approve", featureID, "tickets")
@@ -81,21 +83,25 @@ func TestApprove_DispatchesSpecAndTicketsIndependently(t *testing.T) {
 	featureID := "widget"
 
 	specArtifact := &planning.Artifact{
-		Kind: planning.KindSpec,
+		Kind:  planning.KindSpec,
+		State: "reviewed",
 		Sections: []planning.Section{
 			{Heading: "Requirements", Body: "REQ-001: do the thing\n"},
 		},
 	}
 	specArtifact.Revision = planning.ComputeRevision(specArtifact)
+	specArtifact.ReviewedRevision = specArtifact.Revision
 	writeSpecFixture(t, dir, featureID, specArtifact)
 
 	tpArtifact := &planning.Artifact{
-		Kind: planning.KindTicketPlan,
+		Kind:  planning.KindTicketPlan,
+		State: "reviewed",
 		Sections: []planning.Section{
 			{Heading: "Ticket: TKT-001", Body: "### Objective\nDo the thing.\n"},
 		},
 	}
 	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
+	tpArtifact.ReviewedRevision = tpArtifact.Revision
 	writeTicketPlanFixture(t, dir, featureID, tpArtifact)
 
 	specCmd := exec.Command(bin, "approve", featureID, "spec")
@@ -138,12 +144,14 @@ func TestApproveSpec_FromSubdirectoryApprovesRepoRootSpec(t *testing.T) {
 	}
 
 	specArtifact := &planning.Artifact{
-		Kind: planning.KindSpec,
+		Kind:  planning.KindSpec,
+		State: "reviewed",
 		Sections: []planning.Section{
 			{Heading: "Requirements", Body: "REQ-001: do the thing\n"},
 		},
 	}
 	specArtifact.Revision = planning.ComputeRevision(specArtifact)
+	specArtifact.ReviewedRevision = specArtifact.Revision
 	writeSpecFixture(t, dir, featureID, specArtifact)
 
 	cmd := exec.Command(bin, "approve", featureID, "spec")
@@ -270,7 +278,8 @@ func TestApproveTickets_SupersedesDroppedIssuesAndUnfreezesFeature(t *testing.T)
 
 	// The new plan keeps TKT-001 and drops TKT-002.
 	tpArtifact := &planning.Artifact{
-		Kind: planning.KindTicketPlan,
+		Kind:  planning.KindTicketPlan,
+		State: "reviewed",
 		Sections: []planning.Section{{
 			Heading: "Ticket: TKT-001",
 			Body: "### Objective\nDo the thing.\n\n### Requirements\nREQ-001: do it\n\n" +
@@ -278,6 +287,7 @@ func TestApproveTickets_SupersedesDroppedIssuesAndUnfreezesFeature(t *testing.T)
 		}},
 	}
 	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
+	tpArtifact.ReviewedRevision = tpArtifact.Revision
 	writeTicketPlanFixture(t, dir, featureID, tpArtifact)
 
 	cmd := exec.Command(bin, "approve", featureID, "tickets")

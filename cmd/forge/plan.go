@@ -16,6 +16,7 @@ import (
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/replan"
 	"github.com/Teagan42/forge/internal/repocontext"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/specengine"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -165,6 +166,7 @@ func runPlan(args []string) int {
 		Decisions:    decisions,
 		Spec:         specArtifact,
 		Loader:       loader,
+		Locks:        repolock.New(repoRoot),
 	})
 	if err != nil {
 		if finishErr := planRuntime.Finish(ctx, featureID, exec.ID, domain.PlanningStatusFailed); finishErr != nil {
@@ -195,6 +197,12 @@ type planPipelineRequest struct {
 	Decisions map[string]*planning.Artifact
 	Spec      *planning.Artifact
 	Loader    *fileArtifactLoader
+
+	// Locks guards spec.md/ticket-plan.md generation against a concurrent
+	// `forge approve`, which mutates the same files under the same
+	// "planning:<feature-id>" resource name (internal/planningapprove).
+	// Without this, the two processes' writes race with no serialization.
+	Locks *repolock.Locker
 }
 
 // runPlanPipeline runs the stages of `forge plan` under the Planning
@@ -277,7 +285,9 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 		if err != nil {
 			return 0, err
 		}
-		if err := specEngine.GenerateSpec(ctx, featureID, loader); err != nil {
+		if err := req.Locks.WithLock(ctx, "planning:"+featureID, func() error {
+			return specEngine.GenerateSpec(ctx, featureID, loader)
+		}); err != nil {
 			return 0, err
 		}
 		fmt.Fprintf(os.Stdout, "spec.md generated for feature %s\n", featureID)
@@ -307,7 +317,9 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 		if err != nil {
 			return 0, err
 		}
-		if err := specEngine.GenerateTicketPlan(ctx, featureID, loader); err != nil {
+		if err := req.Locks.WithLock(ctx, "planning:"+featureID, func() error {
+			return specEngine.GenerateTicketPlan(ctx, featureID, loader)
+		}); err != nil {
 			return 0, err
 		}
 		fmt.Fprintf(os.Stdout, "ticket-plan.md generated for feature %s\n", featureID)

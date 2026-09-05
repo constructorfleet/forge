@@ -66,6 +66,9 @@ func TestSpecEngineGenerateSpec(t *testing.T) {
 	if loader.spec.Kind != planning.KindSpec {
 		t.Errorf("spec kind = %s, want %s", loader.spec.Kind, planning.KindSpec)
 	}
+	if !planning.Reviewed(loader.spec) {
+		t.Errorf("spec State = %q, want a spec recorded as reviewed", loader.spec.State)
+	}
 
 	foundContext := false
 	foundRequirements := false
@@ -175,6 +178,9 @@ func TestSpecEngineGenerateSpec_ReviewChangesRequiredThenApproved(t *testing.T) 
 
 	if loader.spec.Kind != planning.KindSpec {
 		t.Errorf("spec kind = %s, want %s", loader.spec.Kind, planning.KindSpec)
+	}
+	if !planning.Reviewed(loader.spec) {
+		t.Errorf("spec State = %q, want a spec recorded as reviewed", loader.spec.State)
 	}
 
 	// Verify the repaired spec was saved
@@ -328,6 +334,9 @@ func TestSpecEngineGenerateSpec_ReviewNoiseNotHardFailed(t *testing.T) {
 	}
 	if loader.spec == nil {
 		t.Fatal("spec should still be saved when the exhausted budget reflects reviewer noise, not a real defect")
+	}
+	if !planning.Reviewed(loader.spec) {
+		t.Errorf("spec State = %q, want a spec recorded as reviewed even when saved on reviewer noise", loader.spec.State)
 	}
 }
 
@@ -557,6 +566,9 @@ func TestSpecEngineGenerateTicketPlan(t *testing.T) {
 
 	if loader.ticketPlan.Kind != planning.KindTicketPlan {
 		t.Errorf("ticket plan kind = %s, want %s", loader.ticketPlan.Kind, planning.KindTicketPlan)
+	}
+	if !planning.Reviewed(loader.ticketPlan) {
+		t.Errorf("ticket plan State = %q, want a ticket plan recorded as reviewed", loader.ticketPlan.State)
 	}
 
 	foundTickets := 0
@@ -823,6 +835,9 @@ func TestSpecEngineGenerateTicketPlan_ReviewNoiseNotHardFailed(t *testing.T) {
 	}
 	if loader.ticketPlan == nil {
 		t.Fatal("ticket plan should still be saved when the exhausted budget reflects reviewer noise, not a real defect")
+	}
+	if !planning.Reviewed(loader.ticketPlan) {
+		t.Errorf("ticket plan State = %q, want a ticket plan recorded as reviewed even when saved on reviewer noise", loader.ticketPlan.State)
 	}
 }
 

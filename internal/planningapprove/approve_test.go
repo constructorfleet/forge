@@ -3,6 +3,7 @@ package planningapprove_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -77,6 +78,21 @@ func (f *fakeStore) TransitionIssue(ctx context.Context, executionID, issueID st
 	return domain.Issue{}, nil
 }
 
+// spyLocker is a Locker double that records every resource it was asked to
+// lock and runs fn synchronously (no real filesystem lock, no serialization
+// -- Approver's own tests only need to prove *which* resource it locks and
+// that it locks around the load-mutate-save sequence exactly once, not that
+// locking itself excludes concurrent callers; that guarantee belongs to
+// repolock's own tests).
+type spyLocker struct {
+	calls []string
+}
+
+func (s *spyLocker) WithLock(ctx context.Context, resource string, fn func() error) error {
+	s.calls = append(s.calls, resource)
+	return fn()
+}
+
 func specArtifact(state, approvedRevision string) *planning.Artifact {
 	a := &planning.Artifact{
 		Kind:     planning.KindSpec,
@@ -85,6 +101,9 @@ func specArtifact(state, approvedRevision string) *planning.Artifact {
 	}
 	a.Revision = planning.ComputeRevision(a)
 	a.ApprovedRevision = approvedRevision
+	if state == "reviewed" {
+		a.ReviewedRevision = a.Revision
+	}
 	return a
 }
 
@@ -101,6 +120,9 @@ func ticketPlanArtifact(state, approvedRevision string) *planning.Artifact {
 	}
 	a.Revision = planning.ComputeRevision(a)
 	a.ApprovedRevision = approvedRevision
+	if state == "reviewed" {
+		a.ReviewedRevision = a.Revision
+	}
 	return a
 }
 
@@ -128,6 +150,23 @@ func TestApprovePlanningArtifact_LatestExecutionNotNeedsApproval_ReturnsError(t 
 	}
 	if artifacts.spec.ApprovedRevision != "" {
 		t.Fatalf("spec was approved despite execution not NEEDS_APPROVAL")
+	}
+}
+
+func TestApprovePlanningArtifact_PendingSpecNotReviewed_ReturnsError(t *testing.T) {
+	spec := specArtifact("draft", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	store := &fakeStore{executions: []domain.PlanningExecution{
+		{ID: "pe-1", FeatureID: "widget", Status: domain.PlanningStatusNeedsApproval},
+	}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: artifacts}
+
+	err := approver.ApprovePlanningArtifact(context.Background(), "widget")
+	if !errors.Is(err, planningapprove.ErrArtifactNotReviewed) {
+		t.Fatalf("err = %v, want ErrArtifactNotReviewed", err)
+	}
+	if artifacts.spec.ApprovedRevision != "" {
+		t.Fatalf("spec was approved despite failing to pass automated review")
 	}
 }
 
@@ -264,6 +303,123 @@ func TestApproveSpec_ApprovesAtCurrentRevision(t *testing.T) {
 	}
 }
 
+func TestApproveSpec_NotReviewed_ReturnsError(t *testing.T) {
+	spec := specArtifact("draft", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	_, err := approver.ApproveSpec(context.Background(), "widget")
+	if !errors.Is(err, planningapprove.ErrArtifactNotReviewed) {
+		t.Fatalf("err = %v, want ErrArtifactNotReviewed", err)
+	}
+	if artifacts.spec.ApprovedRevision != "" {
+		t.Fatalf("spec was approved despite failing to pass automated review")
+	}
+}
+
+func TestApproveSpec_ReviewedContentEditedSinceReview_ReturnsError(t *testing.T) {
+	spec := specArtifact("reviewed", "")
+	// A hand-edit after review changes the content but leaves State
+	// "reviewed" untouched, exactly the gap #473 was filed to close.
+	spec.Sections[0].Body = "Build a different widget"
+	spec.Revision = planning.ComputeRevision(spec)
+	artifacts := &fakeArtifacts{spec: spec}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	_, err := approver.ApproveSpec(context.Background(), "widget")
+	if !errors.Is(err, planningapprove.ErrArtifactNotReviewed) {
+		t.Fatalf("err = %v, want ErrArtifactNotReviewed", err)
+	}
+	if artifacts.spec.ApprovedRevision != "" {
+		t.Fatalf("spec was approved despite being edited since its last review")
+	}
+}
+
+func TestApproveSpec_LegacyNeverTouchedByReviewTracking_Approves(t *testing.T) {
+	// A spec.md written before review-tracking existed has empty State and
+	// empty ReviewedRevision, yet it could only have reached NEEDS_APPROVAL
+	// by already passing SpecificationReview under the code that wrote it.
+	// Approval must treat it as reviewed rather than permanently refusing
+	// it (#473 follow-up: legacy artifacts must not become dead ends).
+	spec := specArtifact("", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	rev, err := approver.ApproveSpec(context.Background(), "widget")
+	if err != nil {
+		t.Fatalf("ApproveSpec: %v", err)
+	}
+	if artifacts.spec.ApprovedRevision != rev {
+		t.Fatalf("spec.ApprovedRevision = %q, want %q", artifacts.spec.ApprovedRevision, rev)
+	}
+	if artifacts.spec.ReviewedRevision != rev {
+		t.Fatalf("spec.ReviewedRevision = %q, want %q (legacy artifact should be backfilled)", artifacts.spec.ReviewedRevision, rev)
+	}
+}
+
+func TestApproveSpec_ChangesRequired_ReturnsError(t *testing.T) {
+	spec := specArtifact("changes_required", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	_, err := approver.ApproveSpec(context.Background(), "widget")
+	if !errors.Is(err, planningapprove.ErrArtifactNotReviewed) {
+		t.Fatalf("err = %v, want ErrArtifactNotReviewed", err)
+	}
+}
+
+func TestApproveSpec_LocksArtifactMutationOnce(t *testing.T) {
+	spec := specArtifact("reviewed", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	locks := &spyLocker{}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts, Locks: locks}
+
+	if _, err := approver.ApproveSpec(context.Background(), "widget"); err != nil {
+		t.Fatalf("ApproveSpec: %v", err)
+	}
+
+	if want := []string{"planning:widget"}; !reflect.DeepEqual(locks.calls, want) {
+		t.Fatalf("locks.calls = %v, want %v", locks.calls, want)
+	}
+}
+
+func TestApproveTicketPlan_LocksArtifactMutationOnce(t *testing.T) {
+	tp := ticketPlanArtifact("reviewed", "")
+	artifacts := &fakeArtifacts{ticketPlan: tp}
+	locks := &spyLocker{}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts, Locks: locks}
+
+	if _, err := approver.ApproveTicketPlan(context.Background(), "widget"); err != nil {
+		t.Fatalf("ApproveTicketPlan: %v", err)
+	}
+
+	if want := []string{"planning:widget"}; !reflect.DeepEqual(locks.calls, want) {
+		t.Fatalf("locks.calls = %v, want %v", locks.calls, want)
+	}
+}
+
+func TestApprovePlanningArtifact_LocksArtifactMutationOnce(t *testing.T) {
+	spec := specArtifact("reviewed", "")
+	artifacts := &fakeArtifacts{spec: spec}
+	locks := &spyLocker{}
+	store := &fakeStore{executions: []domain.PlanningExecution{
+		{ID: "pe-1", FeatureID: "widget", Status: domain.PlanningStatusNeedsApproval},
+	}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: artifacts, Locks: locks}
+
+	if err := approver.ApprovePlanningArtifact(context.Background(), "widget"); err != nil {
+		t.Fatalf("ApprovePlanningArtifact: %v", err)
+	}
+
+	// Exactly one lock acquisition for the whole decide-and-approve
+	// sequence: nesting a second WithLock call for the same resource inside
+	// approveSpec/approveTicketPlan would deadlock against repolock's real,
+	// non-reentrant file lock.
+	if want := []string{"planning:widget"}; !reflect.DeepEqual(locks.calls, want) {
+		t.Fatalf("locks.calls = %v, want %v", locks.calls, want)
+	}
+}
+
 func TestApproveSpec_NoSpec_ReturnsError(t *testing.T) {
 	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: &fakeArtifacts{}}
 
@@ -313,6 +469,39 @@ func TestApproveTicketPlan_ResumesFrozenFeature_ReportsSuperseded(t *testing.T) 
 	}
 	if !store.unfrozen {
 		t.Fatalf("expected feature to be unfrozen")
+	}
+}
+
+func TestApproveTicketPlan_NotReviewed_ReturnsError(t *testing.T) {
+	tp := ticketPlanArtifact("draft", "")
+	artifacts := &fakeArtifacts{ticketPlan: tp}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	_, err := approver.ApproveTicketPlan(context.Background(), "widget")
+	if !errors.Is(err, planningapprove.ErrArtifactNotReviewed) {
+		t.Fatalf("err = %v, want ErrArtifactNotReviewed", err)
+	}
+	if artifacts.ticketPlan.ApprovedRevision != "" {
+		t.Fatalf("ticket plan was approved despite failing to pass automated review")
+	}
+}
+
+func TestApproveTicketPlan_LegacyNeverTouchedByReviewTracking_Approves(t *testing.T) {
+	// Same legacy gap as TestApproveSpec_LegacyNeverTouchedByReviewTracking_Approves,
+	// for the ticket-plan artifact kind.
+	tp := ticketPlanArtifact("", "")
+	artifacts := &fakeArtifacts{ticketPlan: tp}
+	approver := &planningapprove.Approver{Store: &fakeStore{}, Artifacts: artifacts}
+
+	result, err := approver.ApproveTicketPlan(context.Background(), "widget")
+	if err != nil {
+		t.Fatalf("ApproveTicketPlan: %v", err)
+	}
+	if artifacts.ticketPlan.ApprovedRevision != result.Revision {
+		t.Fatalf("ticketPlan.ApprovedRevision = %q, want %q", artifacts.ticketPlan.ApprovedRevision, result.Revision)
+	}
+	if artifacts.ticketPlan.ReviewedRevision != result.Revision {
+		t.Fatalf("ticketPlan.ReviewedRevision = %q, want %q (legacy artifact should be backfilled)", artifacts.ticketPlan.ReviewedRevision, result.Revision)
 	}
 }
 

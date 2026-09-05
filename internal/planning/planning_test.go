@@ -204,6 +204,73 @@ func TestApprovedAndReady(t *testing.T) {
 	}
 }
 
+func TestReviewed(t *testing.T) {
+	a := sampleArtifact()
+	if planning.Reviewed(a) {
+		t.Fatalf("artifact with no recorded review should not be reviewed")
+	}
+
+	a.State = "changes_required"
+	if planning.Reviewed(a) {
+		t.Fatalf("artifact whose review requested changes should not be reviewed")
+	}
+
+	a.State = "reviewed"
+	a.ReviewedRevision = planning.ComputeRevision(a)
+	if !planning.Reviewed(a) {
+		t.Fatalf("artifact recorded as reviewed at its current revision should be reviewed")
+	}
+}
+
+func TestReviewedInvalidatedByContentEdit(t *testing.T) {
+	a := sampleArtifact()
+	a.State = "reviewed"
+	a.ReviewedRevision = planning.ComputeRevision(a)
+	if !planning.Reviewed(a) {
+		t.Fatalf("artifact recorded as reviewed at its current revision should be reviewed")
+	}
+
+	// A hand-edit to definitional content after review, without re-running
+	// review, must un-review the artifact the same way it un-approves one.
+	a.Sections[0].Body = "Where does Dependency metadata live now?"
+	if planning.Reviewed(a) {
+		t.Fatalf("editing content after review should invalidate the recorded review")
+	}
+}
+
+func TestMarkReviewed(t *testing.T) {
+	a := sampleArtifact()
+	planning.MarkReviewed(a)
+	if !planning.Reviewed(a) {
+		t.Fatalf("MarkReviewed should leave the artifact Reviewed")
+	}
+	if a.State != "reviewed" {
+		t.Fatalf("State = %q, want %q", a.State, "reviewed")
+	}
+	if a.ReviewedRevision != planning.ComputeRevision(a) {
+		t.Fatalf("ReviewedRevision = %q, want the current content revision", a.ReviewedRevision)
+	}
+}
+
+func TestLegacy(t *testing.T) {
+	a := sampleArtifact()
+	a.State = ""
+	if !planning.Legacy(a) {
+		t.Fatalf("artifact with no State and no ReviewedRevision should be Legacy")
+	}
+
+	a.State = "changes_required"
+	if planning.Legacy(a) {
+		t.Fatalf("artifact with a recorded review verdict should not be Legacy")
+	}
+
+	a.State = ""
+	a.ReviewedRevision = "some-revision"
+	if planning.Legacy(a) {
+		t.Fatalf("artifact with a recorded ReviewedRevision should not be Legacy")
+	}
+}
+
 func TestParseMissingBlock(t *testing.T) {
 	if _, err := planning.Parse([]byte("## Question\n\nNo metadata block.\n")); err == nil {
 		t.Fatalf("expected error for missing metadata block")
