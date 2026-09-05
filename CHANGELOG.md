@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.0](https://github.com/constructorfleet/forge/compare/forge-v0.47.0...forge-v0.48.0) (2026-09-05)
+
+
+### Features
+
+* Roster poll issues one review-run query per Issue per tick ([#664](https://github.com/constructorfleet/forge/issues/664)) ([8e2ada1](https://github.com/constructorfleet/forge/commit/8e2ada19f9eed31004301e1afff418e9a93cfadd)), closes [#537](https://github.com/constructorfleet/forge/issues/537)
+
 ## [0.47.0](https://github.com/constructorfleet/forge/compare/forge-v0.46.0...forge-v0.47.0) (2026-09-05)
 
 
