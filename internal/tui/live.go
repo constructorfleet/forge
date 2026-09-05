@@ -70,6 +70,17 @@ type LiveModel struct {
 	// a process; nil uses OpenDiffInPager.
 	OpenDiff func(dir, diff string) tea.Cmd
 
+	// Canceller issues CancelExecution. Nil disables the control: the cancel
+	// key then explains itself instead of silently doing nothing.
+	Canceller Canceller
+
+	// confirming records that a cancel key armed the UI-only confirmation and
+	// awaits the operator's next key to fire or abandon it.
+	confirming bool
+	// cancelling records a CancelExecution call in flight, so a second cancel
+	// key press on the same call cannot double-issue it.
+	cancelling bool
+
 	// winHeight is the last terminal height the runtime reported. Zero means the
 	// runtime has sent no size yet: the frame then clips nothing and the tailer
 	// keeps its own default.
@@ -132,6 +143,12 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.removeDiffArtifacts()
 			return m, tea.Quit
 		}
+		if m.confirming {
+			return m, m.resolveCancelConfirm(key)
+		}
+		if key.MatchString("c") && m.vm.Focus == PaneRoster {
+			return m, m.armCancelConfirm()
+		}
 		if key.MatchString("d") && m.vm.Focus == PaneRoster {
 			return m, m.openSelectedDiff()
 		}
@@ -144,6 +161,8 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.vm.ActionNotice = msg.err.Error()
 		}
+	case cancelResultMsg:
+		m.applyCancelResult(msg)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
 		m.removeDiffArtifacts()
