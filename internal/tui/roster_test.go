@@ -19,6 +19,8 @@ type fakeRosterStore struct {
 	claims  map[string]storage.WorkerClaim
 	claimOK map[string]bool
 	loadErr error
+	// blockLoad holds LoadExecution until it closes.
+	blockLoad chan struct{}
 
 	// reviews holds the Review history per Issue, in insertion order.
 	reviews map[string][]storage.ReviewRun
@@ -46,6 +48,9 @@ func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string)
 }
 
 func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
+	if f.blockLoad != nil {
+		<-f.blockLoad
+	}
 	if f.loadErr != nil {
 		return storage.ExecutionState{}, f.loadErr
 	}
