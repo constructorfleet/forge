@@ -200,14 +200,18 @@ func (t *TranscriptTailer) anchor(retained []TranscriptEvent) (eventKey, bool) {
 // commit records eviction and holds the scrollback anchor as the tail advances.
 // It re-derives the offset from the anchor's place in the ordered window, so an
 // event that sorts in ahead of the window does not slide it. A partial pass
-// commits as well. An evicted anchor keeps the old offset, clamped.
+// commits as well. An evicted anchor uses its retained successor.
 func (t *TranscriptTailer) commit(anchor eventKey, anchored bool) TranscriptViewModel {
 	if t.ring.Dropped() > 0 {
 		t.evicted = true
 	}
 	retained := t.orderedWindow()
 	if anchored {
-		if at := indexOfEvent(retained, anchor); at >= 0 {
+		at := indexOfEvent(retained, anchor)
+		if at < 0 {
+			at = t.indexOfSuccessor(retained, anchor)
+		}
+		if at >= 0 {
 			t.offset = t.offsetForStart(len(retained), at)
 		}
 		t.clampOffset()
@@ -219,6 +223,19 @@ func (t *TranscriptTailer) commit(anchor eventKey, anchored bool) TranscriptView
 func indexOfEvent(events []TranscriptEvent, key eventKey) int {
 	for i, e := range events {
 		if keyOf(e) == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// indexOfSuccessor returns the first retained event after key in view order.
+func (t *TranscriptTailer) indexOfSuccessor(events []TranscriptEvent, key eventKey) int {
+	rank := t.runRanks()
+	keyRank := rank[key.runID]
+	for i, e := range events {
+		eventRank := rank[e.AgentRunID]
+		if eventRank > keyRank || (eventRank == keyRank && e.Seq > key.seq) {
 			return i
 		}
 	}
@@ -363,10 +380,7 @@ func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptVi
 // the tail; the sort keeps each attempt contiguous, which the divider needs.
 func (t *TranscriptTailer) orderedWindow() []TranscriptEvent {
 	retained := t.ring.Window()
-	rank := make(map[int64]int, len(t.runs))
-	for i, r := range t.runs {
-		rank[r.id] = i
-	}
+	rank := t.runRanks()
 	sort.SliceStable(retained, func(i, j int) bool {
 		if rank[retained[i].AgentRunID] != rank[retained[j].AgentRunID] {
 			return rank[retained[i].AgentRunID] < rank[retained[j].AgentRunID]
@@ -374,6 +388,15 @@ func (t *TranscriptTailer) orderedWindow() []TranscriptEvent {
 		return retained[i].Seq < retained[j].Seq
 	})
 	return retained
+}
+
+// runRanks maps each tailed attempt to its view order rank.
+func (t *TranscriptTailer) runRanks() map[int64]int {
+	rank := make(map[int64]int, len(t.runs))
+	for i, r := range t.runs {
+		rank[r.id] = i
+	}
+	return rank
 }
 
 // convertTranscriptEvent narrows a stored event to the fields the TUI shows.

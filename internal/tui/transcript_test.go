@@ -472,6 +472,44 @@ func TestTailerScrollAnchorHoldsAcrossAnEarlierAttempt(t *testing.T) {
 	}
 }
 
+// TestTailerEvictedAnchorUsesRetainedSuccessor proves that a lost
+// scroll anchor recovers at the next retained event. A late earlier attempt can
+// sort before the visible window while the ring drops by append order.
+func TestTailerEvictedAnchorUsesRetainedSuccessor(t *testing.T) {
+	store := &fakeMultiRunStore{runs: map[int64][]storage.TranscriptEvent{
+		4: {runMsg(4, 0, "a"), runMsg(4, 1, "b")},
+		9: {runMsg(9, 0, "p"), runMsg(9, 1, "q"), runMsg(9, 2, "r"), runMsg(9, 3, "s")},
+	}}
+
+	tailer := tui.NewTranscriptTailer(store, 4, 6)
+	tailer.AddRun(9)
+	tailer.SetHeight(2)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll 1: %v", err)
+	}
+	tailer.ScrollUp(2)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll 2: %v", err)
+	}
+	if len(vm.Events) != 2 || vm.Events[0].Text != "p" || vm.Events[1].Text != "q" {
+		t.Fatalf("scrolled window = %+v, want [p q]", vm.Events)
+	}
+
+	store.runs[4] = append(store.runs[4],
+		runMsg(4, 2, "c"),
+		runMsg(4, 3, "d"),
+		runMsg(4, 4, "e"),
+	)
+	vm, err = tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll 3: %v", err)
+	}
+	if len(vm.Events) != 2 || vm.Events[0].Text != "q" || vm.Events[1].Text != "r" {
+		t.Fatalf("window = %+v, want the retained successor window [q r]", vm.Events)
+	}
+}
+
 // TestTailerOrdersLateEventByRunInsertion proves the retained window reads in
 // run insertion order: a late event from an earlier attempt sorts back into its
 // own attempt instead of adding a second, out-of-order divider.
