@@ -223,3 +223,115 @@ func footerFor(keys []tui.KeyBinding) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// TestTranscriptRowsBudgetsAgainstTheChromeRenderDraws pins the row budget to
+// the chrome Render draws, so the transcript budget cannot drift.
+func TestTranscriptRowsBudgetsAgainstTheChromeRenderDraws(t *testing.T) {
+	cases := []struct {
+		name   string
+		vm     tui.ViewModel
+		chrome int
+		want   int
+	}{
+		{"footer alone", tui.ViewModel{Height: 10}, 1, 9},
+		{
+			"one row, strip, footer",
+			tui.ViewModel{
+				Height:  10,
+				Workers: []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+			},
+			3, 7,
+		},
+		{
+			"notices add a row each",
+			tui.ViewModel{Height: 10, Notice: "stale", ActionNotice: "declined"},
+			3, 7,
+		},
+		{"a terminal shorter than the chrome floors at one row",
+			tui.ViewModel{Height: 1, Notice: "stale"}, 2, 1},
+		{"an unset height budgets nothing", tui.ViewModel{}, 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tui.TranscriptRows(tc.vm); got != tc.want {
+				t.Fatalf("TranscriptRows = %d, want %d", got, tc.want)
+			}
+			// The chrome must be the rows Render actually emits with no pane.
+			if got := len(splitLines(tui.Render(tc.vm))); got != tc.chrome {
+				t.Fatalf("Render emitted %d rows, want %d of chrome", got, tc.chrome)
+			}
+		})
+	}
+}
+
+// TestRenderClipsTranscriptToHeight proves the frame never draws past the
+// terminal bottom, whatever number of rows one event renders.
+func TestRenderClipsTranscriptToHeight(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:  true,
+		Evicted: true,
+		Dropped: 4,
+		Events: []tui.TranscriptEvent{
+			{AgentRunID: 7, Seq: 0, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build", ToolCallID: "t1"},
+			{AgentRunID: 7, Seq: 1, Type: "TOOL_RESULT", ToolName: "bash", ToolOutput: "ok", ToolCallID: "t1"},
+		},
+		RunOrder: []int64{7},
+	})
+	vm := tui.ViewModel{
+		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+		Transcript: pane,
+		Height:     5,
+	}
+
+	// Two events render three rows here: the eviction marker, the call, and its
+	// folded output. The chrome takes three, so two transcript rows remain.
+	got := splitLines(tui.Render(vm))
+	if len(got) != 5 {
+		t.Fatalf("Render emitted %d rows, want 5:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	if strings.Contains(got[1], "not retained") {
+		t.Errorf("clipping kept the oldest row instead of the newest:\n%s", strings.Join(got, "\n"))
+	}
+	if !strings.Contains(got[2], "ok") {
+		t.Errorf("clipping dropped the newest transcript row:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// TestRenderTinyHeightKeepsOneTranscriptRow proves a terminal too short for the
+// chrome still shows the newest transcript row.
+func TestRenderTinyHeightKeepsOneTranscriptRow(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{7}, Events: []tui.TranscriptEvent{
+		{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Text: "starting work"},
+		{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
+	}})
+	vm := tui.ViewModel{
+		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+		Transcript: pane,
+		Height:     1,
+	}
+
+	got := tui.Render(vm)
+	if strings.Contains(got, "starting work") {
+		t.Errorf("a one-row height drew the whole transcript:\n%s", got)
+	}
+	if !strings.Contains(got, "still working") {
+		t.Errorf("a one-row height dropped the newest row:\n%s", got)
+	}
+}
+
+// TestRenderZeroHeightDrawsTheWholeTranscript proves an unset height clips
+// nothing: the runtime sends no size before the first frame.
+func TestRenderZeroHeightDrawsTheWholeTranscript(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{7}, Events: []tui.TranscriptEvent{
+		{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Text: "starting work"},
+		{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
+	}})
+	vm := tui.ViewModel{Transcript: pane}
+
+	if got := tui.Render(vm); !strings.Contains(got, "starting work") {
+		t.Errorf("an unset height clipped the transcript:\n%s", got)
+	}
+}
