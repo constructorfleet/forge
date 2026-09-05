@@ -88,7 +88,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25.0"
+          # Must match or exceed go.mod's go directive.
+          go-version: "1.26.0"
           cache: true
 
       - name: Build forge-${{ matrix.goos }}-${{ matrix.goarch }}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,9 +42,17 @@ func readFile(path string) (string, bool) {
 // formatter, so format-check is explicit too. Lint is only set when a
 // golangci-lint config is present, since no lint tool ships with the
 // toolchain.
+//
+// A stale golangci-lint binary on PATH can predate the project's Go
+// stdlib and fail with typecheck errors. When go.mod pins golangci-lint as
+// a tool dependency (the Go 1.24+ "tool" directive), the lint command runs
+// it through "go tool" instead. "go tool" builds the binary with the
+// project's own toolchain, so it stays in sync with the project's Go
+// stdlib.
 func detectGo(dir string) (explicit, convention map[string]string) {
 	explicit = map[string]string{}
-	if !fileExists(filepath.Join(dir, "go.mod")) {
+	modContent, ok := readFile(filepath.Join(dir, "go.mod"))
+	if !ok {
 		return explicit, nil
 	}
 	explicit["build"] = "go build ./..."
@@ -52,11 +61,31 @@ func detectGo(dir string) (explicit, convention map[string]string) {
 	explicit["format-check"] = "gofmt -l ."
 	for _, name := range []string{".golangci.yml", ".golangci.yaml"} {
 		if fileExists(filepath.Join(dir, name)) {
-			explicit["lint"] = "golangci-lint run"
+			if goModHasLintTool(modContent) {
+				explicit["lint"] = "go tool golangci-lint run"
+			} else {
+				explicit["lint"] = "golangci-lint run"
+			}
 			break
 		}
 	}
 	return explicit, nil
+}
+
+// goModHasLintTool reports whether go.mod content pins golangci-lint as a
+// tool dependency (a Go 1.24+ "tool" directive whose import path contains
+// "golangci-lint").
+func goModHasLintTool(modContent string) bool {
+	file, err := modfile.Parse("go.mod", []byte(modContent), nil)
+	if err != nil {
+		return false
+	}
+	for _, tool := range file.Tool {
+		if strings.Contains(tool.Path, "golangci-lint") {
+			return true
+		}
+	}
+	return false
 }
 
 // packageJSON is the subset of package.json fields detectNode reads.

@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check vet build install test check
+.PHONY: fmt fmt-check vet lint build install test check
 
 fmt:
 	gofmt -w .
@@ -20,6 +20,11 @@ fmt-check:
 vet:
 	go vet ./...
 
+# lint runs golangci-lint as a pinned go.mod tool dependency, not a binary
+# on PATH. This ties the linter build to the project's own Go toolchain.
+lint:
+	go tool golangci-lint run
+
 LDFLAGS := -X main.buildCommit=$(shell git rev-parse HEAD 2>/dev/null || echo unknown) \
            -X main.buildTime=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -33,4 +38,4 @@ install:
 test:
 	go test ./...
 
-check: fmt vet build test
+check: fmt vet lint build test
