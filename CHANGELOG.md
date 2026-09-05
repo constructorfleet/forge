@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.41.0](https://github.com/constructorfleet/forge/compare/forge-v0.40.0...forge-v0.41.0) (2026-09-05)
+
+
+### Features
+
+* golangci-lint's bundled type-checker fails on the Go 1.27 stdlib ([#612](https://github.com/constructorfleet/forge/issues/612)) ([b59c37c](https://github.com/constructorfleet/forge/commit/b59c37c79673e35387b46c6bbe7263e723b0c06a)), closes [#461](https://github.com/constructorfleet/forge/issues/461)
+* owner_pid and owner_token are never cleared on normal worker exit ([#617](https://github.com/constructorfleet/forge/issues/617)) ([e4987e0](https://github.com/constructorfleet/forge/commit/e4987e0cca40c186b8d56057f96b725d31f44094)), closes [#560](https://github.com/constructorfleet/forge/issues/560)
+* Same-second pid reuse can produce an identical owner_token on macOS ([#618](https://github.com/constructorfleet/forge/issues/618)) ([485583e](https://github.com/constructorfleet/forge/commit/485583e4640fc74dca08534c1d2ddf7db137f2c3)), closes [#561](https://github.com/constructorfleet/forge/issues/561)
+* Wire internal/planningapprove.Approver into a live planning-phase TUI command ([#616](https://github.com/constructorfleet/forge/issues/616)) ([6d8fb40](https://github.com/constructorfleet/forge/commit/6d8fb405447d44c35c23d9811d2274d4f66cb6ad)), closes [#606](https://github.com/constructorfleet/forge/issues/606)
+
+
+### Bug Fixes
+
+* TUI wrapWidth does one hard rune-count wrap, not a real terminal-column wrap ([#619](https://github.com/constructorfleet/forge/issues/619)) ([5d5c3bd](https://github.com/constructorfleet/forge/commit/5d5c3bd791c805634dc6e601e3f36bc8b84b1fe1)), closes [#602](https://github.com/constructorfleet/forge/issues/602)
+
 ## [0.40.0](https://github.com/constructorfleet/forge/compare/forge-v0.39.0...forge-v0.40.0) (2026-09-05)
 
 
