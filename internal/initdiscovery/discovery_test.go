@@ -105,6 +105,25 @@ func TestDetect_GoProject(t *testing.T) {
 	}
 }
 
+// TestDetect_GoProject_LintToolPinned_UsesGoTool checks the lint gate when
+// go.mod pins golangci-lint as a tool dependency. detectGo must route the
+// lint gate through "go tool golangci-lint run" in this case, not a bare
+// "golangci-lint run".
+func TestDetect_GoProject_LintToolPinned_UsesGoTool(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	writeFile(t, dir, "go.mod", "module example.com/foo\n\ngo 1.26\n\ntool (\n\tgithub.com/golangci/golangci-lint/v2/cmd/golangci-lint\n)\n")
+	writeFile(t, dir, ".golangci.yml", "run:\n  timeout: 5m\n")
+
+	result := Detect(dir)
+
+	if cmd, ok := gate(t, result.Config, "lint"); !ok || cmd != "go tool golangci-lint run" {
+		t.Errorf("lint = %q, %v, want %q", cmd, ok, "go tool golangci-lint run")
+	}
+
+	mustLoadable(t, result)
+}
+
 func TestDetect_GoProject_NoLintConfig_LeavesUnresolvedMarker(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)

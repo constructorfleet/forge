@@ -28,7 +28,7 @@ quality:
         - name: test
           command: go test ./...
         - name: lint
-          command: golangci-lint run
+          command: go tool golangci-lint run
         - name: format-check
           command: gofmt -l .
         - name: typecheck
