@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +83,87 @@ func TestRunResume_ReconcilesReadyExecution(t *testing.T) {
 	}
 	if issue.State != domain.StateCommitting {
 		t.Fatalf("persisted state = %s, want COMMITTING", issue.State)
+	}
+}
+
+// TestRunResume_UnknownID_ReportsNeitherSpace covers issue #472: an ID that
+// names no Execution and no Planning Execution must fail with one clear
+// message that says so, not a message about one subsystem picked at random.
+func TestRunResume_UnknownID_ReportsNeitherSpace(t *testing.T) {
+	repoRoot, _ := newTempRepo(t)
+	runGit(t, repoRoot, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+
+	cfgPath := filepath.Join(repoRoot, ".forge.yaml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\ntracker:\n  skip_auth_preflight: true\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+
+	chdirTemp(t, repoRoot)
+
+	stderr := captureStderr(t, func() {
+		if code := runResume([]string{"--config", cfgPath, "--db", dbPath, "does-not-exist"}); code != 1 {
+			t.Fatalf("runResume = %d, want 1", code)
+		}
+	})
+	if !strings.Contains(stderr, "no execution or planning execution found") {
+		t.Fatalf("stderr = %q, want a message naming neither ID space as found", stderr)
+	}
+}
+
+// TestRunResume_ExecutionError_IsNotSwallowedByPlanningFallthrough covers
+// issue #472: when the ID names a real Execution, a genuine failure resuming
+// it must be reported as itself, not discarded in favor of a confusing
+// planning-resume error about an ID that was never a Feature.
+func TestRunResume_ExecutionError_IsNotSwallowedByPlanningFallthrough(t *testing.T) {
+	repoRoot, _ := newTempRepo(t)
+	runGit(t, repoRoot, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+
+	cfgPath := filepath.Join(repoRoot, ".forge.yaml")
+	if err := os.WriteFile(cfgPath, []byte("version: 1\nagent:\n  provider: fake\ntracker:\n  skip_auth_preflight: true\npull_requests:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+	store, err := openStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+
+	// BaseRevision is left empty and no worker.base_captured event is
+	// recorded, so engine.workerBase has no base to recover the Issue's
+	// worker from: ResumeExecution fails partway through, on an Issue that
+	// really belongs to this Execution.
+	exec := domain.Execution{ID: "exec-resume-broken", StartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)}
+	if err := store.CreateExecution(context.Background(), exec); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+	if err := store.CreateIssue(context.Background(), domain.Issue{
+		ID:          "77",
+		ExecutionID: exec.ID,
+		Title:       "Resume with no recoverable worker base",
+		State:       domain.StateImplementing,
+		Scope:       domain.ScopeManaged,
+		RetryBudget: domain.NewRetryBudget(config.Default().Retry),
+	}); err != nil {
+		t.Fatalf("CreateIssue: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	chdirTemp(t, repoRoot)
+
+	stderr := captureStderr(t, func() {
+		if code := runResume([]string{"--config", cfgPath, "--db", dbPath, exec.ID}); code != 1 {
+			t.Fatalf("runResume = %d, want 1", code)
+		}
+	})
+	if !strings.Contains(stderr, "no captured worker base") {
+		t.Fatalf("stderr = %q, want the real engine error naming the missing worker base", stderr)
+	}
+	if strings.Contains(stderr, "planning execution") {
+		t.Fatalf("stderr = %q, want no planning-resume fallthrough for a real Execution ID", stderr)
 	}
 }
 

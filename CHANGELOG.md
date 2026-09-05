@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.46.0](https://github.com/constructorfleet/forge/compare/forge-v0.45.0...forge-v0.46.0) (2026-09-05)
+
+
+### Features
+
+* Transcript pane: anchor a pinned selection that slides off by more than one event ([#655](https://github.com/constructorfleet/forge/issues/655)) ([be51ca4](https://github.com/constructorfleet/forge/commit/be51ca4f89cfb6e77694b3d8d4a40798f416fc8a)), closes [#524](https://github.com/constructorfleet/forge/issues/524)
+* TUI: the transcript pane has no scroll keys, so scrollback is unreachable ([#658](https://github.com/constructorfleet/forge/issues/658)) ([2d5b17d](https://github.com/constructorfleet/forge/commit/2d5b17d78c1f3350ea6d7cef9188754fa72f1b52)), closes [#523](https://github.com/constructorfleet/forge/issues/523)
+* TUI: transcript pane clamps its own height to the viewport ([#659](https://github.com/constructorfleet/forge/issues/659)) ([819938b](https://github.com/constructorfleet/forge/commit/819938be1447903a745eb4379a10528157ace31a)), closes [#519](https://github.com/constructorfleet/forge/issues/519)
+
+## [0.45.0](https://github.com/constructorfleet/forge/compare/forge-v0.44.2...forge-v0.45.0) (2026-09-05)
+
+
+### Features
+
+* Planning writes no events rows, so the planning phase has no audit log ([#650](https://github.com/constructorfleet/forge/issues/650)) ([ebf6861](https://github.com/constructorfleet/forge/commit/ebf68612e5ecb146f595a9e5124e8c1076e97fe0)), closes [#471](https://github.com/constructorfleet/forge/issues/471)
+* TUI: move the on-demand diff read off the event loop into a tea.Cmd ([#652](https://github.com/constructorfleet/forge/issues/652)) ([f2c7ae6](https://github.com/constructorfleet/forge/commit/f2c7ae6665c2806f1384c2d0afbf5e61cc843db4)), closes [#539](https://github.com/constructorfleet/forge/issues/539)
+* TUI: TranscriptTailer.Poll double-counts appended events when scrolled back ([#654](https://github.com/constructorfleet/forge/issues/654)) ([9feb37d](https://github.com/constructorfleet/forge/commit/9feb37da0ad20aeaa16fb7abc993c28c18637bb8)), closes [#520](https://github.com/constructorfleet/forge/issues/520)
+
+
+### Bug Fixes
+
+* Planning leases identify their owner by bare pid only ([#653](https://github.com/constructorfleet/forge/issues/653)) ([0dfbaf5](https://github.com/constructorfleet/forge/commit/0dfbaf56aa3b0fc32e29af8940ffc808ae4ba268)), closes [#557](https://github.com/constructorfleet/forge/issues/557)
+
+## [0.44.2](https://github.com/constructorfleet/forge/compare/forge-v0.44.1...forge-v0.44.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* forge resume uses any execution error as a signal to retry as a planning resume ([#648](https://github.com/constructorfleet/forge/issues/648)) ([56b72e7](https://github.com/constructorfleet/forge/commit/56b72e7f3cb3a810e2def63721611ef60fb14132)), closes [#472](https://github.com/constructorfleet/forge/issues/472)
+
 ## [0.44.1](https://github.com/constructorfleet/forge/compare/forge-v0.44.0...forge-v0.44.1) (2026-09-05)
 
 

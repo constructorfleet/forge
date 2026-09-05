@@ -120,6 +120,11 @@ type TranscriptPane struct {
 	// which every headless render test relies on.
 	width int
 
+	// height is the row budget RenderTranscript clamps its output to. Zero
+	// applies no clamp: the runtime has not yet reported a terminal size,
+	// which every headless render test relies on.
+	height int
+
 	selection int
 	// expanded holds the selection index that is expanded, or noSelection.
 	// It tracks the index rather than a flag so any selection move resets it.
@@ -161,6 +166,12 @@ func (p *TranscriptPane) SetStyle(s Style) { p.style = s }
 // A width of zero or less applies no wrap.
 func (p *TranscriptPane) SetWidth(w int) { p.width = w }
 
+// SetHeight sets the row budget RenderTranscript clamps its output to, so an
+// expanded entry or a tall window cannot push the detail strip and the footer
+// off screen. A height of zero or less applies no clamp: the runtime has not
+// yet reported a terminal size.
+func (p *TranscriptPane) SetHeight(h int) { p.height = h }
+
 // SetGates replaces the quality-gate rows the pane appends after the event
 // window. Gate runs follow the Agent's own work, so they render last. The call
 // rebuilds the entries through rebuild, the pane's one rebuild path, so
@@ -195,7 +206,8 @@ func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 // move that an earlier window could not satisfy. pendingPageMove applies a
 // page scroll that lands at a window edge.
 func (p *TranscriptPane) rebuild(pending int) {
-	prevKey, hadSelection := p.selectedKey()
+	prevEntry, hadSelection := p.SelectedEntry()
+	prevKey := prevEntry.key()
 	wasExpanded := p.expanded != noSelection
 
 	events := buildEntries(p.view.Events)
@@ -206,7 +218,7 @@ func (p *TranscriptPane) rebuild(pending int) {
 	if hadSelection && (p.pinned || !p.view.AtTail) {
 		idx = indexOfKey(p.entries, prevKey)
 		if idx == noSelection {
-			idx = p.anchorLostSelection()
+			idx = p.anchorLostSelection(prevEntry)
 		}
 	}
 	if pending != 0 && idx != noSelection {
@@ -239,14 +251,31 @@ func (p *TranscriptPane) rebuild(pending int) {
 }
 
 // anchorLostSelection handles a pinned entry that the advancing tail pushed out
-// of the window. It asks for one event of scrollback, which stops the window
-// from sliding further, and holds the oldest retained entry meanwhile.
-func (p *TranscriptPane) anchorLostSelection() int {
+// of the window. A poll can append several events at once, so the entry can
+// fall behind by more than one: this asks for exactly the shortfall between
+// the entry's Seq and the window's new leading Seq, which recovers the entry
+// in this one pass instead of one event per poll. Where the shortfall cannot
+// be measured — lost carries no event, or it belongs to a different run than
+// the window's leading entry — it falls back to one event of scrollback.
+func (p *TranscriptPane) anchorLostSelection(lost TranscriptEntry) int {
 	if p.scroller == nil || len(p.entries) == 0 || p.view.AtStart {
 		return p.defaultSelection()
 	}
-	p.scroller.ScrollUp(1)
+	p.scroller.ScrollUp(lostSelectionShortfall(lost, p.view))
 	return 0
+}
+
+// lostSelectionShortfall returns how many events behind the window's leading
+// entry the lost entry fell. It falls back to one event where lost carries no
+// event (a gate row) or the window holds no event of the same run.
+func lostSelectionShortfall(lost TranscriptEntry, vm TranscriptViewModel) int {
+	if lost.IsGate() || len(vm.Events) == 0 || vm.FirstRunID != lost.Event.AgentRunID {
+		return 1
+	}
+	if shortfall := vm.FirstSeq - lost.Event.Seq; shortfall > 0 {
+		return shortfall
+	}
+	return 1
 }
 
 // FollowTail returns the window to the live tail, collapses, and hands the
@@ -339,39 +368,47 @@ func (p *TranscriptPane) MoveSelectionPage(n int) {
 		p.scroller.ScrollUp(page * -n)
 		p.pendingPageMove = n
 		p.pinned = true
-	} else {
-		if p.view.AtTail {
-			return
-		}
-		p.scroller.ScrollDown(page * n)
-		p.pendingPageMove = n
-		p.pinned = true
+		return
 	}
+	if p.view.AtTail {
+		return
+	}
+	p.scroller.ScrollDown(page * n)
+	p.pendingPageMove = n
+	p.pinned = true
 }
 
+// PageUp moves the selection one page towards the retained start.
+func (p *TranscriptPane) PageUp() { p.MoveSelectionPage(-1) }
+
+// PageDown moves the selection one page towards the tail.
+func (p *TranscriptPane) PageDown() { p.MoveSelectionPage(1) }
+
 // requestScroll asks for n events of scrollback (negative n moves towards the
-// tail) and records the move for the window that answers. A request the window
-// cannot serve is dropped, so an inert key press never pins the selection. Both
-// edges guard: no scroller, no newer events at the tail, no older events at the
-// retained start. The tailer clamps such a scroll to a no-op, so without the
-// guard the pane would leave tail-following on a key press that moves nothing.
-func (p *TranscriptPane) requestScroll(n int) {
+// tail) and records the move for the window that answers, reporting whether it
+// asked. A request the window cannot serve is dropped, so an inert key press
+// never pins the selection. Both edges guard: no scroller, no newer events at
+// the tail, no older events at the retained start. The tailer clamps such a
+// scroll to a no-op, so without the guard the pane would leave tail-following
+// on a key press that moves nothing.
+func (p *TranscriptPane) requestScroll(n int) bool {
 	if p.scroller == nil || n == 0 {
-		return
+		return false
 	}
 	if n < 0 {
 		if p.view.AtTail {
-			return
+			return false
 		}
 		p.scroller.ScrollDown(-n)
 	} else {
 		if p.view.AtStart {
-			return
+			return false
 		}
 		p.scroller.ScrollUp(n)
 	}
 	p.pendingMove = -n
 	p.pinned = true
+	return true
 }
 
 // ToggleExpand expands the selected tool call, or collapses it when it is
@@ -402,15 +439,6 @@ func (p *TranscriptPane) SelectedEntry() (TranscriptEntry, bool) {
 		return TranscriptEntry{}, false
 	}
 	return p.entries[p.selection], true
-}
-
-// selectedKey returns the selected entry's cross-poll identity.
-func (p *TranscriptPane) selectedKey() (string, bool) {
-	e, ok := p.SelectedEntry()
-	if !ok {
-		return "", false
-	}
-	return e.key(), true
 }
 
 // eventEdge returns the index of the last event entry, or noSelection where the
@@ -513,7 +541,7 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 			keys = append(keys, KeyBinding{Key: "ctrl+u/pgup", Label: "page up"})
 		}
 		if !p.view.AtTail {
-			keys = append(keys, KeyBinding{Key: "ctrl+d/pgdn", Label: "page down"})
+			keys = append(keys, KeyBinding{Key: "ctrl+d/pgdown", Label: "page down"})
 		}
 		if !p.tailRequested && (!p.view.AtTail || p.pinned) {
 			keys = append(keys, KeyBinding{Key: "G", Label: "follow tail"})
@@ -527,19 +555,49 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 // above the first entry of each run, which includes the first entry of the
 // window. A single-attempt history carries no divider. A nil pane renders
 // nothing. The detail strip belongs to the frame, not the pane.
+//
+// A height budget set through SetHeight clamps the output to that many rows,
+// so an expansion or a tall window that would otherwise outgrow the terminal
+// cannot push the detail strip and the footer off screen. The clamp keeps
+// whole groups (a divider, the eviction marker, one entry's lines) together.
+// An unpinned selection follows the live tail, so the clamp anchors on the
+// newest group and matches a plain tail clip; a pinned selection anchors on
+// the selected entry's own group instead, so scrolling back to inspect an old
+// entry never scrolls it back off screen behind a tall window. Either way the
+// window then grows outward towards the tail first and then towards the
+// retained start. A budget of zero or less clamps nothing.
 func RenderTranscript(p *TranscriptPane) string {
 	if p == nil {
 		return ""
 	}
+	groups, selGroup := transcriptGroups(p)
+	if p.height > 0 {
+		anchor := -1
+		if p.pinned {
+			anchor = selGroup
+		}
+		groups = clampTranscriptGroups(groups, anchor, p.height)
+	}
 	var b strings.Builder
-	writeWrapped := func(line string) {
-		for _, row := range wrapWidth(line, p.width) {
+	for _, g := range groups {
+		for _, row := range g {
 			b.WriteString(row)
 			b.WriteByte('\n')
 		}
 	}
+	return b.String()
+}
+
+// transcriptGroups renders p into line groups: one group per atomic unit (the
+// eviction marker, an attempt divider, one entry). selGroup is the index into
+// groups of the selected entry's own group, or -1 when nothing is selected.
+// clampTranscriptGroups anchors its budget on selGroup, so this split is the
+// one place that decides what a "group" is for that purpose.
+func transcriptGroups(p *TranscriptPane) (groups [][]string, selGroup int) {
+	selGroup = -1
+	wrapped := func(line string) []string { return wrapWidth(line, p.width) }
 	if p.view.Evicted {
-		writeWrapped(p.style.Truncation.Render(evictionLine(p.view.Dropped)))
+		groups = append(groups, wrapped(p.style.Truncation.Render(evictionLine(p.view.Dropped))))
 	}
 	attempts := attemptNumbers(p.view.RunOrder)
 	divide := len(p.view.RunOrder) > 1
@@ -549,17 +607,78 @@ func RenderTranscript(p *TranscriptPane) string {
 		// carries no attempt number and draws no divider rather than a wrong one.
 		if divide && !e.IsGate() && (i == 0 || e.Event.AgentRunID != prevRun) {
 			if n, ok := attempts[e.Event.AgentRunID]; ok {
-				writeWrapped(p.style.Truncation.Render(fmt.Sprintf("── attempt %d ──", n)))
+				groups = append(groups, wrapped(p.style.Truncation.Render(fmt.Sprintf("── attempt %d ──", n))))
 			}
 		}
 		if !e.IsGate() {
 			prevRun = e.Event.AgentRunID
 		}
+		var entry []string
 		for _, line := range entryLines(e, i == p.selection, p.Expanded(i), p.style) {
-			writeWrapped(line)
+			entry = append(entry, wrapped(line)...)
+		}
+		if i == p.selection {
+			selGroup = len(groups)
+		}
+		groups = append(groups, entry)
+	}
+	return groups, selGroup
+}
+
+// clampTranscriptGroups keeps groups within budget rows, anchored on the
+// group at anchor (the last group when anchor is -1, so an unselected pane
+// still clamps towards its newest content). It grows the kept window outward
+// from the anchor towards the tail first, then towards the retained start,
+// stopping in a direction once the next group there would not fit, so the
+// window stays contiguous and never leaves a gap. A single group larger than
+// budget clamps to its own last budget rows, the same tail bias as the
+// window as a whole; the row wrapWidth splits a styled line across can carry
+// no opening escape of its own (only the split's first physical row does), so
+// a leading reset guards the kept rows against inheriting an open style from
+// the row dropped above them.
+func clampTranscriptGroups(groups [][]string, anchor, budget int) [][]string {
+	if len(groups) == 0 || budget <= 0 {
+		return groups
+	}
+	if anchor < 0 || anchor >= len(groups) {
+		anchor = len(groups) - 1
+	}
+	if len(groups[anchor]) >= budget {
+		if extra := len(groups[anchor]) - budget; extra > 0 {
+			kept := append([]string(nil), groups[anchor][extra:]...)
+			kept[0] = "\x1b[0m" + kept[0]
+			return [][]string{kept}
+		}
+		return [][]string{groups[anchor]}
+	}
+	lo, hi := anchor, anchor
+	used := len(groups[anchor])
+	canTail, canHead := true, true
+	for canTail || canHead {
+		progressed := false
+		if canTail {
+			if hi+1 < len(groups) && used+len(groups[hi+1]) <= budget {
+				hi++
+				used += len(groups[hi])
+				progressed = true
+			} else {
+				canTail = false
+			}
+		}
+		if canHead && used < budget {
+			if lo-1 >= 0 && used+len(groups[lo-1]) <= budget {
+				lo--
+				used += len(groups[lo])
+				progressed = true
+			} else {
+				canHead = false
+			}
+		}
+		if !progressed {
+			break
 		}
 	}
-	return b.String()
+	return groups[lo : hi+1]
 }
 
 // attemptNumbers maps each AgentRun to its 1-based attempt number. The order

@@ -3,6 +3,7 @@ package wayfinding_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,9 +124,19 @@ func TestResumeDecision_NewHumanComment_ResumesAndSetsActive(t *testing.T) {
 		t.Error("checkpoint.ResumedContext is empty, want the serialized resumed context")
 	}
 
-	// Note: decision.resumed event is not recorded to the events table
-	// (which is for coding executions). A separate planning events table
-	// would be needed for full parity with Phase 1's needsinfo.resumed event.
+	events, err := store.EventsByExecution(ctx, "plan-exec-1")
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("EventsByExecution = %v, want 1 event", events)
+	}
+	if events[0].Type != "decision.resumed" {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, "decision.resumed")
+	}
+	if !strings.Contains(events[0].Data, "001-vendor") {
+		t.Errorf("events[0].Data = %q, want it to contain decision id %q", events[0].Data, "001-vendor")
+	}
 }
 
 func TestResumeDecision_NoNewComment_StaysNeedsHuman(t *testing.T) {

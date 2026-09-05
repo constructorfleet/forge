@@ -247,6 +247,39 @@ func TestTailerScrollAnchorHoldsAsTailAdvances(t *testing.T) {
 	}
 }
 
+// TestTailerScrollAnchorHoldsWhenAppendEvictsAtCap proves the scrollback stays
+// anchored on the same event when a poll appends events while the ring sits at
+// its cap: each append front-evicts one retained event, so the retained length
+// does not grow. A naive offset += len(events) drifts the window towards the
+// retained start instead of holding it, because it counts events read, not the
+// ring's actual growth.
+func TestTailerScrollAnchorHoldsWhenAppendEvictsAtCap(t *testing.T) {
+	store := &fakeTranscriptStore{}
+	for i := range 4 {
+		store.events = append(store.events, msg(i, "e"))
+	}
+	tailer := tui.NewTranscriptTailer(store, 7, 4)
+	tailer.SetHeight(2)
+	if _, err := tailer.Poll(context.Background()); err != nil {
+		t.Fatalf("Poll 1: %v", err)
+	}
+	tailer.ScrollUp(1)
+
+	// The ring is already at its cap of 4. Two more events each evict one
+	// retained event, so the retained length stays at 4 across the poll.
+	store.events = append(store.events, msg(4, "new"), msg(5, "newer"))
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll 2: %v", err)
+	}
+	if vm.Retained != 4 {
+		t.Fatalf("Retained = %d, want 4 (cap holds, no growth)", vm.Retained)
+	}
+	if len(vm.Events) != 2 || vm.Events[0].Seq != 2 || vm.Events[1].Seq != 3 {
+		t.Fatalf("window = %v, want the anchor's successor held at seqs [2 3]", vm.Events)
+	}
+}
+
 // TestTailerEmptyPoll proves a run with no events yields an empty window.
 func TestTailerEmptyPoll(t *testing.T) {
 	tailer := tui.NewTranscriptTailer(&fakeTranscriptStore{}, 7, 100)

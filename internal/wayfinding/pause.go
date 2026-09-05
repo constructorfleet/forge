@@ -35,11 +35,13 @@ type NeedsHumanTracker interface {
 }
 
 // CheckpointStore is the subset of storage.Store PauseHandler needs: saving
-// and reloading a Decision's NEEDS_HUMAN checkpoint, and reflecting the
-// pause onto the Planning Execution's runtime status.
+// and reloading a Decision's NEEDS_HUMAN checkpoint, reflecting the pause
+// onto the Planning Execution's runtime status, and recording the pause as
+// an audit Event alongside the checkpoint that first records it.
 type CheckpointStore interface {
 	GetDecisionCheckpoint(ctx context.Context, executionID, decisionID string) (storage.DecisionCheckpoint, error)
 	SaveDecisionCheckpoint(ctx context.Context, checkpoint storage.DecisionCheckpoint) error
+	SaveDecisionCheckpointWithEvent(ctx context.Context, checkpoint storage.DecisionCheckpoint, event storage.Event) error
 	UpdatePlanningStatus(ctx context.Context, executionID string, status domain.PlanningStatus) error
 }
 
@@ -103,7 +105,14 @@ func (p *PauseHandler) Handle(ctx context.Context, decisionID string, decision *
 			LabelAdded:       labelEligible,
 			CreatedAt:        p.now(),
 		}
-		if err := p.Store.SaveDecisionCheckpoint(ctx, checkpoint); err != nil {
+		event, err := storage.MarshalEvent(p.ExecutionID, "decision.paused", checkpoint.CreatedAt, struct {
+			DecisionID string `json:"decision_id"`
+			Question   string `json:"question"`
+		}{DecisionID: decisionID, Question: detail.Question})
+		if err != nil {
+			return nil, fmt.Errorf("wayfinding: build paused event for decision %s: %w", decisionID, err)
+		}
+		if err := p.Store.SaveDecisionCheckpointWithEvent(ctx, checkpoint, event); err != nil {
 			return nil, fmt.Errorf("wayfinding: save decision checkpoint for %s: %w", decisionID, err)
 		}
 	}

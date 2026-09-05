@@ -652,10 +652,10 @@ type Store interface {
 	// Returns ErrNotFound if no active lease exists.
 	FeaturePlanningLease(ctx context.Context, featureID string) (PlanningLease, error)
 
-	// UpdatePlanningLeaseOwner records the OS process ID currently owning
-	// the active planning lease for featureID, the lease analogue of
-	// UpdateWorkerOwner.
-	UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int) error
+	// UpdatePlanningLeaseOwner records the OS process ID and process
+	// identity token currently owning the active planning lease for
+	// featureID, the lease analogue of UpdateWorkerOwner.
+	UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int, ownerToken string) error
 
 	// ReleaseFeaturePlanningLease removes the active planning lease for
 	// featureID. Releasing a missing lease is a no-op.
@@ -698,6 +698,12 @@ type Store interface {
 	// NEEDS_HUMAN handling in internal/wayfinding stays idempotent across
 	// repeats (ticket 15a).
 	SaveDecisionCheckpoint(ctx context.Context, checkpoint DecisionCheckpoint) error
+
+	// SaveDecisionCheckpointWithEvent persists checkpoint and appends event
+	// in one transaction, so a Decision's NEEDS_HUMAN pause/resume audit
+	// Event ("decision.paused"/"decision.resumed") is never recorded
+	// without the checkpoint it describes, or vice versa.
+	SaveDecisionCheckpointWithEvent(ctx context.Context, checkpoint DecisionCheckpoint, event Event) error
 
 	// GetDecisionCheckpoint reloads the NEEDS_HUMAN checkpoint for one
 	// Decision within a Planning Execution. Returns ErrNotFound if none

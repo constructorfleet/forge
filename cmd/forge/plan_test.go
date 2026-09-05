@@ -462,7 +462,7 @@ func TestRunPlan_PausedPlanningExecution_StopsAtNeedsHumanGate(t *testing.T) {
 	// A very high, essentially-guaranteed-dead PID: forge treats an
 	// abandoned lease (owner process no longer running) as reclaimable
 	// rather than a live conflict, the same as a process restart.
-	if err := store.UpdatePlanningLeaseOwner(ctx, featureID, 2000000000); err != nil {
+	if err := store.UpdatePlanningLeaseOwner(ctx, featureID, 2000000000, ""); err != nil {
 		t.Fatalf("UpdatePlanningLeaseOwner: %v", err)
 	}
 	if err := store.Close(); err != nil {

@@ -43,26 +43,44 @@ func (e *Engine) ownerToken(ctx context.Context) string {
 	return token
 }
 
+// ProcessStartToken exposes processStartToken so internal/planengine can
+// share this same process-identity lookup for the Feature planning lease
+// (issue 557) instead of duplicating the darwin/procfs-specific lookup.
+func ProcessStartToken(ctx context.Context, pid int) string {
+	return processStartToken(ctx, pid)
+}
+
 // claimOwnerIsLive reports whether claim's recorded owner is still the same
 // live process. A pid the operating system reused fails the identity test
 // and counts as absent, so cancel does not signal an unrelated process and
 // recovery does not refuse to resume.
 func (e *Engine) claimOwnerIsLive(ctx context.Context, claim storage.WorkerClaim) (bool, error) {
-	if claim.OwnerPID <= 0 {
+	return OwnerIsLive(ctx, claim.OwnerPID, claim.OwnerToken, e.ProcessRunning, e.ProcessStartToken)
+}
+
+// OwnerIsLive reports whether the process at pid is still the same live
+// process that recorded ownerToken. A pid the operating system reused fails
+// the identity test and counts as absent. internal/planengine shares this
+// algorithm for the Feature planning lease (issue 557) instead of
+// duplicating it for a second owned resource.
+//
+// processStartToken may be nil, which falls back to the pid test alone.
+func OwnerIsLive(ctx context.Context, pid int, ownerToken string, processRunning func(int) (bool, error), processStartToken func(context.Context, int) string) (bool, error) {
+	if pid <= 0 {
 		return false, nil
 	}
-	running, err := e.ProcessRunning(claim.OwnerPID)
+	running, err := processRunning(pid)
 	if err != nil {
 		return false, err
 	}
-	if !running || claim.OwnerToken == "" || e.ProcessStartToken == nil {
+	if !running || ownerToken == "" || processStartToken == nil {
 		return running, nil
 	}
-	token := e.ProcessStartToken(ctx, claim.OwnerPID)
+	token := processStartToken(ctx, pid)
 	if token == "" {
 		return true, nil
 	}
-	return token == claim.OwnerToken, nil
+	return token == ownerToken, nil
 }
 
 // processStartToken reads pid's start time, which changes when the operating

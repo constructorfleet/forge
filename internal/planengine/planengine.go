@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/wayfinding"
@@ -28,23 +29,33 @@ import (
 type Runtime struct {
 	Store storage.Store
 
-	// Now, NewExecutionID, OwnerPID, and ProcessRunning are seams for
-	// deterministic tests; New sets all four to real implementations,
-	// mirroring internal/engine.Engine's identical seams.
+	// Now, NewExecutionID, OwnerPID, ProcessRunning, and ProcessStartToken
+	// are seams for deterministic tests; New sets all five to real
+	// implementations, mirroring internal/engine.Engine's identical seams.
 	Now            func() time.Time
 	NewExecutionID func() string
 	OwnerPID       func() int
 	ProcessRunning func(pid int) (bool, error)
+
+	// ProcessStartToken identifies the process holding a pid, so a pid the
+	// operating system reused for an unrelated process does not look like
+	// the same live lease owner (issue 557). It returns an empty token when
+	// it cannot identify the process, which makes the liveness check fall
+	// back to the pid test alone. New sets it to internal/engine's
+	// ProcessStartToken, sharing that lookup rather than duplicating its
+	// darwin/procfs-specific code.
+	ProcessStartToken func(ctx context.Context, pid int) string
 }
 
 // New builds a Runtime from its injected Store.
 func New(store storage.Store) *Runtime {
 	return &Runtime{
-		Store:          store,
-		Now:            func() time.Time { return time.Now().UTC() },
-		NewExecutionID: func() string { return uuid.NewString() },
-		OwnerPID:       os.Getpid,
-		ProcessRunning: processRunning,
+		Store:             store,
+		Now:               func() time.Time { return time.Now().UTC() },
+		NewExecutionID:    func() string { return uuid.NewString() },
+		OwnerPID:          os.Getpid,
+		ProcessRunning:    processRunning,
+		ProcessStartToken: engine.ProcessStartToken,
 	}
 }
 
@@ -91,11 +102,11 @@ func (r *Runtime) Start(ctx context.Context, featureID, baseRevision string) (do
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: load planning lease for feature %s: %w", featureID, err)
 	}
 
-	running, err := r.ProcessRunning(lease.OwnerPID)
+	live, err := r.leaseOwnerIsLive(ctx, lease)
 	if err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: inspect planning lease owner for feature %s: %w", featureID, err)
 	}
-	if running && lease.OwnerPID != r.OwnerPID() {
+	if live && lease.OwnerPID != r.OwnerPID() {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: feature %s planning is still owned by live process %d: %w",
 			featureID, lease.OwnerPID, &storage.PlanningLeaseConflictError{FeatureID: featureID, OwningExecutionID: lease.ExecutionID})
 	}
@@ -111,10 +122,30 @@ func (r *Runtime) Start(ctx context.Context, featureID, baseRevision string) (do
 		return r.startNew(ctx, featureID, baseRevision)
 	}
 
-	if err := r.Store.UpdatePlanningLeaseOwner(ctx, featureID, r.OwnerPID()); err != nil {
+	if err := r.Store.UpdatePlanningLeaseOwner(ctx, featureID, r.OwnerPID(), r.ownerToken(ctx)); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: reclaim planning lease for feature %s: %w", featureID, err)
 	}
 	return exec, nil
+}
+
+// leaseOwnerIsLive reports whether lease's recorded owner is still the same
+// live process. A pid the operating system reused fails the identity test
+// and counts as absent, so Start reclaims the lease instead of refusing to
+// resume behind a process that no longer exists (issue 557). It shares
+// internal/engine's claim-liveness algorithm rather than duplicating it.
+func (r *Runtime) leaseOwnerIsLive(ctx context.Context, lease storage.PlanningLease) (bool, error) {
+	return engine.OwnerIsLive(ctx, lease.OwnerPID, lease.OwnerToken, r.ProcessRunning, r.ProcessStartToken)
+}
+
+// ownerToken identifies this Runtime's own process for a new or reclaimed
+// lease. It returns an empty token when it cannot identify the process.
+// Store.UpdatePlanningLeaseOwner writes that empty token as-is, which weakens
+// the lease's future liveness check back to a pid-only test.
+func (r *Runtime) ownerToken(ctx context.Context) string {
+	if r.ProcessStartToken == nil {
+		return ""
+	}
+	return r.ProcessStartToken(ctx, r.OwnerPID())
 }
 
 func (r *Runtime) startNew(ctx context.Context, featureID, baseRevision string) (domain.PlanningExecution, error) {
@@ -128,10 +159,16 @@ func (r *Runtime) startNew(ctx context.Context, featureID, baseRevision string) 
 	if err := r.Store.CreatePlanningExecution(ctx, exec); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: create planning execution for feature %s: %w", featureID, err)
 	}
+	if err := r.appendEvent(ctx, exec.ID, "planning.started", struct {
+		FeatureID    string `json:"feature_id"`
+		BaseRevision string `json:"base_revision"`
+	}{FeatureID: featureID, BaseRevision: baseRevision}); err != nil {
+		return domain.PlanningExecution{}, fmt.Errorf("planengine: record planning started event for feature %s: %w", featureID, err)
+	}
 	if err := r.Store.ClaimFeaturePlanningLease(ctx, featureID, exec.ID); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: claim planning lease for feature %s: %w", featureID, err)
 	}
-	if err := r.Store.UpdatePlanningLeaseOwner(ctx, featureID, r.OwnerPID()); err != nil {
+	if err := r.Store.UpdatePlanningLeaseOwner(ctx, featureID, r.OwnerPID(), r.ownerToken(ctx)); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: record planning lease owner for feature %s: %w", featureID, err)
 	}
 	return exec, nil
@@ -144,10 +181,29 @@ func (r *Runtime) Finish(ctx context.Context, featureID, executionID string, sta
 	if err := r.Store.UpdatePlanningStatus(ctx, executionID, status); err != nil {
 		return fmt.Errorf("planengine: finish planning execution %s: %w", executionID, err)
 	}
+	if err := r.appendEvent(ctx, executionID, "planning.finished", struct {
+		Status string `json:"status"`
+	}{Status: string(status)}); err != nil {
+		return fmt.Errorf("planengine: record planning finished event for execution %s: %w", executionID, err)
+	}
 	if err := r.Store.ReleaseFeaturePlanningLease(ctx, featureID); err != nil {
 		return fmt.Errorf("planengine: release planning lease for feature %s: %w", featureID, err)
 	}
 	return nil
+}
+
+// appendEvent records a planning-scoped Event with a JSON-encoded payload,
+// timestamped by r.Now, via storage.MarshalEvent so this shares its
+// marshal-then-construct step with internal/wayfinding's checkpoint-scoped
+// Event appends rather than duplicating it. Planning Events carry no
+// IssueID: a Feature being planned has no execution_issues row for them to
+// reference.
+func (r *Runtime) appendEvent(ctx context.Context, executionID, eventType string, payload any) error {
+	event, err := storage.MarshalEvent(executionID, eventType, r.Now(), payload)
+	if err != nil {
+		return err
+	}
+	return r.Store.AppendEvent(ctx, event)
 }
 
 // ResumePlanningExecution resumes a paused Planning Execution by checking

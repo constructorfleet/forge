@@ -367,8 +367,9 @@ func (t *TranscriptTailer) offsetForStart(n, start int) int {
 // orders the events once.
 func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptViewModel {
 	start, end := t.windowBounds(len(retained))
-	return TranscriptViewModel{
-		Events:   retained[start:end],
+	window := retained[start:end]
+	vm := TranscriptViewModel{
+		Events:   window,
 		Evicted:  t.evicted,
 		Dropped:  t.ring.Dropped(),
 		AtTail:   t.offset == 0,
@@ -376,6 +377,11 @@ func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptVi
 		Retained: len(retained),
 		RunOrder: t.RunOrder(),
 	}
+	if len(window) > 0 {
+		vm.FirstSeq = window[0].Seq
+		vm.FirstRunID = window[0].AgentRunID
+	}
+	return vm
 }
 
 // orderedWindow returns the retained events in run insertion order, then seq.
@@ -439,4 +445,12 @@ type TranscriptViewModel struct {
 	// the attempt numbers from it, so the divider numbers stay stable while the
 	// visible window moves. It must name every retained event's run.
 	RunOrder []int64
+	// FirstSeq is the Seq of the first event in Events, the window's leading
+	// entry. The pane reads it, with FirstRunID, to size a scrollback request
+	// that recovers a pinned entry the tail pushed several events out of the
+	// window in one poll. Zero on an empty window.
+	FirstSeq int
+	// FirstRunID is the AgentRun of the first event in Events. It scopes
+	// FirstSeq to the right attempt, since Seq restarts at 0 on each run.
+	FirstRunID int64
 }

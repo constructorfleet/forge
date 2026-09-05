@@ -14,6 +14,36 @@ import (
 // Decision first pauses and again once its comment has posted, mirroring
 // SaveNeedsInfoCheckpoint's two-step intent-then-post pattern.
 func (s *SQLiteStore) SaveDecisionCheckpoint(ctx context.Context, checkpoint DecisionCheckpoint) error {
+	if err := saveDecisionCheckpoint(ctx, s.db, checkpoint); err != nil {
+		return fmt.Errorf("storage: save decision checkpoint %s/%s: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
+	}
+	return nil
+}
+
+// SaveDecisionCheckpointWithEvent persists checkpoint and appends event in
+// one transaction, so the "decision.paused"/"decision.resumed" audit Event
+// can never be recorded without the checkpoint it describes, or vice versa
+// -- mirroring RecordGateRun's checkpoint/Event atomicity.
+func (s *SQLiteStore) SaveDecisionCheckpointWithEvent(ctx context.Context, checkpoint DecisionCheckpoint, event Event) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: save decision checkpoint %s/%s with event: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := saveDecisionCheckpoint(ctx, tx, checkpoint); err != nil {
+		return fmt.Errorf("storage: save decision checkpoint %s/%s with event: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
+	}
+	if err := insertEvent(ctx, tx, event); err != nil {
+		return fmt.Errorf("storage: save decision checkpoint %s/%s with event: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: save decision checkpoint %s/%s with event: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
+	}
+	return nil
+}
+
+func saveDecisionCheckpoint(ctx context.Context, q querier, checkpoint DecisionCheckpoint) error {
 	var contextVal any
 	if checkpoint.Context != "" {
 		contextVal = checkpoint.Context
@@ -35,7 +65,7 @@ func (s *SQLiteStore) SaveDecisionCheckpoint(ctx context.Context, checkpoint Dec
 		resumedContext = checkpoint.ResumedContext
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	_, err := q.ExecContext(ctx, `
 		INSERT INTO decision_checkpoints (
 			execution_id, decision_id, decision_revision, question, context,
 			label_added, comment_posted, comment_author, comment_posted_at,
@@ -56,10 +86,7 @@ func (s *SQLiteStore) SaveDecisionCheckpoint(ctx context.Context, checkpoint Dec
 		checkpoint.LabelAdded, checkpoint.CommentPosted, commentAuthor, commentPostedAt,
 		checkpoint.CreatedAt.UTC(), resumedAt, resumedContext,
 	)
-	if err != nil {
-		return fmt.Errorf("storage: save decision checkpoint %s/%s: %w", checkpoint.ExecutionID, checkpoint.DecisionID, err)
-	}
-	return nil
+	return err
 }
 
 // GetDecisionCheckpoint reloads the NEEDS_HUMAN checkpoint for

@@ -406,6 +406,44 @@ func TestPaneFollowTailUnpinsTheSelection(t *testing.T) {
 	}
 }
 
+// TestTranscriptKeysOfferPagingWhenScrollbackExists proves the footer
+// advertises the page keys once there is retained scrollback to reach, so
+// an operator learns the window can move and not only the selection.
+func TestTranscriptKeysOfferPagingWhenScrollbackExists(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: false, Retained: 30, Events: []tui.TranscriptEvent{
+		prose(10, "recent"),
+	}})
+
+	var found bool
+	for _, k := range tui.TranscriptKeys(pane) {
+		if strings.Contains(k.Key, "pgup") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TranscriptKeys omits pgup while older events remain retained: %v", tui.TranscriptKeys(pane))
+	}
+}
+
+// TestTranscriptKeysHidePagingAtBothEdges proves the footer omits the page
+// keys once the window already spans the whole retained history, so the
+// footer never advertises a key that would move nothing.
+func TestTranscriptKeysHidePagingAtBothEdges(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 1, Events: []tui.TranscriptEvent{
+		prose(0, "only"),
+	}})
+
+	for _, k := range tui.TranscriptKeys(pane) {
+		if strings.Contains(k.Key, "pgup") || strings.Contains(k.Key, "pgdown") {
+			t.Errorf("TranscriptKeys advertises %q with no scrollback either way: %v", k.Key, tui.TranscriptKeys(pane))
+		}
+	}
+}
+
 // TestTranscriptKeysHideTailWithoutScroller proves the footer never advertises
 // a follow-tail the pane cannot perform.
 func TestTranscriptKeysHideTailWithoutScroller(t *testing.T) {
@@ -667,19 +705,39 @@ func TestPaneMoveSelectionPage(t *testing.T) {
 	}
 }
 
+// TestPanePageUpAndPageDownUseThePageMove proves the convenience methods use
+// the same page-size scroll as MoveSelectionPage.
+func TestPanePageUpAndPageDownUseThePageMove(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 20, Events: []tui.TranscriptEvent{
+		prose(10, "e10"), prose(11, "e11"), prose(12, "e12"), prose(13, "e13"), prose(14, "e14"),
+	}})
+	pane.Select(4)
+
+	pane.PageUp()
+	if sc.up != 10 {
+		t.Fatalf("ScrollUp events = %d, want 10: PageUp did not use the page move", sc.up)
+	}
+	pane.PageDown()
+	if sc.down != 10 {
+		t.Fatalf("ScrollDown events = %d, want 10: PageDown did not use the page move", sc.down)
+	}
+}
+
 // TestPaneMoveSelectionPageAtEdgesDoesNotPin proves a page scroll past the
 // retained start or tail clamps and does not pin the selection.
 func TestPaneMoveSelectionPageAtEdgesDoesNotPin(t *testing.T) {
 	sc := &fakeScroller{}
 	pane := tui.NewTranscriptPane()
 	pane.SetScroller(sc)
-	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 5, Events: []tui.TranscriptEvent{
-		prose(0, "e0"), prose(1, "e1"), prose(2, "e2"), prose(3, "e3"), prose(4, "e4"),
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 1, Events: []tui.TranscriptEvent{
+		prose(0, "e0"),
 	}})
-	pane.Select(0)
 
 	// Page up at retained start does nothing.
-	pane.MoveSelectionPage(-1)
+	pane.PageUp()
 	if sc.up != 0 {
 		t.Errorf("ScrollUp events = %d, want 0 at the retained start", sc.up)
 	}
@@ -688,13 +746,18 @@ func TestPaneMoveSelectionPageAtEdgesDoesNotPin(t *testing.T) {
 	} else if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
 		t.Errorf("selected seq = %d, want 0: page up at start pinned the selection", e.Event.Seq)
 	}
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			t.Error("footer offers follow tail after an inert PageUp")
+		}
+	}
 
 	// Page down at tail does nothing.
 	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 5, Events: []tui.TranscriptEvent{
 		prose(0, "e0"), prose(1, "e1"), prose(2, "e2"), prose(3, "e3"), prose(4, "e4"),
 	}})
 	pane.Select(4)
-	pane.MoveSelectionPage(1)
+	pane.PageDown()
 	if sc.down != 0 {
 		t.Errorf("ScrollDown events = %d, want 0 at the tail", sc.down)
 	}
@@ -753,6 +816,39 @@ func TestPanePinnedSelectionAnchorsTheWindow(t *testing.T) {
 	}})
 	if e, _ := pane.SelectedEntry(); e.Event.Seq != 1 {
 		t.Errorf("selected seq = %d, want 1: the pane lost its pinned entry", e.Event.Seq)
+	}
+}
+
+// TestPanePinnedSelectionAnchorsPastMultipleEvents proves a pinned entry that
+// one poll pushes several events out of the window recovers in that same
+// pass: the pane sizes its scrollback request from the shortfall between the
+// pinned entry's Seq and the window's new leading Seq, not a fixed one event.
+func TestPanePinnedSelectionAnchorsPastMultipleEvents(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 2, FirstSeq: 0, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	pane.Select(0)
+
+	// One poll appends several events at once: seq 0 falls three events behind.
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 5, FirstSeq: 3, Events: []tui.TranscriptEvent{
+		prose(3, "fourth"),
+		prose(4, "fifth"),
+	}})
+	if sc.up != 3 {
+		t.Errorf("ScrollUp events = %d, want 3: the shortfall did not size the request", sc.up)
+	}
+
+	// The anchored window brings the pinned entry back in this one recovery.
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 5, FirstSeq: 0, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
+		t.Errorf("selected seq = %d, want 0: the pane lost its pinned entry", e.Event.Seq)
 	}
 }
 
@@ -898,5 +994,97 @@ func TestPaneFoldsToolResultWithinItsOwnAttempt(t *testing.T) {
 	}
 	if entries[0].Result != nil {
 		t.Errorf("entry 0 folded a result from another attempt: %+v", entries[0].Result)
+	}
+}
+
+// TestRenderTranscriptClampsToHeightFromTheTail proves a pane with a height
+// budget drops the oldest rows first, so the newest activity stays on screen
+// when the window is unpinned (the default, tail-following state).
+func TestRenderTranscriptClampsToHeightFromTheTail(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{1}, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	pane.SetHeight(2)
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 2 {
+		t.Fatalf("RenderTranscript at height 2 has %d lines, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if strings.Contains(lines[0], "first") || strings.Contains(lines[1], "first") {
+		t.Errorf("clamped render kept the oldest row instead of the newest:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, want := range []string{"second", "third"} {
+		found := false
+		for _, l := range lines {
+			if strings.Contains(l, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("clamped render dropped %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// TestRenderTranscriptKeepsPinnedSelectionVisibleWhenClamped proves the height
+// budget clamps around the pinned selection rather than blindly keeping the
+// newest rows, so scrolling back to inspect an old entry never scrolls it back
+// off screen behind a tall window.
+func TestRenderTranscriptKeepsPinnedSelectionVisibleWhenClamped(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{1}, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+		prose(3, "fourth"),
+	}})
+	pane.Select(0)
+	pane.SetHeight(1)
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 1 {
+		t.Fatalf("RenderTranscript at height 1 has %d lines, want 1:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "first") {
+		t.Errorf("clamped render lost the pinned selection:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestRenderTranscriptClampsAnExpandedEntryToTheHeightBudget proves a huge
+// expansion cannot outgrow the height budget: the pane is the seam that
+// bounds it, since the spec defers heavy content to $PAGER rather than
+// growing the pane past the terminal.
+func TestRenderTranscriptClampsAnExpandedEntryToTheHeightBudget(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	bigInput := strings.Repeat("line\n", 50)
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", bigInput),
+	}})
+	pane.ToggleExpand()
+	pane.SetHeight(5)
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 5 {
+		t.Fatalf("RenderTranscript at height 5 has %d lines, want 5:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+// TestRenderTranscriptUnsetHeightRendersEverything proves a pane that never
+// receives a height budget renders unclamped, matching SetWidth's zero-value
+// convention: the runtime has not yet reported a terminal size.
+func TestRenderTranscriptUnsetHeightRendersEverything(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 3 {
+		t.Fatalf("RenderTranscript with no height set has %d lines, want 3:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 }

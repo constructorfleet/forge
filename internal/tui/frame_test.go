@@ -390,6 +390,40 @@ func TestRenderTinyHeightKeepsOneTranscriptRow(t *testing.T) {
 	}
 }
 
+// TestRenderKeepsAnExpandedPinnedSelectionOnScreen proves the frame keeps the
+// operator's pinned selection visible, footer and all, even when its own
+// expansion draws far more lines than the terminal has rows. The spec defers
+// heavy content to $PAGER, so the pane must clamp an oversized expansion
+// itself rather than let it push the strip and the footer off screen.
+func TestRenderKeepsAnExpandedPinnedSelectionOnScreen(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:   true,
+		RunOrder: []int64{7},
+		Events: []tui.TranscriptEvent{
+			{AgentRunID: 7, Seq: 0, Type: "TOOL_CALL", ToolName: "bash", ToolInput: strings.Repeat("line\n", 50), ToolCallID: "t1"},
+			{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
+		},
+	})
+	pane.Select(0)
+	pane.ToggleExpand()
+
+	vm := tui.ViewModel{
+		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+		Transcript: pane,
+		Focus:      tui.PaneTranscript,
+		Height:     6,
+	}
+
+	got := splitLines(tui.Render(vm))
+	if len(got) > 6 {
+		t.Fatalf("Render emitted %d rows in a 6-row terminal:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	if !strings.Contains(tui.Render(vm), "[q] quit") {
+		t.Errorf("the expansion pushed the footer off screen:\n%s", tui.Render(vm))
+	}
+}
+
 // TestRenderZeroHeightDrawsTheWholeTranscript proves an unset height clips
 // nothing: the runtime sends no size before the first frame.
 func TestRenderZeroHeightDrawsTheWholeTranscript(t *testing.T) {
