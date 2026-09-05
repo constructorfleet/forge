@@ -24,9 +24,8 @@ type ResumeDecisionTracker interface {
 // ResumeDecisionStore is the subset of storage.Store ResumeDecision needs.
 type ResumeDecisionStore interface {
 	GetDecisionCheckpoint(ctx context.Context, executionID, decisionID string) (storage.DecisionCheckpoint, error)
-	SaveDecisionCheckpoint(ctx context.Context, checkpoint storage.DecisionCheckpoint) error
+	SaveDecisionCheckpointWithEvent(ctx context.Context, checkpoint storage.DecisionCheckpoint, event storage.Event) error
 	UpdatePlanningStatus(ctx context.Context, executionID string, status domain.PlanningStatus) error
-	AppendEvent(ctx context.Context, event storage.Event) error
 	LoadPlanningExecution(ctx context.Context, executionID string) (domain.PlanningExecution, error)
 }
 
@@ -75,9 +74,10 @@ type ResumeDecisionResult struct {
 // configuration, since there is no tracker-clock anchor to compare against.
 //
 // The ACTIVE transition is performed last, after the checkpoint's resumed
-// context and the "decision.resumed" Event are durably saved: if either of
-// those fails, the Planning Execution remains in NEEDS_HUMAN and
-// `forge resume` can simply be re-run.
+// context and the "decision.resumed" Event are durably saved together (one
+// transaction, via SaveDecisionCheckpointWithEvent): if that save fails, the
+// Planning Execution remains in NEEDS_HUMAN and `forge resume` can simply be
+// re-run.
 func ResumeDecision(ctx context.Context, store ResumeDecisionStore, trk ResumeDecisionTracker, executionID, decisionID string, now func() time.Time) (ResumeDecisionResult, error) {
 	checkpoint, err := store.GetDecisionCheckpoint(ctx, executionID, decisionID)
 	if err != nil {
@@ -129,9 +129,16 @@ func ResumeDecision(ctx context.Context, store ResumeDecisionStore, trk ResumeDe
 		return ResumeDecisionResult{}, fmt.Errorf("wayfinding: resume decision %s: marshal resumed context: %w", decisionID, err)
 	}
 	resumedAt := now()
+
 	checkpoint.ResumedAt = &resumedAt
 	checkpoint.ResumedContext = string(contextJSON)
-	if err := store.SaveDecisionCheckpoint(ctx, checkpoint); err != nil {
+	event, err := storage.MarshalEvent(executionID, "decision.resumed", resumedAt, struct {
+		DecisionID string `json:"decision_id"`
+	}{DecisionID: decisionID})
+	if err != nil {
+		return ResumeDecisionResult{}, fmt.Errorf("wayfinding: resume decision %s: build resumed event: %w", decisionID, err)
+	}
+	if err := store.SaveDecisionCheckpointWithEvent(ctx, checkpoint, event); err != nil {
 		return ResumeDecisionResult{}, fmt.Errorf("wayfinding: resume decision %s: save checkpoint: %w", decisionID, err)
 	}
 

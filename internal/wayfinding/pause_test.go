@@ -161,6 +161,20 @@ func TestPauseHandler_Handle_PostsChecksAndSetsStatus(t *testing.T) {
 	if exec.Status != domain.PlanningStatusNeedsHuman {
 		t.Errorf("Status = %q, want NEEDS_HUMAN", exec.Status)
 	}
+
+	events, err := store.EventsByExecution(context.Background(), "plan-exec-1")
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("EventsByExecution = %v, want 1 event", events)
+	}
+	if events[0].Type != "decision.paused" {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, "decision.paused")
+	}
+	if !strings.Contains(events[0].Data, "001-vendor") {
+		t.Errorf("events[0].Data = %q, want it to contain decision id %q", events[0].Data, "001-vendor")
+	}
 }
 
 func TestPauseHandler_Handle_IsIdempotent(t *testing.T) {
@@ -189,6 +203,14 @@ func TestPauseHandler_Handle_IsIdempotent(t *testing.T) {
 
 	if got := trackerDouble.CommentCount("42"); got != 1 {
 		t.Errorf("CommentCount(42) = %d, want 1 (re-running must not double-post)", got)
+	}
+
+	events, err := store.EventsByExecution(context.Background(), "plan-exec-1")
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("EventsByExecution = %v, want 1 event (re-running must not double-record)", events)
 	}
 }
 

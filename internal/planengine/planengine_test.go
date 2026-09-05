@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +206,27 @@ func TestStartReleasesLeaseFromTerminalExecutionStillHeld(t *testing.T) {
 	}
 }
 
+func TestStartRecordsPlanningStartedEvent(t *testing.T) {
+	store := openTestStore(t)
+	r := newTestRuntime(store)
+
+	exec, err := r.Start(context.Background(), "feature-1", "base-rev")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	events, err := store.EventsByExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("EventsByExecution = %v, want 1 event", events)
+	}
+	if events[0].Type != "planning.started" {
+		t.Errorf("events[0].Type = %q, want %q", events[0].Type, "planning.started")
+	}
+}
+
 func TestFinishReleasesLeaseAndPersistsStatus(t *testing.T) {
 	store := openTestStore(t)
 	r := newTestRuntime(store)
@@ -226,6 +248,33 @@ func TestFinishReleasesLeaseAndPersistsStatus(t *testing.T) {
 	}
 	if _, err := store.FeaturePlanningLease(context.Background(), "feature-1"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("expected lease released, got %v", err)
+	}
+}
+
+func TestFinishRecordsPlanningFinishedEvent(t *testing.T) {
+	store := openTestStore(t)
+	r := newTestRuntime(store)
+
+	exec, err := r.Start(context.Background(), "feature-1", "base-rev")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := r.Finish(context.Background(), "feature-1", exec.ID, domain.PlanningStatusComplete); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	events, err := store.EventsByExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatalf("EventsByExecution: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("EventsByExecution = %v, want 2 events (started, finished)", events)
+	}
+	if events[1].Type != "planning.finished" {
+		t.Errorf("events[1].Type = %q, want %q", events[1].Type, "planning.finished")
+	}
+	if !strings.Contains(events[1].Data, string(domain.PlanningStatusComplete)) {
+		t.Errorf("events[1].Data = %q, want it to contain status %q", events[1].Data, domain.PlanningStatusComplete)
 	}
 }
 

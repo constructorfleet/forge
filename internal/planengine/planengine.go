@@ -128,6 +128,12 @@ func (r *Runtime) startNew(ctx context.Context, featureID, baseRevision string) 
 	if err := r.Store.CreatePlanningExecution(ctx, exec); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: create planning execution for feature %s: %w", featureID, err)
 	}
+	if err := r.appendEvent(ctx, exec.ID, "planning.started", struct {
+		FeatureID    string `json:"feature_id"`
+		BaseRevision string `json:"base_revision"`
+	}{FeatureID: featureID, BaseRevision: baseRevision}); err != nil {
+		return domain.PlanningExecution{}, fmt.Errorf("planengine: record planning started event for feature %s: %w", featureID, err)
+	}
 	if err := r.Store.ClaimFeaturePlanningLease(ctx, featureID, exec.ID); err != nil {
 		return domain.PlanningExecution{}, fmt.Errorf("planengine: claim planning lease for feature %s: %w", featureID, err)
 	}
@@ -144,10 +150,29 @@ func (r *Runtime) Finish(ctx context.Context, featureID, executionID string, sta
 	if err := r.Store.UpdatePlanningStatus(ctx, executionID, status); err != nil {
 		return fmt.Errorf("planengine: finish planning execution %s: %w", executionID, err)
 	}
+	if err := r.appendEvent(ctx, executionID, "planning.finished", struct {
+		Status string `json:"status"`
+	}{Status: string(status)}); err != nil {
+		return fmt.Errorf("planengine: record planning finished event for execution %s: %w", executionID, err)
+	}
 	if err := r.Store.ReleaseFeaturePlanningLease(ctx, featureID); err != nil {
 		return fmt.Errorf("planengine: release planning lease for feature %s: %w", featureID, err)
 	}
 	return nil
+}
+
+// appendEvent records a planning-scoped Event with a JSON-encoded payload,
+// timestamped by r.Now, via storage.MarshalEvent so this shares its
+// marshal-then-construct step with internal/wayfinding's checkpoint-scoped
+// Event appends rather than duplicating it. Planning Events carry no
+// IssueID: a Feature being planned has no execution_issues row for them to
+// reference.
+func (r *Runtime) appendEvent(ctx context.Context, executionID, eventType string, payload any) error {
+	event, err := storage.MarshalEvent(executionID, eventType, r.Now(), payload)
+	if err != nil {
+		return err
+	}
+	return r.Store.AppendEvent(ctx, event)
 }
 
 // ResumePlanningExecution resumes a paused Planning Execution by checking
