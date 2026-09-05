@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tui"
@@ -95,6 +96,24 @@ func TestTailerPollAdvancesCursor(t *testing.T) {
 	}
 	if store.calls[1] != 1 {
 		t.Fatalf("second read afterSeq = %d, want 1", store.calls[1])
+	}
+}
+
+// TestTailerPollCarriesOccurredAt proves Poll copies the stored event's finish
+// time onto the TUI's own TranscriptEvent, so the pane can order a gate row
+// into the timeline against it.
+func TestTailerPollCarriesOccurredAt(t *testing.T) {
+	at := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	store := &fakeTranscriptStore{events: []storage.TranscriptEvent{
+		{Seq: 0, Type: "MESSAGE", OccurredAt: at},
+	}}
+	tailer := tui.NewTranscriptTailer(store, 7, 100)
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if !vm.Events[0].OccurredAt.Equal(at) {
+		t.Fatalf("OccurredAt = %v, want %v", vm.Events[0].OccurredAt, at)
 	}
 }
 

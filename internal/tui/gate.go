@@ -2,8 +2,9 @@ package tui
 
 // gate.go: quality-gate runs as synthetic transcript rows. A gate run is not
 // an Agent transcript event and storage never persists one as such, so the
-// pane derives the row from the store's GateRun records and appends it after
-// the event window. No new TranscriptEvent type exists for a gate.
+// pane derives the row from the store's GateRun records and interleaves it
+// into the event timeline by finish time. No new TranscriptEvent type exists
+// for a gate.
 
 import (
 	"fmt"

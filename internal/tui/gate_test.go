@@ -197,16 +197,75 @@ func TestGateGlyphCarriesTheOutcome(t *testing.T) {
 	}
 }
 
-func TestUnpinnedSelectionFollowsTheNewestEventPastGateRows(t *testing.T) {
+// TestGateRowInterleavesBeforeAnEventThatFinishedLater proves a gate row
+// takes its place in the timeline by FinishedAt, ahead of an event whose
+// OccurredAt is later, instead of always trailing the whole event window.
+func TestGateRowInterleavesBeforeAnEventThatFinishedLater(t *testing.T) {
+	base := time.Unix(1000, 0)
 	p := NewTranscriptPane()
-	p.SetGates([]GateRow{{Name: "test", Passed: true}})
+	p.SetGates([]GateRow{{Name: "early", FinishedAt: base}})
 	p.SetView(gateView(
-		TranscriptEvent{Seq: 0, Type: eventMessage, Text: "a"},
-		TranscriptEvent{Seq: 1, Type: eventMessage, Text: "b"},
+		TranscriptEvent{Seq: 0, Type: eventMessage, Text: "a", OccurredAt: base.Add(time.Second)},
+	))
+	entries := p.Entries()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(entries))
+	}
+	if !entries[0].IsGate() || entries[1].IsGate() {
+		t.Fatalf("gate row did not interleave ahead of the later event: %+v", entries)
+	}
+}
+
+// TestGateRowInterleavesBetweenTwoEvents proves a gate row that finished
+// between two events takes the slot between them.
+func TestGateRowInterleavesBetweenTwoEvents(t *testing.T) {
+	base := time.Unix(1000, 0)
+	p := NewTranscriptPane()
+	p.SetGates([]GateRow{{Name: "mid", FinishedAt: base.Add(time.Second)}})
+	p.SetView(gateView(
+		TranscriptEvent{Seq: 0, Type: eventMessage, Text: "a", OccurredAt: base},
+		TranscriptEvent{Seq: 1, Type: eventMessage, Text: "b", OccurredAt: base.Add(2 * time.Second)},
+	))
+	entries := p.Entries()
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	if entries[0].IsGate() || !entries[1].IsGate() || entries[2].IsGate() {
+		t.Fatalf("gate row did not interleave between the two events: %+v", entries)
+	}
+}
+
+// TestUnpinnedSelectionFollowsTheNewestEventWhenTheGateFinishedEarlier proves
+// the tail selection still holds the newest event where a gate ran before it,
+// even with no special case that always skips a trailing gate row.
+func TestUnpinnedSelectionFollowsTheNewestEventWhenTheGateFinishedEarlier(t *testing.T) {
+	base := time.Unix(1000, 0)
+	p := NewTranscriptPane()
+	p.SetGates([]GateRow{{Name: "test", Passed: true, FinishedAt: base}})
+	p.SetView(gateView(
+		TranscriptEvent{Seq: 0, Type: eventMessage, Text: "a", OccurredAt: base.Add(time.Second)},
+		TranscriptEvent{Seq: 1, Type: eventMessage, Text: "b", OccurredAt: base.Add(2 * time.Second)},
 	))
 	e, ok := p.SelectedEntry()
 	if !ok || e.IsGate() || e.Event.Seq != 1 {
 		t.Fatalf("tail selection stuck on a gate row: %+v", e)
+	}
+}
+
+// TestUnpinnedSelectionFollowsTheGateWhenItFinishesAfterTheLastEvent proves the
+// tail selection holds a gate row where it genuinely is the newest entry, now
+// that gate rows interleave by finish time instead of always trailing.
+func TestUnpinnedSelectionFollowsTheGateWhenItFinishesAfterTheLastEvent(t *testing.T) {
+	base := time.Unix(1000, 0)
+	p := NewTranscriptPane()
+	p.SetGates([]GateRow{{Name: "test", Passed: true, FinishedAt: base.Add(2 * time.Second)}})
+	p.SetView(gateView(
+		TranscriptEvent{Seq: 0, Type: eventMessage, Text: "a", OccurredAt: base},
+		TranscriptEvent{Seq: 1, Type: eventMessage, Text: "b", OccurredAt: base.Add(time.Second)},
+	))
+	e, ok := p.SelectedEntry()
+	if !ok || !e.IsGate() || e.Gate.Name != "test" {
+		t.Fatalf("tail selection did not follow the gate row that finished last: %+v", e)
 	}
 }
 

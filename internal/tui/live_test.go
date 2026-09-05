@@ -908,8 +908,9 @@ func TestLiveModelWindowSizeSetsTranscriptHeight(t *testing.T) {
 	if strings.Contains(got, "starting work") {
 		t.Errorf("the transcript ignored the terminal height:\n%s", got)
 	}
-	// The gate row is the newest entry, so it is what the two rows must hold.
-	if !strings.Contains(got, "gate go-test") {
+	// The gate row finished before the events, so the tool call is the newest
+	// entry and is what the two rows must hold.
+	if !strings.Contains(got, "bash") {
 		t.Errorf("frame omits the newest entries:\n%s", got)
 	}
 }
@@ -993,7 +994,7 @@ func TestLiveModelWindowSizeClipsTheFrame(t *testing.T) {
 	if len(got) > 6 {
 		t.Errorf("frame drew %d rows in a 6-row terminal:\n%s", len(got), strings.Join(got, "\n"))
 	}
-	if !strings.Contains(m.View().Content, "gate go-test") {
+	if !strings.Contains(m.View().Content, "bash") {
 		t.Errorf("clipping dropped the newest rows:\n%s", m.View().Content)
 	}
 }
