@@ -95,6 +95,28 @@ func TestDeriveLiveness(t *testing.T) {
 	}
 }
 
+func TestDeriveTranscriptLag(t *testing.T) {
+	poll := time.Second
+	cases := []struct {
+		name string
+		age  time.Duration
+		poll time.Duration
+		want bool
+	}{
+		{"within threshold", 2 * time.Second, poll, false},
+		{"at threshold", 3 * time.Second, poll, false},
+		{"over threshold", 4 * time.Second, poll, true},
+		{"zero poll never lags", 100 * time.Second, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tui.DeriveTranscriptLag(tc.age, tc.poll); got != tc.want {
+				t.Fatalf("DeriveTranscriptLag(%s, %s) = %v, want %v", tc.age, tc.poll, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLegalKeys(t *testing.T) {
 	cases := []struct {
 		state domain.IssueState
@@ -183,6 +205,27 @@ func TestRenderAdvertisesSwitchKeyWithSeveralWorkers(t *testing.T) {
 	}
 	if got := tui.Render(solo); strings.Contains(got, "switch worker") {
 		t.Fatalf("footer advertises switch-worker with only one row:\n%s", got)
+	}
+}
+
+// TestRenderMarksTranscriptHeaderWhenLagging proves a transcript read older
+// than transcriptLagMultiple poll intervals marks the pane header, so a store
+// slower than the poll cadence is visible rather than merely a thinned refresh
+// rate.
+func TestRenderMarksTranscriptHeaderWhenLagging(t *testing.T) {
+	vm := tui.ViewModel{PollInterval: time.Second, TranscriptLagAge: 4 * time.Second}
+	if got := tui.Render(vm); !strings.Contains(got, "lagging") {
+		t.Fatalf("Render does not mark a lagging transcript:\n%s", got)
+	}
+}
+
+// TestRenderOmitsLagMarkerUnderThreshold proves the header stays quiet while
+// the last committed read is still within transcriptLagMultiple poll
+// intervals: ordinary poll jitter must not read as a lagging store.
+func TestRenderOmitsLagMarkerUnderThreshold(t *testing.T) {
+	vm := tui.ViewModel{PollInterval: time.Second, TranscriptLagAge: time.Second}
+	if got := tui.Render(vm); strings.Contains(got, "lagging") {
+		t.Fatalf("Render marks lag under the threshold:\n%s", got)
 	}
 }
 

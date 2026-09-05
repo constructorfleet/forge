@@ -53,6 +53,25 @@ const (
 // staleHeartbeat is the age past which a last heartbeat renders as Stale.
 const staleHeartbeat = 15 * time.Second
 
+// transcriptLagMultiple is how many poll intervals the last committed
+// transcript read may age past before the pane header marks it lagging. A
+// store slower than one poll interval gates every later tick's read (see
+// transcriptController.reading), which thins the transcript's effective
+// refresh rate with no signal in the frame; this multiple tells a genuinely
+// slow store apart from one poll's own ordinary jitter.
+const transcriptLagMultiple = 3
+
+// DeriveTranscriptLag reports whether age, the time since the transcript
+// pane's last committed read, exceeds transcriptLagMultiple poll intervals. A
+// poll of zero or less means the runtime has not resolved one yet, and reports
+// no lag.
+func DeriveTranscriptLag(age, poll time.Duration) bool {
+	if poll <= 0 {
+		return false
+	}
+	return age > poll*transcriptLagMultiple
+}
+
 // LivenessGlyph maps a Liveness to its single rune. Blank marks none.
 func LivenessGlyph(l Liveness) string {
 	switch l {
@@ -160,6 +179,18 @@ type ViewModel struct {
 	// roster alone.
 	Transcript *TranscriptPane
 
+	// TranscriptLagAge is the time since the transcript pane's last committed
+	// read. Zero holds before the first commit. DeriveTranscriptLag compares it
+	// against PollInterval to mark the pane header, so a store slower than the
+	// poll cadence — which the one-in-flight-read guard would otherwise thin
+	// silently — is visible to the operator.
+	TranscriptLagAge time.Duration
+
+	// PollInterval is the model's own poll cadence, the unit DeriveTranscriptLag
+	// measures TranscriptLagAge against. Zero means the runtime has resolved no
+	// poll interval yet, and the header marks no lag.
+	PollInterval time.Duration
+
 	// Focus names the pane that owns the detail strip and the footer.
 	Focus Pane
 
@@ -265,6 +296,12 @@ func chromeLines(vm ViewModel) (above, below []string) {
 	// it describes and a long pane cannot push the two apart.
 	if vm.TranscriptNotice != "" {
 		above = append(above, vm.Style.Notice.Render(vm.TranscriptNotice))
+	}
+	// A lagging transcript renders here too, so a store slower than the poll
+	// cadence sits with the pane it describes rather than hiding behind a
+	// roster that keeps ticking at its own full rate.
+	if DeriveTranscriptLag(vm.TranscriptLagAge, vm.PollInterval) {
+		above = append(above, vm.Style.Notice.Render(transcriptLagLine(vm.TranscriptLagAge)))
 	}
 	if vm.ActionNotice != "" {
 		above = append(above, vm.Style.Notice.Render(vm.ActionNotice))
@@ -421,6 +458,13 @@ func footerLine(keys []KeyBinding, style Style) string {
 		parts[i] = style.Key.Render("["+k.Key+"]") + " " + k.Label
 	}
 	return strings.Join(parts, " ")
+}
+
+// transcriptLagLine marks the pane header with the age of its last committed
+// read, so a store slower than the poll cadence reads as a lagging transcript
+// rather than a silently thinned refresh rate.
+func transcriptLagLine(age time.Duration) string {
+	return fmt.Sprintf("transcript refresh is lagging (last update %s ago)", formatDuration(age))
 }
 
 // formatDuration renders a duration compactly as HhMmS or MmS or S.

@@ -61,6 +61,16 @@ type LiveModel struct {
 	// one while a slow store still reads.
 	rosterReading bool
 
+	// lastCommit is the clock time of the last transcript read that actually
+	// committed to the pane or notice (a stale-retry never sets it). Zero
+	// holds before the first commit. transcriptLagAge measures against it, so
+	// a store slower than the poll interval — which transcriptController's
+	// reading gates to one at a time — surfaces as a growing age instead of a
+	// silently thinned refresh rate. LiveModel owns this: PlanningModel has no
+	// lag indicator to feed, so the field stays out of the shared
+	// transcriptController.
+	lastCommit time.Time
+
 	// OpenDiff defers a diff to $PAGER, writing its artifact under the given
 	// directory. Injected so a test drives the whole key path without spawning
 	// a process; nil uses OpenDiffInPager.
@@ -124,7 +134,7 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 		Roster:      r,
 		ExecutionID: executionID,
 		poll:        poll,
-		vm:          ViewModel{Style: DefaultStyle()},
+		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -144,6 +154,11 @@ func (m *LiveModel) Init() tea.Cmd {
 func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
+		// The lag age is resolved against this tick's own clock, so it grows
+		// tick over tick while a slow store leaves the one in-flight read
+		// outstanding (see transcriptController.reading), rather than only at
+		// the read that eventually commits.
+		m.vm.TranscriptLagAge = m.transcriptLagAge(msg.now)
 		next := tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
 		return m, tea.Batch(m.readRoster(msg.now), next)
 	case rosterReadMsg:
@@ -279,6 +294,12 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 	vm.ActionNotice = m.vm.ActionNotice
 	vm.TranscriptNotice = m.vm.TranscriptNotice
+	// The lag age and the poll interval it is measured against are both
+	// resolved elsewhere (the pollTickMsg case above, and construction) rather
+	// than by this roster refresh, so a fresh ViewModel's zero values must not
+	// overwrite them here.
+	vm.TranscriptLagAge = m.vm.TranscriptLagAge
+	vm.PollInterval = m.vm.PollInterval
 	// The refresh also keeps the operator's chosen Worker selected, clamped to
 	// the new row count: a fresh ViewModel's Selection is always the zero
 	// value, and copying it over would silently snap the pane back to the
@@ -455,7 +476,21 @@ func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
 	if row, ok := selectedWorker(m.vm); ok {
 		want = row.IssueID
 	}
-	return m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	if committed {
+		m.lastCommit = m.Roster.Now()
+	}
+	return cmd
+}
+
+// transcriptLagAge returns the time since the last committed transcript read,
+// measured against now. It is zero before the first commit: a pane that has
+// not read yet is starting, not lagging.
+func (m *LiveModel) transcriptLagAge(now time.Time) time.Duration {
+	if m.lastCommit.IsZero() {
+		return 0
+	}
+	return now.Sub(m.lastCommit)
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript row
