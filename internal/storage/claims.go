@@ -17,9 +17,10 @@ import (
 // read-then-write check that would race.
 //
 // The global guarantee is the unique index on workers.issue_id from
-// migration 0011, not the weaker UNIQUE(execution_id, issue_id) in
-// 0001_init.sql. activeClaimByIssue relies on it: one Issue has at most one
-// active claim across all Executions.
+// migration 0011. Migration 0031 dropped the weaker table-level
+// UNIQUE(execution_id, issue_id) from 0001_init.sql, which the index made
+// redundant. activeClaimByIssue relies on the index: one Issue has at most
+// one active claim across all Executions.
 func (s *SQLiteStore) ClaimIssue(ctx context.Context, executionID, issueID, workerRef string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
