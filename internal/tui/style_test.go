@@ -38,10 +38,23 @@ func TestPaneStyleDifferentiatesToolCallsFromMessages(t *testing.T) {
 		t.Fatalf("rendered %d lines, want 2:\n%v", len(lines), lines)
 	}
 	message, toolCall := lines[0], lines[1]
-	if strings.Contains(message, "\x1b[") {
-		t.Errorf("assistant message carries colour, want its own plain voice: %q", message)
+	if !strings.Contains(message, "\x1b[") {
+		t.Errorf("assistant message carries no colour, want the Agent's own voice: %q", message)
 	}
 	if !strings.Contains(toolCall, "\x1b[") {
 		t.Errorf("tool call carries no colour, want it dimmed apart from the message: %q", toolCall)
 	}
+	if seq(message) == seq(toolCall) {
+		t.Errorf("message and tool call share one colour, want each apart: %q vs %q", message, toolCall)
+	}
+}
+
+// seq returns the leading ANSI SGR sequence of a rendered line, so a test can
+// assert two kinds carry different colours without pinning the exact codes.
+func seq(line string) string {
+	i := strings.Index(line, "m")
+	if !strings.HasPrefix(line, "\x1b[") || i < 0 {
+		return ""
+	}
+	return line[:i+1]
 }

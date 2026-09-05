@@ -124,6 +124,7 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 		Roster:      r,
 		ExecutionID: executionID,
 		poll:        poll,
+		vm:          ViewModel{Style: DefaultStyle()},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -289,6 +290,9 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	if vm.Selection < 0 {
 		vm.Selection = 0
 	}
+	// The colour scheme is set once at construction; a poll's fresh view-model
+	// carries the zero Style, so copy it over or every poll would render plain.
+	vm.Style = m.vm.Style
 	m.vm = vm
 }
 

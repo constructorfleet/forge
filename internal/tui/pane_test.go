@@ -697,6 +697,27 @@ func nonEmptyLines(s string) []string {
 	return out
 }
 
+// visible removes SGR escape sequences, so a test can match the text a live
+// frame draws independent of the colour scheme the live view applies.
+func visible(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // TestRenderTranscriptDividesAdjacentAttempts proves a retry reads as one
 // continuous scrollback: the pane puts an inline "attempt N" divider at each
 // run boundary, numbered by run insertion order.

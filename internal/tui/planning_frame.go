@@ -64,6 +64,10 @@ type PlanningViewModel struct {
 	// Height is the terminal height in rows, as ViewModel.Height.
 	Height int
 
+	// Style is the frame's colour scheme, as ViewModel.Style. The zero value
+	// applies no colour; the live view sets forge's real scheme.
+	Style Style
+
 	// ApproveLegal/AnswerLegal report whether the Feature's Planning
 	// Execution is currently parked awaiting the matching control, derived
 	// from its store-only PlanningStatus — never from the filesystem.
@@ -112,21 +116,21 @@ func PlanningTranscriptRows(vm PlanningViewModel) int {
 // chromeLines.
 func planningChromeLines(vm PlanningViewModel) (above, below []string) {
 	for i, row := range vm.Stages {
-		above = append(above, stageRowLine(row, i == len(vm.Stages)-1))
+		above = append(above, stageRowLine(row, i == len(vm.Stages)-1, vm.Style))
 	}
 	if vm.Notice != "" {
-		above = append(above, vm.Notice)
+		above = append(above, vm.Style.Notice.Render(vm.Notice))
 	}
 	if vm.TranscriptNotice != "" {
-		above = append(above, vm.TranscriptNotice)
+		above = append(above, vm.Style.Notice.Render(vm.TranscriptNotice))
 	}
 	if vm.ActionNotice != "" {
-		above = append(above, vm.ActionNotice)
+		above = append(above, vm.Style.Notice.Render(vm.ActionNotice))
 	}
 	if strip, ok := planningStripLine(vm); ok {
 		below = append(below, strip)
 	}
-	return above, append(below, footerLine(planningFrameKeys(vm)))
+	return above, append(below, footerLine(planningFrameKeys(vm), vm.Style))
 }
 
 // planningStripLine picks the detail strip: the transcript selection's own
@@ -155,12 +159,16 @@ func planningFrameKeys(vm PlanningViewModel) []KeyBinding {
 // stageRowLine renders one stage row. head marks the single live head — the
 // newest recorded row — with the cursor; no liveness or attention glyph is
 // ever drawn, because planning claims neither.
-func stageRowLine(row PlanningStageRow, head bool) string {
+func stageRowLine(row PlanningStageRow, head bool, style Style) string {
 	cur := " "
 	if head {
 		cur = ">"
 	}
-	return fmt.Sprintf("%s %-28s %s", cur, row.Stage, formatLastActivity(row.LastActivity))
+	line := fmt.Sprintf("%s %-28s %s", cur, row.Stage, formatLastActivity(row.LastActivity))
+	if head {
+		return style.Selection.Render(line)
+	}
+	return line
 }
 
 // stageDetailLine renders the live head's stage and last-activity timestamp.

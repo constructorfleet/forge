@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
-
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -148,9 +146,14 @@ func gateOutcome(g GateRow) string {
 
 // gateLines renders one gate row, collapsed to its name and outcome or
 // expanded to its command, exit code, and bounded output. The collapsed preview
-// keeps the last output line, which holds a gate tool's verdict.
-func gateLines(g GateRow, cur string, expanded bool) []string {
-	head := header(headerParts{cursor: cur, glyph: gateGlyph(g), text: fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g))}, lipgloss.Style{})
+// keeps the last output line, which holds a gate tool's verdict. style colours
+// the header green for a pass and red for a fail.
+func gateLines(g GateRow, cur string, expanded bool, style Style) []string {
+	headStyle := style.GatePass
+	if !g.Passed {
+		headStyle = style.GateFail
+	}
+	head := header(headerParts{cursor: cur, glyph: gateGlyph(g), text: fmt.Sprintf("gate %s (%s)", g.Name, gateOutcome(g))}, headStyle, style.Axis)
 	if !expanded {
 		if last := lastLine(g.Output); last != "" {
 			return []string{head, indented(last)}

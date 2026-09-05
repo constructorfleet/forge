@@ -200,15 +200,15 @@ func TestLiveModelTabFocusesTranscript(t *testing.T) {
 	m := transcriptModel(t)
 
 	got := press(t, m, "tab")
-	if !strings.Contains(got, "[tab] roster") {
+	if !strings.Contains(visible(got), "[tab] roster") {
 		t.Errorf("footer is not the transcript footer after tab:\n%s", got)
 	}
-	if strings.Contains(got, "[c] cancel") {
+	if strings.Contains(visible(got), "[c] cancel") {
 		t.Errorf("footer keeps a Worker key while the transcript has focus:\n%s", got)
 	}
 
 	got = press(t, m, "tab")
-	if !strings.Contains(got, "[c] cancel") {
+	if !strings.Contains(visible(got), "[c] cancel") {
 		t.Errorf("tab did not return focus to the roster:\n%s", got)
 	}
 }
@@ -238,7 +238,7 @@ func TestLiveModelFollowTailKeyReachesPane(t *testing.T) {
 	m := transcriptModel(t)
 	press(t, m, "tab")
 	// One selection move pins the pane, which is what the follow-tail key undoes.
-	if got := press(t, m, "k"); !strings.Contains(got, "[G] follow tail") {
+	if got := press(t, m, "k"); !strings.Contains(visible(got), "[G] follow tail") {
 		t.Fatalf("footer omits the follow-tail key while the selection is pinned:\n%s", got)
 	}
 
@@ -246,7 +246,7 @@ func TestLiveModelFollowTailKeyReachesPane(t *testing.T) {
 	if !strings.Contains(got, "seq 1") {
 		t.Errorf("the G key did not return the selection to the tail:\n%s", got)
 	}
-	if strings.Contains(got, "[G] follow tail") {
+	if strings.Contains(visible(got), "[G] follow tail") {
 		t.Errorf("footer still offers follow tail after the pane followed it:\n%s", got)
 	}
 }
@@ -346,7 +346,7 @@ func TestLiveModelTabWithoutTranscriptStaysOnRoster(t *testing.T) {
 	m, _ := liveFixture(t, now)
 	nextPollTick(t, m)
 
-	if got := press(t, m, "tab"); !strings.Contains(got, "[c] cancel") {
+	if got := press(t, m, "tab"); !strings.Contains(visible(got), "[c] cancel") {
 		t.Errorf("footer left the roster with no transcript pane:\n%s", got)
 	}
 }
@@ -413,7 +413,7 @@ func TestLiveModelWithoutFeedRendersRosterAlone(t *testing.T) {
 
 	nextPollTick(t, m)
 
-	if got := m.View().Content; !strings.Contains(got, "[c] cancel") {
+	if got := m.View().Content; !strings.Contains(visible(got), "[c] cancel") {
 		t.Errorf("frame left the roster with no feed attached:\n%s", got)
 	}
 }
@@ -661,7 +661,7 @@ func TestLiveModelFeedDetachesPaneWithoutSelection(t *testing.T) {
 	if strings.Contains(got, "starting work") {
 		t.Errorf("the pane outlived its Worker row:\n%s", got)
 	}
-	if !strings.Contains(got, "[q] quit") {
+	if !strings.Contains(visible(got), "[q] quit") {
 		t.Errorf("focus stayed on the detached pane:\n%s", got)
 	}
 }
@@ -703,7 +703,7 @@ func TestLiveModelDownKeyMovesRosterSelection(t *testing.T) {
 	if !strings.Contains(got, "FAILED") {
 		t.Errorf("j did not move the selection to the second row:\n%s", got)
 	}
-	if !strings.Contains(got, "[r] retry") {
+	if !strings.Contains(visible(got), "[r] retry") {
 		t.Errorf("footer omits the second row's legal key after the move:\n%s", got)
 	}
 }
@@ -744,7 +744,7 @@ func TestLiveModelFooterAdvertisesRosterNavigationWithSeveralRows(t *testing.T) 
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	m, _ := twoIssueLiveFixture(t, now)
 
-	if got := m.View().Content; !strings.Contains(got, "[j/k] switch worker") {
+	if got := m.View().Content; !strings.Contains(visible(got), "[j/k] switch worker") {
 		t.Errorf("footer omits the roster navigation key with two rows:\n%s", got)
 	}
 }
@@ -756,7 +756,7 @@ func TestLiveModelFooterOmitsRosterNavigationWithOneRow(t *testing.T) {
 	m, _ := liveFixture(t, now)
 	nextPollTick(t, m)
 
-	if got := m.View().Content; strings.Contains(got, "[j/k] switch worker") {
+	if got := m.View().Content; strings.Contains(visible(got), "[j/k] switch worker") {
 		t.Errorf("footer offers roster navigation with a single row:\n%s", got)
 	}
 }
@@ -771,7 +771,7 @@ func TestLiveModelRosterSelectionSurvivesAPoll(t *testing.T) {
 
 	nextPollTick(t, m)
 
-	if got := m.View().Content; !strings.Contains(got, "[r] retry") {
+	if got := m.View().Content; !strings.Contains(visible(got), "[r] retry") {
 		t.Errorf("a poll tick reset the roster selection:\n%s", got)
 	}
 }

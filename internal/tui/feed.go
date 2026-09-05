@@ -214,6 +214,7 @@ func (f *TranscriptFeed) ensureIssue(issueID string) *issuePane {
 		}
 		ip = &issuePane{pane: NewTranscriptPane()}
 		ip.pane.SetWidth(f.width)
+		ip.pane.SetStyle(DefaultStyle())
 		f.issues[issueID] = ip
 	}
 	ip.lastViewed = f.view
