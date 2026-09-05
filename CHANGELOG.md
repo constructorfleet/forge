@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.44.0](https://github.com/constructorfleet/forge/compare/forge-v0.43.0...forge-v0.44.0) (2026-09-05)
+
+
+### Features
+
+* Surface transcript-read lag in PlanningModel's pane too ([#638](https://github.com/constructorfleet/forge/issues/638)) ([37ece36](https://github.com/constructorfleet/forge/commit/37ece367a5e5377d7a8c02bf0fab9c32aa709b0c)), closes [#633](https://github.com/constructorfleet/forge/issues/633)
+
+
+### Bug Fixes
+
+* align TUI transcript glyphs with spec ([#642](https://github.com/constructorfleet/forge/issues/642)) ([4d95313](https://github.com/constructorfleet/forge/commit/4d95313cb5f8bb560412633253b21fc5d4e69d65))
+* Same cwd-relative repoRoot/config/db resolution gap exists in execute, resume, cancel, materialize, and plan ([#641](https://github.com/constructorfleet/forge/issues/641)) ([ae2b3c3](https://github.com/constructorfleet/forge/commit/ae2b3c3441102ca0dd19ac1589409d96a1bdf5ce)), closes [#576](https://github.com/constructorfleet/forge/issues/576)
+
 ## [0.43.0](https://github.com/constructorfleet/forge/compare/forge-v0.42.2...forge-v0.43.0) (2026-09-05)
 
 
