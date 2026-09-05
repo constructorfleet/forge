@@ -38,6 +38,12 @@ type RosterStore interface {
 	// GetNeedsInfoCheckpoint serves the on-request needs-info question read
 	// only (see answer.go). It is the record the answer key defers to $EDITOR.
 	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (storage.NeedsInfoCheckpoint, error)
+
+	// AgentRunsByIssue supplies the Issue's recorded attempts, so the roster's
+	// "attempt N" count derives from the same source the transcript pane's
+	// own "── attempt N ──" divider numbers from (see attemptBudget). It must
+	// not carry a run's transcript, so a poll pass reads only the row.
+	AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.AgentRun, error)
 }
 
 // Roster fetches an Execution's Worker state into a ViewModel on demand.
@@ -96,7 +102,13 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 	if !issue.StateChangedAt.IsZero() {
 		row.Elapsed = now.Sub(issue.StateChangedAt)
 	}
-	row.Attempt, row.Budget = attemptBudget(issue.RetryBudget)
+	runs, err := r.Store.AgentRunsByIssue(ctx, executionID, issue.ID)
+	if err != nil {
+		// A read failure degrades to the initial-attempt floor: the roster is
+		// an observer and must not abort a pass over one failed count.
+		runs = nil
+	}
+	row.Attempt, row.Budget = attemptBudget(len(runs), issue.RetryBudget)
 
 	row.Verdict, row.HasDiff = r.lastReview(ctx, executionID, issue.ID)
 
@@ -122,13 +134,22 @@ func (r *Roster) lastReview(ctx context.Context, executionID, issueID string) (v
 	return out.Verdict, out.HasDiff
 }
 
-// attemptBudget derives the frame's "attempt N/B" strip from the retry
-// budget: N is 1 plus every recorded failure (the current, 1-based attempt),
-// B is 1 plus every ceiling (the total attempts available). A zero budget
-// reads as a single initial attempt.
-func attemptBudget(b domain.RetryBudget) (attempt, budget int) {
+// attemptBudget derives the frame's "attempt N/B" strip: N is the Issue's
+// recorded AgentRun count (runCount), floored at one so an Issue with no
+// recorded run yet still reads as its initial attempt; B is 1 plus every
+// retry-budget ceiling (the total attempts available). N shares runCount with
+// the transcript pane's own "── attempt N ──" divider (see pane.go's
+// attemptNumbers), which numbers the same AgentRuns in the same insertion
+// order: a repair that restarts the Agent without recording a gate, review,
+// CI, or provider-limit failure — a lost-execution recovery restart, for
+// instance — still advances N, so the two views cannot drift apart the way a
+// failure-tally count could.
+func attemptBudget(runCount int, b domain.RetryBudget) (attempt, budget int) {
+	attempt = runCount
+	if attempt < 1 {
+		attempt = 1
+	}
 	limits := b.Limits()
 	totalLimit := limits.Gate + limits.Review + limits.CI + limits.ProviderLimit
-	totalUsed := b.GateFailures() + b.ReviewFailures() + b.CIFailures() + b.ProviderLimitFailures()
-	return 1 + totalUsed, 1 + totalLimit
+	return attempt, 1 + totalLimit
 }

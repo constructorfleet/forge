@@ -68,6 +68,28 @@ func ConvertGateRuns(runs []storage.GateRun) []GateRow {
 	return rows
 }
 
+// currentAttemptGateRuns keeps only the gate rows that ran during the Issue's
+// latest recorded AgentRun, dropping rows from an earlier, reimplemented
+// attempt. A gate run carries no AgentRun id to join against (gate_runs has
+// no such column), so this joins on time instead: a gate that finished before
+// the latest AgentRun started belongs to an earlier attempt and must not
+// linger in the pane once that attempt has been superseded. With no recorded
+// AgentRun yet (a planning or gate-only Issue), every row is kept, because
+// there is no later attempt to have superseded it.
+func currentAttemptGateRuns(runs []storage.AgentRun, gates []GateRow) []GateRow {
+	if len(runs) == 0 {
+		return gates
+	}
+	latestStart := runs[len(runs)-1].StartedAt
+	kept := make([]GateRow, 0, len(gates))
+	for _, g := range gates {
+		if !g.FinishedAt.Before(latestStart) {
+			kept = append(kept, g)
+		}
+	}
+	return kept
+}
+
 // boundGateOutput joins stdout and stderr and keeps at most
 // maxGateOutputLines output lines plus one marker line. It keeps the tail,
 // because gate tooling prints its verdict last.

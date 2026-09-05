@@ -202,6 +202,75 @@ func TestFeedPollNewIssueStartsFreshPane(t *testing.T) {
 	}
 }
 
+// TestFeedPollKeepsEachIssuesOwnPaneAcrossSwitches proves an Issue's pane
+// survives the operator switching to another Issue and back: each Issue is its
+// own context, not a scratch pane the next selection throws away.
+func TestFeedPollKeepsEachIssuesOwnPaneAcrossSwitches(t *testing.T) {
+	store := feedFixture()
+	store.runs["#2"] = []storage.AgentRun{{ID: 11, ExecutionID: "ex-1", IssueID: "#2"}}
+	store.events[11] = []storage.TranscriptEvent{
+		{AgentRunID: 11, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "other issue"},
+	}
+	feed := tui.NewTranscriptFeed(store)
+	ctx := context.Background()
+
+	first, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1: %v", err)
+	}
+	first.Select(0)
+
+	if _, err := feed.Poll(ctx, "ex-1", "#2"); err != nil {
+		t.Fatalf("Poll #2: %v", err)
+	}
+
+	backTo1, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1 again: %v", err)
+	}
+	if backTo1 != first {
+		t.Fatal("switching back to an Issue rebuilt its pane instead of keeping it")
+	}
+	e, ok := backTo1.SelectedEntry()
+	if !ok {
+		t.Fatal("switching back to an Issue lost its pinned selection")
+	}
+	if e.Event.Seq != 0 {
+		t.Errorf("selection seq = %d, want 0: the pinned selection did not survive the switch", e.Event.Seq)
+	}
+}
+
+// TestFeedPollDropsGatesFromAnEarlierAttempt proves a gate run recorded
+// against a finished, earlier AgentRun no longer renders once a later
+// AgentRun (a reimplementation) has started: the gate belongs to the attempt
+// that failed, not to the one now in progress, and must not linger forever.
+func TestFeedPollDropsGatesFromAnEarlierAttempt(t *testing.T) {
+	store := feedFixture()
+	// The recorded gate run (feedFixture's "go-test") finished at `ran`. A
+	// second AgentRun — the reimplementation after the gate failed — starts
+	// after that.
+	ran := store.gates["#1"][0].FinishedAt
+	store.runs["#1"] = append(store.runs["#1"], storage.AgentRun{
+		ID: 9, ExecutionID: "ex-1", IssueID: "#1", StartedAt: ran.Add(time.Minute),
+	})
+	store.events[9] = []storage.TranscriptEvent{
+		{AgentRunID: 9, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "second try"},
+	}
+	feed := tui.NewTranscriptFeed(store)
+
+	pane, err := feed.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	got := tui.RenderTranscript(pane)
+	if strings.Contains(got, "gate go-test") {
+		t.Errorf("render keeps a gate row from the earlier, reimplemented attempt:\n%s", got)
+	}
+	if !strings.Contains(got, "second try") {
+		t.Errorf("render omits the new attempt's own event:\n%s", got)
+	}
+}
+
 // TestFeedPollNewExecutionStartsFreshPane proves the feed scopes its pane to one
 // Execution. An Issue ID is an Execution-scoped label, so the same label under
 // another Execution names another Worker and must not reuse the earlier pane.

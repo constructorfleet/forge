@@ -174,6 +174,10 @@ func press(t *testing.T, m *tui.LiveModel, name string) string {
 		key = tea.Key{Code: uv.KeyTab}
 	case "enter":
 		key = tea.Key{Code: uv.KeyEnter}
+	case "up":
+		key = tea.Key{Code: uv.KeyUp}
+	case "down":
+		key = tea.Key{Code: uv.KeyDown}
 	}
 	m.Update(tea.KeyPressMsg(key))
 	return m.View().Content
@@ -244,6 +248,84 @@ func TestLiveModelFollowTailKeyReachesPane(t *testing.T) {
 	}
 	if strings.Contains(got, "[G] follow tail") {
 		t.Errorf("footer still offers follow tail after the pane followed it:\n%s", got)
+	}
+}
+
+// TestLiveModelRosterKeysMoveSelectionBetweenWorkers proves j/k (and up/down)
+// move the roster selection between concurrently running Workers, so the
+// operator can switch between them instead of being stuck on the first row.
+func TestLiveModelRosterKeysMoveSelectionBetweenWorkers(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "First issue", State: domain.StateImplementing, StateChangedAt: now},
+				{ID: "#2", Title: "Second issue", State: domain.StateReviewing, StateChangedAt: now},
+				{ID: "#3", Title: "Third issue", State: domain.StateValidating, StateChangedAt: now},
+			},
+		},
+	}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	m := tui.NewLiveModel(roster, "ex-1", time.Millisecond)
+	nextPollTick(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, "IMPLEMENTING |") {
+		t.Fatalf("fresh roster does not select the first Worker:\n%s", got)
+	}
+
+	if got := press(t, m, "j"); !strings.Contains(got, "REVIEWING |") {
+		t.Errorf("j did not move the selection to the second Worker:\n%s", got)
+	}
+	if got := press(t, m, "j"); !strings.Contains(got, "VALIDATING |") {
+		t.Errorf("a second j did not move the selection to the third Worker:\n%s", got)
+	}
+	// The selection holds at the last row: it does not wrap.
+	if got := press(t, m, "j"); !strings.Contains(got, "VALIDATING |") {
+		t.Errorf("j past the last Worker moved the selection:\n%s", got)
+	}
+	if got := press(t, m, "k"); !strings.Contains(got, "REVIEWING |") {
+		t.Errorf("k did not move the selection back to the second Worker:\n%s", got)
+	}
+	if got := press(t, m, "up"); !strings.Contains(got, "IMPLEMENTING |") {
+		t.Errorf("up did not move the selection back to the first Worker:\n%s", got)
+	}
+	// The selection holds at the first row: it does not wrap.
+	if got := press(t, m, "up"); !strings.Contains(got, "IMPLEMENTING |") {
+		t.Errorf("up past the first Worker moved the selection:\n%s", got)
+	}
+	if got := press(t, m, "down"); !strings.Contains(got, "REVIEWING |") {
+		t.Errorf("down did not move the selection to the second Worker:\n%s", got)
+	}
+}
+
+// TestLiveModelRosterSelectionSurvivesPoll proves a poll tick after a j/k move
+// keeps the operator's chosen Worker selected, so the switch does not revert
+// to the first row on its own within the next poll interval.
+func TestLiveModelRosterSelectionSurvivesPoll(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "First issue", State: domain.StateImplementing, StateChangedAt: now},
+				{ID: "#2", Title: "Second issue", State: domain.StateReviewing, StateChangedAt: now},
+				{ID: "#3", Title: "Third issue", State: domain.StateValidating, StateChangedAt: now},
+			},
+		},
+	}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	m := tui.NewLiveModel(roster, "ex-1", time.Millisecond)
+	nextPollTick(t, m)
+
+	if got := press(t, m, "j"); !strings.Contains(got, "REVIEWING |") {
+		t.Fatalf("j did not move the selection to the second Worker:\n%s", got)
+	}
+
+	nextPollTick(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, "REVIEWING |") {
+		t.Errorf("a poll tick after j reverted the selection instead of keeping the second Worker selected:\n%s", got)
 	}
 }
 
@@ -413,6 +495,72 @@ func TestLiveModelKeyPressServedDuringASlowRead(t *testing.T) {
 	case <-read:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the feed read never returned")
+	}
+}
+
+// TestLiveModelStaleTranscriptReadDroppedOnSelectionChange proves a feed read
+// started for one Worker, still in flight when the operator selects another
+// Worker, never lands in the pane after the operator has moved on. Without
+// this, the roster highlights the new Worker while the pane briefly shows the
+// old one's transcript: the "runs bleed together" symptom this issue tracks.
+func TestLiveModelStaleTranscriptReadDroppedOnSelectionChange(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "First issue", State: domain.StateImplementing, StateChangedAt: now},
+				{ID: "#2", Title: "Second issue", State: domain.StateReviewing, StateChangedAt: now},
+			},
+		},
+	}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	m := tui.NewLiveModel(roster, "ex-1", time.Millisecond)
+
+	feedStore := feedFixture()
+	feedStore.runs["#2"] = []storage.AgentRun{{ID: 8, ExecutionID: "ex-1", IssueID: "#2"}}
+	feedStore.events[8] = []storage.TranscriptEvent{
+		{AgentRunID: 8, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "second worker events"},
+	}
+	m.SetFeed(tui.NewTranscriptFeed(feedStore))
+
+	// Start a pass, then hold the first Worker's feed read open by not
+	// draining it yet.
+	release := make(chan struct{})
+	feedStore.block = release
+	_, cmd := m.Update(pollTick(t, m))
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("poll tick returned no roster command")
+	}
+	_, readCmd := m.Update(batch[0]())
+	if readCmd == nil {
+		t.Fatal("roster read returned no feed command")
+	}
+	read := make(chan tea.Msg, 1)
+	go func() { read <- readCmd() }()
+
+	// The operator moves to the second Worker while the first Worker's read
+	// is still in flight. A read already running, moveRosterSelection starts
+	// no second one.
+	m.Update(tea.KeyPressMsg(tea.Key{Text: "j", Code: 'j'}))
+
+	close(release)
+	var msg tea.Msg
+	select {
+	case msg = <-read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the feed read never returned")
+	}
+	_, next := m.Update(msg)
+	runImmediateCmd(t, m, next)
+
+	got := m.View().Content
+	if strings.Contains(got, "starting work") {
+		t.Errorf("the stale read for the first Worker landed in the pane after the operator moved on:\n%s", got)
+	}
+	if !strings.Contains(got, "second worker events") {
+		t.Errorf("the pane never picked up the now-selected Worker's own transcript:\n%s", got)
 	}
 }
 
@@ -596,7 +744,7 @@ func TestLiveModelFooterAdvertisesRosterNavigationWithSeveralRows(t *testing.T) 
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	m, _ := twoIssueLiveFixture(t, now)
 
-	if got := m.View().Content; !strings.Contains(got, "[j/k] select") {
+	if got := m.View().Content; !strings.Contains(got, "[j/k] switch worker") {
 		t.Errorf("footer omits the roster navigation key with two rows:\n%s", got)
 	}
 }
@@ -608,7 +756,7 @@ func TestLiveModelFooterOmitsRosterNavigationWithOneRow(t *testing.T) {
 	m, _ := liveFixture(t, now)
 	nextPollTick(t, m)
 
-	if got := m.View().Content; strings.Contains(got, "[j/k] select") {
+	if got := m.View().Content; strings.Contains(got, "[j/k] switch worker") {
 		t.Errorf("footer offers roster navigation with a single row:\n%s", got)
 	}
 }
