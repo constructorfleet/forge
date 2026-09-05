@@ -20,7 +20,7 @@ and exits 2. The id is resolved by probing the executions and
 planning_executions store tables (never the filesystem).
 
   --db      path to the SQLite state database (default .forge/forge.db)
-  --config  path to .forge.yaml (accepted for symmetry; unused by watch)
+  --config  path to .forge.yaml (passed to the operational Engine constructor; unused by the current cancel action)
 `
 
 // watchProber is the read-only store surface watch needs to disambiguate an
@@ -87,7 +87,7 @@ func listLiveExecutions(ctx context.Context, store *storage.SQLiteStore) ([]live
 
 func runWatch(args []string) int {
 	fs := flag.NewFlagSet("forge watch", flag.ContinueOnError)
-	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml (unused by watch)")
+	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml (passed to the operational Engine constructor; unused by the current cancel action)")
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -96,9 +96,19 @@ func runWatch(args []string) int {
 		fmt.Fprintln(os.Stderr, "forge watch: expected at most one argument, [execution-id]")
 		return 2
 	}
-	var _ = configPath
 
 	ctx := context.Background()
+
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
+		return 1
+	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
+		return 1
+	}
 
 	// Watch is a read-only observer: never run Migrate, and fail loudly
 	// against a schema that predates the live roster rather than misrender.
@@ -153,7 +163,8 @@ func runWatch(args []string) int {
 		}
 	}
 
-	if err := runLiveRoster(ctx, store, target.id); err != nil {
+	canceller := buildOperationalEngine(store, cfg, repoRoot)
+	if err := runLiveRoster(ctx, store, target.id, canceller); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}

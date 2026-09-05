@@ -178,6 +178,12 @@ type KeyBinding struct {
 // String renders a KeyBinding in footer form: [k] label.
 func (k KeyBinding) String() string { return "[" + k.Key + "] " + k.Label }
 
+// IsCancelLegal reports whether cancel is legal for a Worker in state: any
+// non-terminal state. LegalKeys and the cancel key handler both call this, so
+// the footer's advertised keys and the handler's accepted keys share one
+// definition and cannot drift apart.
+func IsCancelLegal(state domain.IssueState) bool { return !state.IsTerminal() }
+
 // LegalKeys returns the keys legal for a Worker in state. Derived here so the
 // footer always mirrors the rows' own view-model and can never advertise a
 // state-illegal key: q is always legal (quit never stops work), c (cancel)
@@ -185,7 +191,7 @@ func (k KeyBinding) String() string { return "[" + k.Key + "] " + k.Label }
 // on NEEDS_INFO.
 func LegalKeys(state domain.IssueState) []KeyBinding {
 	keys := []KeyBinding{{Key: "q", Label: "quit"}}
-	if !state.IsTerminal() {
+	if IsCancelLegal(state) {
 		keys = append(keys, KeyBinding{Key: "c", Label: "cancel"})
 	}
 	switch state {
