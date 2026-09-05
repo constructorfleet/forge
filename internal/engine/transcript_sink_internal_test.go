@@ -46,7 +46,7 @@ func (s *recordingTranscriptStore) RecordTranscriptEvents(ctx context.Context, _
 // already-persisted Seq (the UNIQUE(agent_run_id, seq) constraint).
 func TestSinkFlush_AppendsOnlyUnflushed(t *testing.T) {
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	emit := func(text string) {
 		sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: text})
@@ -84,7 +84,7 @@ func TestSinkFlush_AppendsOnlyUnflushed(t *testing.T) {
 // dropped events.
 func TestSinkFlush_BestEffortDropsOnError(t *testing.T) {
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "a"})
 	store.fail = true
@@ -107,7 +107,7 @@ func TestSinkFlush_BestEffortDropsOnError(t *testing.T) {
 func TestSinkClose_FlushesOnCancelImmuneContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "a"})
 	cancel()
@@ -125,7 +125,7 @@ func TestSinkClose_FlushesOnCancelImmuneContext(t *testing.T) {
 func TestSinkFlush_PersistsAfterContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	cancel()
 	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "cancelled before output"})
@@ -142,7 +142,7 @@ func TestSinkFlush_PersistsAfterContextCancellation(t *testing.T) {
 func TestSinkFlush_UsesBoundedCancelImmuneContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	cancel()
 	before := time.Now()
@@ -162,7 +162,7 @@ func TestSinkFlush_UsesBoundedCancelImmuneContext(t *testing.T) {
 // sink is a no-op.
 func TestSinkClose_DoesNotDoubleAppend(t *testing.T) {
 	store := &recordingTranscriptStore{}
-	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil)
+	sink := newPersistingTranscriptSink(context.Background(), store, "exec", "issue", 7, "phase", "sub", nil, nil)
 
 	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "a"})
 	sink.flush()

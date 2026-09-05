@@ -135,6 +135,15 @@ type Engine struct {
 	Agent      agent.Agent
 	Config     config.Config
 
+	// HeartbeatInterval and HeartbeatStallAfter override the package
+	// defaults (heartbeatInterval/heartbeatStallAfter in heartbeat.go) when
+	// non-zero — a test seam (constructorfleet/forge#463) so a wedged Agent
+	// can be proven to freeze the Worker's last_heartbeat on a fast clock
+	// instead of waiting out the production 5s/15s cadence. New leaves both
+	// at zero, so cmd/forge gets the production defaults unchanged.
+	HeartbeatInterval   time.Duration
+	HeartbeatStallAfter time.Duration
+
 	// NeedsInfoTracker is the subset of tracker.Tracker the NEEDS_INFO
 	// handling needs (add label, post comment) — see needsinfo.go. It is
 	// optional: nil disables the label/comment side effects (e.g. a test
@@ -250,6 +259,13 @@ type Engine struct {
 	// rather than a plain map because Engine is shared across concurrently
 	// executing Issues (ticket 26 scheduling).
 	semanticSessions sync.Map
+
+	// workerActivities holds the one WorkerActivity per (executionID,
+	// issueID) currently claimed (constructorfleet/forge#463), mirroring
+	// semanticSessions: a sync.Map for the same reason — Engine is shared
+	// across concurrently executing Issues. See startWorkerActivity,
+	// touchWorkerActivity, stopWorkerActivity in heartbeat.go.
+	workerActivities sync.Map
 
 	// Now and NewExecutionID are seams for deterministic tests; New sets
 	// both to real implementations (time.Now, uuid.NewString).
@@ -517,10 +533,14 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 		return ExecuteResult{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
 	}
 	// Heartbeat the Worker's liveness badge across its active lifecycle
-	// (claim -> release). Display-only; see RunWorkerHeartbeat.
+	// (claim -> release), withheld once the running agent stalls (#463)
+	// rather than a wall clock masking a wedge as live. See
+	// RunWorkerHeartbeat and touchWorkerActivity.
+	activity := e.startWorkerActivity(execution.ID, issueID)
+	defer e.stopWorkerActivity(execution.ID, issueID)
 	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
-	go RunWorkerHeartbeat(heartbeatCtx, e.Store, execution.ID, issueID, heartbeatInterval, e.Now)
+	go RunWorkerHeartbeat(heartbeatCtx, e.Store, execution.ID, issueID, e.heartbeatIntervalOrDefault(), e.Now, HeartbeatStallPolicy{Activity: activity, After: e.heartbeatStallAfterOrDefault()})
 	defer func() {
 		// Cancel-immune (issue 560): this runs on every return path,
 		// including one where ctx itself is already cancelled (e.g. a
@@ -1079,7 +1099,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	if startErr != nil {
 		return domain.Issue{}, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
 	}
-	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now)
+	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now, func() { e.touchWorkerActivity(executionID, issueID) })
 
 	agentCtx, cancel := context.WithTimeout(ctx, agentDeadlineMultiplier*e.Config.Agent.Timeout)
 	defer cancel()
@@ -1239,13 +1259,21 @@ type persistingTranscriptSink struct {
 	recorder        *agent.TranscriptRecorder
 	flushInterval   time.Duration
 
+	// onEmit fires on every Emit before anything else, real subprocess
+	// progress observed for this Issue's Worker (constructorfleet/
+	// forge#463) — distinct from the persistence below, which is
+	// best-effort and debounced. Optional: nil when no Worker heartbeat is
+	// being tracked for this sink (e.g. a test that exercises the sink
+	// directly).
+	onEmit func()
+
 	mu             sync.Mutex
 	lastFlushedSeq int
 	timer          *time.Timer
 	closed         bool
 }
 
-func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, phase, subagent string, now func() time.Time) *persistingTranscriptSink {
+func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, executionID, issueID string, agentRunID int64, phase, subagent string, now func() time.Time, onEmit func()) *persistingTranscriptSink {
 	return &persistingTranscriptSink{
 		ctx:            context.WithoutCancel(ctx),
 		store:          store,
@@ -1255,6 +1283,7 @@ func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, exe
 		phase:          phase,
 		subagent:       subagent,
 		recorder:       agent.NewBoundedTranscriptRecorder(maxTranscriptEvents, now),
+		onEmit:         onEmit,
 		lastFlushedSeq: -1,
 	}
 }
@@ -1265,6 +1294,9 @@ func newPersistingTranscriptSink(ctx context.Context, store transcriptStore, exe
 // invocation in progress. Emit schedules a debounced batch flush on its own
 // goroutine; Close guarantees the final tail is flushed synchronously.
 func (s *persistingTranscriptSink) Emit(event agent.TranscriptEvent) {
+	if s.onEmit != nil {
+		s.onEmit()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -1371,6 +1403,10 @@ type reviewTranscriptCoordinator struct {
 	executionID, issueID string
 	backend              string
 	now                  func() time.Time
+	// onEmit is passed through to every sinkFor's persistingTranscriptSink,
+	// so a review subagent's streamed output touches the same Issue's
+	// WorkerActivity a main-agent run would (constructorfleet/forge#463).
+	onEmit func()
 
 	mu   sync.Mutex
 	runs []struct {
@@ -1380,7 +1416,7 @@ type reviewTranscriptCoordinator struct {
 	}
 }
 
-func newReviewTranscriptCoordinator(ctx context.Context, store reviewAgentRunStore, executionID, issueID, backend string, now func() time.Time) *reviewTranscriptCoordinator {
+func newReviewTranscriptCoordinator(ctx context.Context, store reviewAgentRunStore, executionID, issueID, backend string, now func() time.Time, onEmit func()) *reviewTranscriptCoordinator {
 	return &reviewTranscriptCoordinator{
 		ctx:         ctx,
 		store:       store,
@@ -1388,6 +1424,7 @@ func newReviewTranscriptCoordinator(ctx context.Context, store reviewAgentRunSto
 		issueID:     issueID,
 		backend:     backend,
 		now:         now,
+		onEmit:      onEmit,
 	}
 }
 
@@ -1409,7 +1446,7 @@ func (c *reviewTranscriptCoordinator) sinkFor(subagent string) agent.TranscriptS
 	if err != nil {
 		return noopTranscriptSink{}
 	}
-	sink := newPersistingTranscriptSink(c.ctx, c.store, c.executionID, c.issueID, runID, string(domain.StateReviewing), subagent, c.now)
+	sink := newPersistingTranscriptSink(c.ctx, c.store, c.executionID, c.issueID, runID, string(domain.StateReviewing), subagent, c.now, c.onEmit)
 	c.mu.Lock()
 	c.runs = append(c.runs, struct {
 		subagent string
@@ -1479,7 +1516,14 @@ func (e *Engine) runQualityGates(ctx context.Context, executionID, issueID strin
 
 	var results []gate.Result
 	for _, g := range e.Config.Quality.Gates {
+		// A Quality Gate command streams no per-line output of its own for
+		// touchWorkerActivity to key off (unlike an Agent invocation), so
+		// without this bracket a long-but-healthy gate run — e.g. `go test
+		// ./...` — would masquerade as a wedged Agent once it outlasts
+		// HeartbeatStallAfter (constructorfleet/forge#463).
+		stopKeepAlive := e.keepWorkerActivityFresh(ctx, executionID, issueID)
 		res, err := e.runQualityGate(ctx, env, g)
+		stopKeepAlive()
 		if err != nil {
 			// The command itself could not run (e.g. the container exited
 			// while it was running), not that it ran and failed. Retrying
@@ -1635,7 +1679,7 @@ func (e *Engine) runReview(ctx context.Context, executionID, issueID, workerBase
 	// incrementally-persisted transcript (issue #219), exactly as
 	// executeAgent does for the implementation Agent — see
 	// reviewTranscriptCoordinator's doc comment.
-	transcriptCoord := newReviewTranscriptCoordinator(ctx, e.Store, executionID, issueID, e.Config.Agent.Provider, e.Now)
+	transcriptCoord := newReviewTranscriptCoordinator(ctx, e.Store, executionID, issueID, e.Config.Agent.Provider, e.Now, func() { e.touchWorkerActivity(executionID, issueID) })
 	result, err := e.Reviewer.Review(ctx, review.Request{
 		Diff:              diff,
 		Issue:             issue,

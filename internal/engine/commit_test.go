@@ -24,6 +24,10 @@ type fakePublisher struct {
 	commitSHA string
 	commitErr error
 	pushErr   error
+	// pushBlock simulates a healthy but slow git push (constructorfleet/
+	// forge#463), streaming no per-line output of its own for
+	// touchWorkerActivity to key off directly.
+	pushBlock time.Duration
 
 	mu          sync.Mutex
 	commitCalls []struct{ workspacePath, message string }
@@ -43,10 +47,17 @@ func (f *fakePublisher) Commit(_ context.Context, env execution.ExecutionEnviron
 	return "deadbeef", nil
 }
 
-func (f *fakePublisher) Push(_ context.Context, env execution.ExecutionEnvironment, branch string) error {
+func (f *fakePublisher) Push(ctx context.Context, env execution.ExecutionEnvironment, branch string) error {
 	f.mu.Lock()
 	f.pushCalls = append(f.pushCalls, struct{ workspacePath, branch string }{env.Workspace().Path, branch})
 	f.mu.Unlock()
+	if f.pushBlock > 0 {
+		select {
+		case <-time.After(f.pushBlock):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return f.pushErr
 }
 
