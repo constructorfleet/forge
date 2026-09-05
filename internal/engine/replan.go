@@ -398,6 +398,11 @@ func (e *Engine) revalidateAfterReplan(ctx context.Context, executionID, issueID
 		return false, "", fmt.Errorf("engine: load workspace for issue %s: %w", issueID, err)
 	}
 
+	agentRunID, err := storage.LatestAgentRunID(ctx, e.Store, executionID, issueID)
+	if err != nil {
+		return false, "", fmt.Errorf("engine: load latest agent run for issue %s: %w", issueID, err)
+	}
+
 	// Each gate runs through the environment's single command primitive
 	// (ticket 305, constructorfleet/forge#285), exactly as the VALIDATING
 	// stage runs them. The loop stops at the first failing gate, which is
@@ -428,6 +433,7 @@ func (e *Engine) revalidateAfterReplan(ctx context.Context, executionID, issueID
 			Stdout:      res.Stdout,
 			Stderr:      res.Stderr,
 			Passed:      res.Passed,
+			AgentRunID:  agentRunID,
 		}); err != nil {
 			return false, "", fmt.Errorf("engine: record revalidation gate run %s for issue %s: %w", res.Name, issueID, err)
 		}

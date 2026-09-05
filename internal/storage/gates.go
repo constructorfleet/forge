@@ -19,10 +19,10 @@ func (s *SQLiteStore) RecordGateRun(ctx context.Context, run GateRun) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO gate_runs (execution_id, issue_id, name, command, passed, started_at, ran_at, exit_code, stdout, stderr)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO gate_runs (execution_id, issue_id, name, command, passed, started_at, ran_at, exit_code, stdout, stderr, agent_run_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ExecutionID, run.IssueID, run.Name, run.Command, run.Passed,
-		run.StartedAt.UTC(), run.FinishedAt.UTC(), run.ExitCode, run.Stdout, run.Stderr,
+		run.StartedAt.UTC(), run.FinishedAt.UTC(), run.ExitCode, run.Stdout, run.Stderr, run.AgentRunID,
 	); err != nil {
 		switch {
 		case isForeignKeyConstraintErr(err):
@@ -69,7 +69,7 @@ func appendGateRunEvent(ctx context.Context, tx *sql.Tx, run GateRun) error {
 // Execution, ordered by primary key (i.e. insertion/execution order).
 func (s *SQLiteStore) GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]GateRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT execution_id, issue_id, name, command, started_at, ran_at, exit_code, stdout, stderr, passed
+		SELECT execution_id, issue_id, name, command, started_at, ran_at, exit_code, stdout, stderr, passed, agent_run_id
 		FROM gate_runs
 		WHERE execution_id = ? AND issue_id = ?
 		ORDER BY id`,
@@ -85,12 +85,16 @@ func (s *SQLiteStore) GateRunsByIssue(ctx context.Context, executionID, issueID 
 		var (
 			run                   GateRun
 			startedAt, finishedAt time.Time
+			agentRunID            sql.NullInt64
 		)
 		if err := rows.Scan(
 			&run.ExecutionID, &run.IssueID, &run.Name, &run.Command,
-			&startedAt, &finishedAt, &run.ExitCode, &run.Stdout, &run.Stderr, &run.Passed,
+			&startedAt, &finishedAt, &run.ExitCode, &run.Stdout, &run.Stderr, &run.Passed, &agentRunID,
 		); err != nil {
 			return nil, fmt.Errorf("storage: scan gate run: %w", err)
+		}
+		if agentRunID.Valid {
+			run.AgentRunID = &agentRunID.Int64
 		}
 		run.StartedAt = startedAt.UTC()
 		run.FinishedAt = finishedAt.UTC()

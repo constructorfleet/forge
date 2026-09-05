@@ -35,6 +35,14 @@ func TestConvertGateRunJoinsBoundedOutput(t *testing.T) {
 // space between the two: the pane's renderer treats a bare tab as zero
 // width, so a run time such as "7.376s" would otherwise sit flush against
 // the package path.
+func TestConvertGateRunCopiesAgentRunID(t *testing.T) {
+	id := int64(42)
+	row := ConvertGateRun(storage.GateRun{Name: "test", AgentRunID: &id})
+	if row.AgentRunID == nil || *row.AgentRunID != 42 {
+		t.Fatalf("AgentRunID = %v, want 42", row.AgentRunID)
+	}
+}
+
 func TestConvertGateRunExpandsTabsToSpaces(t *testing.T) {
 	run := storage.GateRun{
 		Name:   "test",
@@ -268,6 +276,49 @@ func TestSetGatesCopiesTheCallersRows(t *testing.T) {
 	rows[0].Name = "mutated"
 	if out := RenderTranscript(p); !strings.Contains(out, "gate test") {
 		t.Fatalf("the pane shares the caller's slice:\n%s", out)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
+func TestCurrentAttemptGateRunsFiltersByAgentRunID(t *testing.T) {
+	runs := []storage.AgentRun{
+		{ID: 1, StartedAt: time.Unix(1000, 0)},
+		{ID: 2, StartedAt: time.Unix(2000, 0)},
+	}
+	gates := []GateRow{
+		{Name: "old-attempt", AgentRunID: int64Ptr(1), FinishedAt: time.Unix(1500, 0)},
+		{Name: "new-attempt", AgentRunID: int64Ptr(2), FinishedAt: time.Unix(2500, 0)},
+	}
+	kept := currentAttemptGateRuns(runs, gates)
+	if len(kept) != 1 || kept[0].Name != "new-attempt" {
+		t.Fatalf("kept = %+v, want only new-attempt", kept)
+	}
+}
+
+func TestCurrentAttemptGateRunsFallsBackToTimeHeuristicWhenAgentRunIDMissing(t *testing.T) {
+	runs := []storage.AgentRun{
+		{ID: 1, StartedAt: time.Unix(1000, 0)},
+		{ID: 2, StartedAt: time.Unix(2000, 0)},
+	}
+	gates := []GateRow{
+		{Name: "before-latest", FinishedAt: time.Unix(1500, 0)},
+		{Name: "after-latest", FinishedAt: time.Unix(2500, 0)},
+	}
+	kept := currentAttemptGateRuns(runs, gates)
+	if len(kept) != 1 || kept[0].Name != "after-latest" {
+		t.Fatalf("kept = %+v, want only after-latest", kept)
+	}
+}
+
+func TestCurrentAttemptGateRunsKeepsEverythingWithNoRecordedAgentRun(t *testing.T) {
+	gates := []GateRow{
+		{Name: "a", FinishedAt: time.Unix(1000, 0)},
+		{Name: "b", FinishedAt: time.Unix(2000, 0)},
+	}
+	kept := currentAttemptGateRuns(nil, gates)
+	if len(kept) != 2 {
+		t.Fatalf("kept = %+v, want both rows", kept)
 	}
 }
 

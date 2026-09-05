@@ -290,6 +290,10 @@ func (s *revalidateSpyStore) RecordGateRun(_ context.Context, run storage.GateRu
 	return nil
 }
 
+func (s *revalidateSpyStore) AgentRunsByIssue(context.Context, string, string) ([]storage.AgentRun, error) {
+	return nil, nil
+}
+
 // newRevalidateEngine builds an Engine that revalidates gates inside dir.
 func newRevalidateEngine(dir string, gates []config.QualityGate) (*Engine, *revalidateSpyStore) {
 	store := &revalidateSpyStore{workspace: domain.Workspace{Path: dir}}
