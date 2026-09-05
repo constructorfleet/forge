@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.39.0](https://github.com/constructorfleet/forge/compare/forge-v0.38.0...forge-v0.39.0) (2026-09-05)
+
+
+### Features
+
+* TUI: Parallel execution is hard to follow ([#598](https://github.com/constructorfleet/forge/issues/598)) ([a53a46b](https://github.com/constructorfleet/forge/commit/a53a46bdb8710fa1597aaf9b931a454912af9796)), closes [#580](https://github.com/constructorfleet/forge/issues/580)
+* TUI: the live view polls only the selected Worker's transcript, so a selection change discards the previous pane ([#600](https://github.com/constructorfleet/forge/issues/600)) ([336538b](https://github.com/constructorfleet/forge/commit/336538b23271d077e9904d8ea60d607fb7a85b45)), closes [#566](https://github.com/constructorfleet/forge/issues/566)
+* TUI: the transcript height ignores wrapped and multi-line entries ([#603](https://github.com/constructorfleet/forge/issues/603)) ([735515b](https://github.com/constructorfleet/forge/commit/735515b3f5f79201e0c6df94e0c842b5d73f2777)), closes [#571](https://github.com/constructorfleet/forge/issues/571)
+
 ## [0.38.0](https://github.com/constructorfleet/forge/compare/forge-v0.37.1...forge-v0.38.0) (2026-09-05)
 
 
