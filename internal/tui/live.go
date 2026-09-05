@@ -70,6 +70,11 @@ type LiveModel struct {
 	// a process; nil uses OpenDiffInPager.
 	OpenDiff func(dir, diff string) tea.Cmd
 
+	// winHeight is the last terminal height the runtime reported. Zero means the
+	// runtime has sent no size yet: the frame then clips nothing and the tailer
+	// keeps its own default.
+	winHeight int
+
 	// diffDir holds this session's diff artifacts. A pager killed before its
 	// own cleanup callback runs leaves a file, so quit removes the directory.
 	diffDir string
@@ -110,7 +115,13 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.readRoster(msg.now), next)
 	case rosterReadMsg:
 		m.applyRoster(msg)
+		// The roster row count is part of the chrome, so a pass that changed the
+		// rows changes the transcript height as well.
+		m.applyTranscriptHeight()
 		return m, m.readTranscript()
+	case tea.WindowSizeMsg:
+		m.winHeight = msg.Height
+		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		m.applyTranscript(msg)
 	case tea.KeyPressMsg:
@@ -327,10 +338,26 @@ func (m *LiveModel) applyTranscript(msg transcriptReadMsg) {
 	}
 }
 
+// applyTranscriptHeight sizes the tailer's event window from the transcript row
+// budget. The two units differ: the tailer counts events and the budget counts
+// rows, and one event can draw several rows. So this is an upper bound on how
+// much history to read, and Render owns the exact clip to the terminal. It runs
+// on a resize, on each poll (the roster row count is part of the chrome), and
+// when a feed is attached.
+func (m *LiveModel) applyTranscriptHeight() {
+	m.vm.Height = m.winHeight
+	rows := TranscriptRows(m.vm)
+	if m.feed == nil || rows <= 0 {
+		return
+	}
+	m.feed.SetHeight(rows)
+}
+
 // SetFeed attaches the transcript feed each poll drives. It is the pane's one
 // owner. A nil feed renders the roster alone.
 func (m *LiveModel) SetFeed(f *TranscriptFeed) {
 	m.feed = f
+	m.applyTranscriptHeight()
 	// The read in flight belongs to the old feed and its message is dropped, so
 	// the new feed must be free to start its own.
 	m.reading = false

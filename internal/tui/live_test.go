@@ -516,3 +516,84 @@ func assertQuitCmd(t *testing.T, cmd tea.Cmd) {
 		t.Fatalf("quit command produced %T, want tea.QuitMsg", cmd())
 	}
 }
+
+// TestLiveModelWindowSizeSetsTranscriptHeight proves the terminal size reaches
+// the feed's tailer: the frame keeps the roster rows, the detail strip, and the
+// footer, and the transcript takes the rows that remain.
+func TestLiveModelWindowSizeSetsTranscriptHeight(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+
+	// One roster row, one detail strip, one footer: a height of 5 leaves 2 rows.
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 5})
+	nextPollTick(t, m)
+
+	got := m.View().Content
+	if strings.Contains(got, "starting work") {
+		t.Errorf("the transcript ignored the terminal height:\n%s", got)
+	}
+	// The gate row is the newest entry, so it is what the two rows must hold.
+	if !strings.Contains(got, "gate go-test") {
+		t.Errorf("frame omits the newest entries:\n%s", got)
+	}
+}
+
+// TestLiveModelWindowSizeAfterPollResizesTranscript proves a resize after the
+// first poll reaches the pane the feed already holds.
+func TestLiveModelWindowSizeAfterPollResizesTranscript(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+	nextPollTick(t, m)
+	if got := m.View().Content; !strings.Contains(got, "starting work") {
+		t.Fatalf("the default height dropped the oldest event:\n%s", got)
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 5})
+	nextPollTick(t, m)
+
+	if got := m.View().Content; strings.Contains(got, "starting work") {
+		t.Errorf("a resize did not shrink the transcript:\n%s", got)
+	}
+}
+
+// TestLiveModelTinyWindowKeepsOneTranscriptRow proves a terminal too short for
+// the chrome still renders one transcript row, and never falls back to the
+// 20-event default.
+func TestLiveModelTinyWindowKeepsOneTranscriptRow(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 1})
+	nextPollTick(t, m)
+
+	got := strings.Split(strings.TrimRight(m.View().Content, "\n"), "\n")
+	if strings.Contains(m.View().Content, "starting work") {
+		t.Errorf("a one-row terminal rendered the whole scrollback:\n%s", m.View().Content)
+	}
+	// The chrome alone takes three rows, so exactly one transcript row remains.
+	if len(got) != 4 {
+		t.Errorf("frame drew %d rows, want the chrome plus one:\n%s", len(got), strings.Join(got, "\n"))
+	}
+}
+
+// TestLiveModelWindowSizeClipsTheFrame proves the terminal height reaches the
+// frame: the whole render fits the rows the terminal has.
+func TestLiveModelWindowSizeClipsTheFrame(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 6})
+	nextPollTick(t, m)
+
+	got := strings.Split(strings.TrimRight(m.View().Content, "\n"), "\n")
+	if len(got) > 6 {
+		t.Errorf("frame drew %d rows in a 6-row terminal:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	if !strings.Contains(m.View().Content, "gate go-test") {
+		t.Errorf("clipping dropped the newest rows:\n%s", m.View().Content)
+	}
+}

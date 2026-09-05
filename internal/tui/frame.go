@@ -162,6 +162,11 @@ type ViewModel struct {
 
 	// Focus names the pane that owns the detail strip and the footer.
 	Focus Pane
+
+	// Height is the terminal height in rows. Render clips the transcript to the
+	// rows the chrome leaves, so the frame never draws past the terminal bottom.
+	// Zero means the runtime has sent no size yet and Render clips nothing.
+	Height int
 }
 
 // KeyBinding is one legal key and its label, rendered in the footer.
@@ -194,39 +199,82 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 
 // Render draws the whole frame: one line per Worker, a notice for an empty or
 // stale roster, the transcript pane with its own poll notice, a detail strip
-// for the focused pane's selection, and a footer of legal keys. Pure and
-// headless.
+// for the focused pane's selection, and a footer of legal keys. The transcript
+// is clipped to the rows vm.Height leaves, so the frame never draws past the
+// terminal bottom. Pure and headless.
 func Render(vm ViewModel) string {
+	above, below := chromeLines(vm)
+	lines := append(above, clippedTranscript(vm)...)
+	lines = append(lines, below...)
 	var b strings.Builder
-	for i, row := range vm.Workers {
-		b.WriteString(rowLine(row, i == vm.Selection))
+	for _, l := range lines {
+		b.WriteString(l)
 		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// TranscriptRows returns the rows vm.Height leaves the transcript, after the
+// roster, the notices, the detail strip, and the footer. Render clips to it and
+// the live view budgets the tailer's event window against it, so one place owns
+// the arithmetic. Zero means vm.Height is unset and nothing is clipped. One is
+// the floor: a terminal too short for the chrome must still show the newest row.
+func TranscriptRows(vm ViewModel) int {
+	if vm.Height <= 0 {
+		return 0
+	}
+	above, below := chromeLines(vm)
+	if rows := vm.Height - len(above) - len(below); rows > 1 {
+		return rows
+	}
+	return 1
+}
+
+// chromeLines splits the frame's non-transcript rows into the rows above the
+// transcript and the rows below it.
+func chromeLines(vm ViewModel) (above, below []string) {
+	for i, row := range vm.Workers {
+		above = append(above, rowLine(row, i == vm.Selection))
 	}
 	// A notice also carries a failed poll pass, which holds the last good rows.
 	// It must render with those rows, or the failure is invisible.
 	if vm.Notice != "" {
-		b.WriteString(vm.Notice)
-		b.WriteByte('\n')
+		above = append(above, vm.Notice)
 	}
 	// The notice renders above the pane, so the failure sits with the transcript
 	// it describes and a long pane cannot push the two apart.
 	if vm.TranscriptNotice != "" {
-		b.WriteString(vm.TranscriptNotice)
+		above = append(above, vm.TranscriptNotice)
 	}
 	if vm.ActionNotice != "" {
-		b.WriteString(vm.ActionNotice)
-		b.WriteByte('\n')
-	}
-	if vm.Transcript != nil {
-		b.WriteString(RenderTranscript(vm.Transcript))
+		above = append(above, vm.ActionNotice)
 	}
 	if strip, ok := stripLine(vm); ok {
-		b.WriteString(strip)
-		b.WriteByte('\n')
+		below = append(below, strip)
 	}
-	b.WriteString(footerLine(frameKeys(vm)))
-	b.WriteByte('\n')
-	return b.String()
+	return above, append(below, footerLine(frameKeys(vm)))
+}
+
+// clippedTranscript renders the pane and keeps its last rows alone, so a pane
+// that draws more rows than its event window suggests cannot push the strip and
+// the footer off the screen. One event can draw several rows (a divider, the
+// eviction marker, a folded result, an expanded block), so the row budget must
+// hold here and not at the event window. A zero budget clips nothing: the
+// runtime sends no size before the first frame.
+func clippedTranscript(vm ViewModel) []string {
+	if vm.Transcript == nil {
+		return nil
+	}
+	out := RenderTranscript(vm.Transcript)
+	if out == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	rows := TranscriptRows(vm)
+	if rows > 0 && len(lines) > rows {
+		lines = lines[len(lines)-rows:]
+	}
+	return lines
 }
 
 // stripLine picks the detail strip for the focused pane: the transcript
