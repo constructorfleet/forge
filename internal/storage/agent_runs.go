@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -212,6 +213,31 @@ func LatestAgentRunID(ctx context.Context, store Store, executionID, issueID str
 	}
 	id := runs[len(runs)-1].ID
 	return &id, nil
+}
+
+// FeatureHasPlanningRuns reports whether featureID has ever recorded a
+// planning-backend AgentRun. A Feature carries no store-backed row of its
+// own (internal/domain.Feature) — planningagent.NewPersistingAgentBackend
+// keys every planning-phase AgentRun to execution_id = issue_id = the
+// Feature id — so this is the only sound way to probe "does this Feature
+// exist" against the store, and `forge watch` uses it as the third id-space
+// probe after executions and planning_executions (issue #485).
+func (s *SQLiteStore) FeatureHasPlanningRuns(ctx context.Context, featureID string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT 1
+		FROM agent_runs
+		WHERE execution_id = ? AND backend = 'planning'
+		LIMIT 1`,
+		featureID,
+	)
+	var found int
+	if err := row.Scan(&found); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("storage: feature has planning runs %s: %w", featureID, err)
+	}
+	return true, nil
 }
 
 func scanAgentRuns(rows *sql.Rows, contextMsg string) ([]AgentRun, error) {

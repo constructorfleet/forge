@@ -50,8 +50,8 @@ const (
 	LivenessStale
 )
 
-// staleHeartbeat is the age past which a last heartbeat renders as Stale.
-const staleHeartbeat = 15 * time.Second
+// StaleHeartbeat is the age past which a last heartbeat renders as Stale.
+const StaleHeartbeat = 15 * time.Second
 
 // transcriptLagMultiple is how many poll intervals the last committed
 // transcript read may age past before the pane header marks it lagging. A
@@ -98,12 +98,12 @@ func DeriveAttention(state domain.IssueState, tool string) Attention {
 }
 
 // DeriveLiveness derives a row's liveness from heartbeat presence and age.
-// Absence (planning) claims no liveness; a beat past staleHeartbeat is stale.
+// Absence (planning) claims no liveness. A beat past StaleHeartbeat is stale.
 func DeriveLiveness(hasBeat bool, age time.Duration) Liveness {
 	if !hasBeat {
 		return LivenessNone
 	}
-	if age > staleHeartbeat {
+	if age > StaleHeartbeat {
 		return LivenessStale
 	}
 	return LivenessLive

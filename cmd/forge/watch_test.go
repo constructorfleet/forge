@@ -51,7 +51,7 @@ func TestResolveWatchTargetCodingExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveWatchTarget: %v", err)
 	}
-	if !target.isCoding || target.id != "exec-1" {
+	if target.kind != watchTargetCoding || target.id != "exec-1" {
 		t.Fatalf("target = %+v, want coding exec-1", target)
 	}
 }
@@ -68,12 +68,38 @@ func TestResolveWatchTargetPlanningExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveWatchTarget: %v", err)
 	}
-	if target.isCoding || target.id != "plan-1" {
-		t.Fatalf("target = %+v, want planning plan-1", target)
+	if target.kind != watchTargetPlanningExecution || target.id != "plan-1" {
+		t.Fatalf("target = %+v, want planning execution plan-1", target)
 	}
 }
 
-func TestResolveWatchTargetCodingWinsOverPlanning(t *testing.T) {
+// TestResolveWatchTargetFeature pins the third id-space probe (issue #485):
+// an id with no executions or planning_executions row, but a recorded
+// planning-backend agent_runs row, resolves as a bare Feature.
+func TestResolveWatchTargetFeature(t *testing.T) {
+	store := newWatchTestStore(t)
+	ctx := context.Background()
+	if _, err := store.RecordAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "feat-1", IssueID: "feat-1", Backend: "planning",
+		StartedAt: time.Now(), FinishedAt: time.Now(), Result: "COMPLETE",
+	}); err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	target, err := resolveWatchTarget(ctx, store, "feat-1")
+	if err != nil {
+		t.Fatalf("resolveWatchTarget: %v", err)
+	}
+	if target.kind != watchTargetFeature || target.id != "feat-1" {
+		t.Fatalf("target = %+v, want feature feat-1", target)
+	}
+}
+
+// TestResolveWatchTargetCodingAndPlanningCollisionFailsLoudly documents the
+// issue #485 policy change: an id that happens to match both executions and
+// planning_executions is ambiguous and must error, not silently resolve to
+// whichever space is probed first.
+func TestResolveWatchTargetCodingAndPlanningCollisionFailsLoudly(t *testing.T) {
 	store := newWatchTestStore(t)
 	ctx := context.Background()
 	seedCodingExecution(t, store, "shared", domain.StateImplementing)
@@ -82,12 +108,31 @@ func TestResolveWatchTargetCodingWinsOverPlanning(t *testing.T) {
 		t.Fatalf("CreatePlanningExecution: %v", err)
 	}
 
-	target, err := resolveWatchTarget(ctx, store, "shared")
-	if err != nil {
-		t.Fatalf("resolveWatchTarget: %v", err)
+	if _, err := resolveWatchTarget(ctx, store, "shared"); err == nil {
+		t.Fatal("resolveWatchTarget: want error for an id matching both executions and planning_executions, got nil")
 	}
-	if !target.isCoding {
-		t.Fatalf("target = %+v, want coding (executions probed first)", target)
+}
+
+// TestResolveWatchTargetAmbiguousFailsLoudly pins the issue's explicit
+// requirement: an id that matches more than one store space is an error,
+// never a silent first-match pick. A 36-char UUID is a legal Feature id, so
+// this is not a hypothetical collision.
+func TestResolveWatchTargetAmbiguousFailsLoudly(t *testing.T) {
+	store := newWatchTestStore(t)
+	ctx := context.Background()
+	pe := domain.PlanningExecution{ID: "shared", FeatureID: "f-1", BaseRevision: "abc", Status: domain.PlanningStatusActive, StartedAt: time.Now()}
+	if err := store.CreatePlanningExecution(ctx, pe); err != nil {
+		t.Fatalf("CreatePlanningExecution: %v", err)
+	}
+	if _, err := store.RecordAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "shared", IssueID: "shared", Backend: "planning",
+		StartedAt: time.Now(), FinishedAt: time.Now(), Result: "COMPLETE",
+	}); err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	if _, err := resolveWatchTarget(ctx, store, "shared"); err == nil {
+		t.Fatal("resolveWatchTarget: want error for an id matching multiple spaces, got nil")
 	}
 }
 
@@ -103,8 +148,15 @@ func TestListLiveExecutionsFiltersInactive(t *testing.T) {
 	ctx := context.Background()
 	seedCodingExecution(t, store, "exec-active", domain.StateImplementing)
 	seedCodingExecution(t, store, "exec-done", domain.StateDone)
+	now := time.Now().UTC()
+	if err := store.ClaimIssue(ctx, "exec-active", "exec-active-i", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.HeartbeatWorker(ctx, "exec-active", "exec-active-i", now); err != nil {
+		t.Fatalf("HeartbeatWorker: %v", err)
+	}
 
-	live, err := listLiveExecutions(ctx, store)
+	live, err := listLiveExecutions(ctx, store, now)
 	if err != nil {
 		t.Fatalf("listLiveExecutions: %v", err)
 	}
@@ -116,6 +168,31 @@ func TestListLiveExecutionsFiltersInactive(t *testing.T) {
 	}
 	if live[0].Active != 1 {
 		t.Fatalf("live[0].Active = %d, want 1", live[0].Active)
+	}
+}
+
+// TestListLiveExecutionsFiltersStaleHeartbeat pins the heartbeat-based
+// liveness bare `forge watch` requires (issue #485): a non-terminal Issue
+// with no fresh Worker heartbeat is not "live", even though it still counts
+// as an ActiveIssue.
+func TestListLiveExecutionsFiltersStaleHeartbeat(t *testing.T) {
+	store := newWatchTestStore(t)
+	ctx := context.Background()
+	seedCodingExecution(t, store, "exec-wedged", domain.StateImplementing)
+	now := time.Now().UTC()
+	if err := store.ClaimIssue(ctx, "exec-wedged", "exec-wedged-i", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue: %v", err)
+	}
+	if err := store.HeartbeatWorker(ctx, "exec-wedged", "exec-wedged-i", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("HeartbeatWorker: %v", err)
+	}
+
+	live, err := listLiveExecutions(ctx, store, now)
+	if err != nil {
+		t.Fatalf("listLiveExecutions: %v", err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("live executions = %d, want 0 (heartbeat stale)", len(live))
 	}
 }
 
@@ -142,12 +219,12 @@ func TestRunWatch_DefaultDBResolvesFromRepoRoot(t *testing.T) {
 	chdir(t, subdir)
 
 	stderr := captureStderr(t, func() {
-		if code := runWatch(nil); code != 1 {
-			t.Fatalf("runWatch = %d, want 1", code)
+		if code := runWatch(nil); code != 2 {
+			t.Fatalf("runWatch = %d, want 2", code)
 		}
 	})
-	if !strings.Contains(stderr, "forge watch: no active executions") {
-		t.Fatalf("stderr = %q, want root store no-active-executions message", stderr)
+	if !strings.Contains(stderr, "forge watch: no execution has a live worker heartbeat") {
+		t.Fatalf("stderr = %q, want root store no-live-worker message", stderr)
 	}
 }
 
