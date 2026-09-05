@@ -19,6 +19,22 @@ import (
 // ResumeExecution reconciles one persisted Execution after an orchestrator
 // restart, continuing every incomplete Issue from its persisted state
 // rather than creating a fresh Execution.
+//
+// Each Issue's resumeIssue call runs under IssueLock (issue 684): without
+// it, a concurrent RetryIssue can be mid-flight in the window
+// Store.ClaimRetry opens between the claim and resumeIssue re-claiming the
+// Issue, where the Issue reads as READY with no Worker claim. This resume
+// would read that same shape as resumable and start a second Worker in the
+// Workspace RetryIssue is already using. Taking the lock here makes resume
+// wait for the in-flight retry to finish first, the same guarantee issue
+// 552 already gives CancelExecution.
+//
+// The per-Issue state is re-read fresh inside the lock rather than trusting
+// the state.Issues snapshot taken before the wait, matching CancelExecution:
+// by the time this side acquires the lock, a retry that raced it has either
+// finished (the Issue may since have moved past the snapshot's state) or
+// never started, so resumeIssue must act on the current state, not the
+// stale one.
 func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (storage.ExecutionState, error) {
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
@@ -26,9 +42,21 @@ func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (stora
 	}
 
 	for i, issue := range state.Issues {
-		resumed, err := e.resumeIssue(ctx, state.Execution, issue, nil)
-		if err != nil {
-			return storage.ExecutionState{}, fmt.Errorf("engine: resume execution %s issue %s: %w", executionID, issue.ID, err)
+		var resumed domain.Issue
+		lockErr := e.withIssueLock(ctx, executionID, issue.ID, func() error {
+			current, err := e.Store.GetIssue(ctx, executionID, issue.ID)
+			if err != nil {
+				return fmt.Errorf("engine: resume execution %s issue %s: %w", executionID, issue.ID, err)
+			}
+			var resumeErr error
+			resumed, resumeErr = e.resumeIssue(ctx, state.Execution, current, nil)
+			if resumeErr != nil {
+				return fmt.Errorf("engine: resume execution %s issue %s: %w", executionID, issue.ID, resumeErr)
+			}
+			return nil
+		})
+		if lockErr != nil {
+			return storage.ExecutionState{}, lockErr
 		}
 		state.Issues[i] = resumed
 	}
