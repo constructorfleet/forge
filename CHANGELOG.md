@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.1](https://github.com/constructorfleet/forge/compare/forge-v0.44.0...forge-v0.44.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* Planning Artifact loader (planningfs.FileArtifactLoader) still resolves .forge/features/&lt;feature-id&gt; relative to cwd, not repo root ([#645](https://github.com/constructorfleet/forge/issues/645)) ([db00c24](https://github.com/constructorfleet/forge/commit/db00c24e91ab7dfa867116759083592ee9f7c107))
+
 ## [0.44.0](https://github.com/constructorfleet/forge/compare/forge-v0.43.0...forge-v0.44.0) (2026-09-05)
 
 
