@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.45.0](https://github.com/constructorfleet/forge/compare/forge-v0.44.2...forge-v0.45.0) (2026-09-05)
+
+
+### Features
+
+* Planning writes no events rows, so the planning phase has no audit log ([#650](https://github.com/constructorfleet/forge/issues/650)) ([ebf6861](https://github.com/constructorfleet/forge/commit/ebf68612e5ecb146f595a9e5124e8c1076e97fe0)), closes [#471](https://github.com/constructorfleet/forge/issues/471)
+* TUI: move the on-demand diff read off the event loop into a tea.Cmd ([#652](https://github.com/constructorfleet/forge/issues/652)) ([f2c7ae6](https://github.com/constructorfleet/forge/commit/f2c7ae6665c2806f1384c2d0afbf5e61cc843db4)), closes [#539](https://github.com/constructorfleet/forge/issues/539)
+* TUI: TranscriptTailer.Poll double-counts appended events when scrolled back ([#654](https://github.com/constructorfleet/forge/issues/654)) ([9feb37d](https://github.com/constructorfleet/forge/commit/9feb37da0ad20aeaa16fb7abc993c28c18637bb8)), closes [#520](https://github.com/constructorfleet/forge/issues/520)
+
+
+### Bug Fixes
+
+* Planning leases identify their owner by bare pid only ([#653](https://github.com/constructorfleet/forge/issues/653)) ([0dfbaf5](https://github.com/constructorfleet/forge/commit/0dfbaf56aa3b0fc32e29af8940ffc808ae4ba268)), closes [#557](https://github.com/constructorfleet/forge/issues/557)
+
 ## [0.44.2](https://github.com/constructorfleet/forge/compare/forge-v0.44.1...forge-v0.44.2) (2026-09-05)
 
 
