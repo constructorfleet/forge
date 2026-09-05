@@ -711,7 +711,7 @@ func TestRunGoalInit_ThenPlan(t *testing.T) {
 		t.Fatalf("runGoalInit = %d, want 0", code)
 	}
 
-	loader := &fileArtifactLoader{featureID: "widget"}
+	loader := &fileArtifactLoader{}
 	goal, err := loader.LoadGoal(context.Background(), "widget")
 	if err != nil {
 		t.Fatalf("LoadGoal: %v", err)

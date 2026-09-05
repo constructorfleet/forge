@@ -73,7 +73,7 @@ func runPlan(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	loader := &fileArtifactLoader{featureID: featureID}
+	loader := &fileArtifactLoader{}
 
 	goalArtifact, err := loader.LoadGoal(ctx, featureID)
 	if err != nil {

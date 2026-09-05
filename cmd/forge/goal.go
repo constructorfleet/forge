@@ -83,7 +83,7 @@ func runGoalInit(args []string) int {
 	}
 
 	ctx := context.Background()
-	loader := &fileArtifactLoader{featureID: featureID}
+	loader := &fileArtifactLoader{}
 	if err := loader.SaveGoal(ctx, featureID, goal); err != nil {
 		fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
 		return 1

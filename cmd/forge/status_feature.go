@@ -70,7 +70,7 @@ type FeatureStatusReport struct {
 // loadFeatureStatus computes a FeatureStatusReport for featureID from its
 // Planning Artifacts on disk and its Planning Executions in store.
 func loadFeatureStatus(ctx context.Context, store storage.Store, featureID string) (FeatureStatusReport, error) {
-	loader := &fileArtifactLoader{featureID: featureID}
+	loader := &fileArtifactLoader{}
 
 	goal, err := loader.LoadGoal(ctx, featureID)
 	if err != nil && !os.IsNotExist(err) {

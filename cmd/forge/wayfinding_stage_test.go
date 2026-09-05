@@ -51,7 +51,7 @@ func TestRunWayfindingStage_ResolvesDecisionAndLeavesExecutionActive(t *testing.
 	decision.Revision = planning.ComputeRevision(decision)
 	decisions := map[string]*planning.Artifact{"001-storage": decision}
 
-	loader := &fileArtifactLoader{featureID: "widget"}
+	loader := &fileArtifactLoader{}
 
 	// runWayfindingStage's Persist callback writes through
 	// fileArtifactLoader.SaveDecision, which uses paths relative to the
@@ -119,7 +119,7 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 	decision.Revision = planning.ComputeRevision(decision)
 	decisions := map[string]*planning.Artifact{"001-vendor": decision}
 
-	loader := &fileArtifactLoader{featureID: "widget"}
+	loader := &fileArtifactLoader{}
 	chdirTemp(t, repoRoot)
 
 	backend := planningagent.NewFakeBackend()

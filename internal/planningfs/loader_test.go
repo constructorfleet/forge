@@ -1,4 +1,4 @@
-package main
+package planningfs
 
 import (
 	"context"
@@ -9,6 +9,22 @@ import (
 
 	"github.com/Teagan42/forge/internal/planning"
 )
+
+func chdirTemp(t *testing.T, dir string) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("Chdir back: %v", err)
+		}
+	})
+}
 
 func TestFileArtifactLoader_SaveGoal_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -21,7 +37,7 @@ func TestFileArtifactLoader_SaveGoal_RoundTrip(t *testing.T) {
 	}
 	goal.Revision = planning.ComputeRevision(goal)
 
-	loader := &fileArtifactLoader{}
+	loader := &FileArtifactLoader{}
 	if err := loader.SaveGoal(context.Background(), featureID, goal); err != nil {
 		t.Fatalf("SaveGoal: %v", err)
 	}
@@ -61,12 +77,57 @@ func TestFileArtifactLoader_SaveGoal_CreatesFeatureDir(t *testing.T) {
 	}
 	goal.Revision = planning.ComputeRevision(goal)
 
-	loader := &fileArtifactLoader{}
+	loader := &FileArtifactLoader{}
 	if err := loader.SaveGoal(context.Background(), featureID, goal); err != nil {
 		t.Fatalf("SaveGoal: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, ".forge", "features", featureID, "goal.md")); err != nil {
 		t.Fatalf("expected goal.md to exist: %v", err)
+	}
+}
+
+func TestFileArtifactLoader_LoadSpec_MissingReturnsNilNoError(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	loader := &FileArtifactLoader{}
+	spec, err := loader.LoadSpec(context.Background(), "no-such-feature")
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if spec != nil {
+		t.Fatalf("spec = %+v, want nil", spec)
+	}
+}
+
+func TestFileArtifactLoader_SaveSpec_ApprovedRevisionRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	featureID := "widget"
+	spec := &planning.Artifact{
+		Kind:     planning.KindSpec,
+		Sections: []planning.Section{{Heading: "Objective", Body: "Build a widget"}},
+	}
+	rev := planning.ComputeRevision(spec)
+	spec.Revision = rev
+	spec.ApprovedRevision = rev
+	spec.State = "approved"
+
+	loader := &FileArtifactLoader{}
+	if err := loader.SaveSpec(context.Background(), featureID, spec); err != nil {
+		t.Fatalf("SaveSpec: %v", err)
+	}
+
+	loaded, err := loader.LoadSpec(context.Background(), featureID)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if loaded.ApprovedRevision != rev {
+		t.Errorf("ApprovedRevision = %q, want %q", loaded.ApprovedRevision, rev)
+	}
+	if loaded.State != "approved" {
+		t.Errorf("State = %q, want %q", loaded.State, "approved")
 	}
 }

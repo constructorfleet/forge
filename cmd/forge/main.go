@@ -13,11 +13,15 @@ import (
 	"path/filepath"
 
 	"github.com/Teagan42/forge/internal/initdiscovery"
-	"github.com/Teagan42/forge/internal/planning"
-	"github.com/Teagan42/forge/internal/replan"
+	"github.com/Teagan42/forge/internal/planningapprove"
+	"github.com/Teagan42/forge/internal/planningfs"
 	"github.com/Teagan42/forge/internal/storage"
-	"github.com/Teagan42/forge/internal/ticketplan"
 )
+
+// fileArtifactLoader is cmd/forge's alias for the reusable filesystem
+// Planning Artifact loader (internal/planningfs), so the many existing call
+// sites in this package need no rename.
+type fileArtifactLoader = planningfs.FileArtifactLoader
 
 const helpText = `forge - deterministic orchestration for software-engineering agents
 
@@ -193,34 +197,11 @@ func runApprove(args []string) int {
 		return 1
 	}
 
-	loader := &fileArtifactLoader{featureID: featureID}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{}}
 
-	// Load the spec
-	specArtifact, err := loader.LoadSpec(ctx, featureID)
+	currentRev, err := approver.ApproveSpec(ctx, featureID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge approve: load spec: %v\n", err)
-		return 1
-	}
-	if specArtifact == nil {
-		fmt.Fprintf(os.Stderr, "forge approve: no spec found for feature %s\n", featureID)
-		return 1
-	}
-
-	// Check if spec is approved by automated review (state should be "reviewed" or similar)
-	// For now, we just check that it's a valid spec
-	if specArtifact.Kind != planning.KindSpec {
-		fmt.Fprintf(os.Stderr, "forge approve: artifact is not a specification\n")
-		return 1
-	}
-
-	// Compute current revision and set as approved
-	currentRev := planning.ComputeRevision(specArtifact)
-	specArtifact.ApprovedRevision = currentRev
-	specArtifact.State = "approved"
-
-	// Save the approved spec
-	if err := loader.SaveSpec(ctx, featureID, specArtifact); err != nil {
-		fmt.Fprintf(os.Stderr, "forge approve: save spec: %v\n", err)
+		fmt.Fprintf(os.Stderr, "forge approve: %v\n", err)
 		return 1
 	}
 
@@ -267,194 +248,21 @@ func runApproveTickets(args []string) int {
 		return 1
 	}
 
-	loader := &fileArtifactLoader{featureID: featureID}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{}}
 
-	// Load the ticket plan
-	tpArtifact, err := loader.LoadTicketPlan(ctx, featureID)
+	result, err := approver.ApproveTicketPlan(ctx, featureID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "forge approve tickets: load ticket plan: %v\n", err)
-		return 1
-	}
-	if tpArtifact == nil {
-		fmt.Fprintf(os.Stderr, "forge approve tickets: no ticket plan found for feature %s\n", featureID)
-		return 1
-	}
-
-	// Check if ticket plan is a valid ticket plan
-	if tpArtifact.Kind != planning.KindTicketPlan {
-		fmt.Fprintf(os.Stderr, "forge approve tickets: artifact is not a ticket plan\n")
-		return 1
-	}
-
-	// Compute current revision and set as approved
-	currentRev := planning.ComputeRevision(tpArtifact)
-	tpArtifact.ApprovedRevision = currentRev
-	tpArtifact.State = "approved"
-
-	// Save the approved ticket plan
-	if err := loader.SaveTicketPlan(ctx, featureID, tpArtifact); err != nil {
-		fmt.Fprintf(os.Stderr, "forge approve tickets: save ticket plan: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintf(os.Stdout, "ticket-plan.md approved for feature %s at revision %s\n", featureID, currentRev[:16])
-
-	if err := resumeFrozenFeature(ctx, store, featureID, currentRev, tpArtifact); err != nil {
 		fmt.Fprintf(os.Stderr, "forge approve tickets: %v\n", err)
 		return 1
 	}
+
+	fmt.Fprintf(os.Stdout, "ticket-plan.md approved for feature %s at revision %s\n", featureID, result.Revision[:16])
+
+	if result.Resumed {
+		for _, id := range result.Superseded {
+			fmt.Fprintf(os.Stdout, "issue %s closed as superseded by the new ticket plan\n", id)
+		}
+		fmt.Fprintf(os.Stdout, "feature %s unfrozen; work may resume against the approved plan\n", featureID)
+	}
 	return 0
-}
-
-// resumeFrozenFeature is acceptance item 5's approval-side half: once a new
-// Ticket Plan is approved, the Issues the old plan produced that this one no
-// longer contains — and that never started — are closed as superseded, and
-// only then is the Feature's replan freeze lifted so frozen work can resume.
-// A Feature that is not frozen (the ordinary, non-replan approval) is left
-// entirely alone.
-func resumeFrozenFeature(ctx context.Context, store storage.Store, featureID, planRevision string, plan *planning.Artifact) error {
-	// Checked before the plan is parsed so an ordinary approval of a
-	// never-frozen Feature is completely unaffected by replanning — it does
-	// not even have to satisfy the ticket parser.
-	frozen, _, err := store.IsFeatureFrozen(ctx, featureID)
-	if err != nil {
-		return fmt.Errorf("check replan freeze: %w", err)
-	}
-	if !frozen {
-		return nil
-	}
-
-	tickets, err := ticketplan.ParseTicketPlan(plan)
-	if err != nil {
-		return fmt.Errorf("parse approved ticket plan: %w", err)
-	}
-	planned := make([]string, 0, len(tickets))
-	for _, t := range tickets {
-		planned = append(planned, t.Key)
-	}
-
-	superseded, err := replan.ResumeFeature(ctx, store, featureID, planRevision, planned)
-	if errors.Is(err, replan.ErrNotFrozen) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	for _, id := range superseded {
-		fmt.Fprintf(os.Stdout, "issue %s closed as superseded by the new ticket plan\n", id)
-	}
-	fmt.Fprintf(os.Stdout, "feature %s unfrozen; work may resume against the approved plan\n", featureID)
-	return nil
-}
-
-type fileArtifactLoader struct {
-	featureID string
-}
-
-func (f *fileArtifactLoader) LoadGoal(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "goal.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return planning.Parse(data)
-}
-
-func (f *fileArtifactLoader) SaveGoal(ctx context.Context, featureID string, goal *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "goal.md")
-	data := planning.Render(goal)
-	return os.WriteFile(path, data, 0o644)
-}
-
-func (f *fileArtifactLoader) LoadDecisions(ctx context.Context, featureID string) (map[string]*planning.Artifact, error) {
-	dir := filepath.Join(".forge", "features", featureID, "decisions")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]*planning.Artifact{}, nil
-		}
-		return nil, err
-	}
-
-	decisions := make(map[string]*planning.Artifact)
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
-			continue
-		}
-		// Extract decision ID from filename (NNN-slug.md)
-		id := entry.Name()[:len(entry.Name())-3]
-		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		artifact, err := planning.Parse(data)
-		if err != nil {
-			return nil, err
-		}
-		decisions[id] = artifact
-	}
-	return decisions, nil
-}
-
-// SaveDecision writes one Decision Artifact back to
-// .forge/features/<feature>/decisions/<id>.md, creating the directory if
-// this is the Feature's first Decision. It is what makes fileArtifactLoader
-// satisfy replan.DecisionStore, so a REPLAN_REQUIRED escalation can
-// create/reopen a Decision on disk (ticket 22).
-func (f *fileArtifactLoader) SaveDecision(ctx context.Context, featureID, decisionID string, decision *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID, "decisions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, decisionID+".md"), planning.Render(decision), 0o644)
-}
-
-func (f *fileArtifactLoader) SaveSpec(ctx context.Context, featureID string, spec *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "spec.md")
-	data := planning.Render(spec)
-	return os.WriteFile(path, data, 0o644)
-}
-
-func (f *fileArtifactLoader) LoadSpec(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "spec.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return planning.Parse(data)
-}
-
-func (f *fileArtifactLoader) LoadTicketPlan(ctx context.Context, featureID string) (*planning.Artifact, error) {
-	path := filepath.Join(".forge", "features", featureID, "ticket-plan.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return planning.Parse(data)
-}
-
-func (f *fileArtifactLoader) SaveTicketPlan(ctx context.Context, featureID string, tp *planning.Artifact) error {
-	dir := filepath.Join(".forge", "features", featureID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "ticket-plan.md")
-	data := planning.Render(tp)
-	return os.WriteFile(path, data, 0o644)
 }
