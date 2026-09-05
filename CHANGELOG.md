@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/constructorfleet/forge/compare/forge-v0.37.0...forge-v0.37.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* Planning Decision resume filters answers by comment author, silently dropping any answer posted as Forge's own account ([#588](https://github.com/constructorfleet/forge/issues/588)) ([aa6c9f4](https://github.com/constructorfleet/forge/commit/aa6c9f45fadabf79054005ea97dfff05175b548b)), closes [#476](https://github.com/constructorfleet/forge/issues/476)
+
 ## [0.37.0](https://github.com/constructorfleet/forge/compare/forge-v0.36.3...forge-v0.37.0) (2026-09-05)
 
 
