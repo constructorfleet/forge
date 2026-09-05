@@ -215,7 +215,7 @@ func TestPaneExpandedResultLabelsItsOwnAxis(t *testing.T) {
 	lines := nonEmptyLines(tui.RenderTranscript(pane))
 	var resultLine string
 	for _, l := range lines {
-		if strings.Contains(l, "←") {
+		if strings.Contains(l, "└") {
 			resultLine = l
 		}
 	}

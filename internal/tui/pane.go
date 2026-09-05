@@ -26,11 +26,11 @@ const (
 func TranscriptGlyph(e TranscriptEvent) string {
 	switch e.Type {
 	case eventToolCall:
-		return "→"
+		return "▸"
 	case eventToolResult:
-		return "←"
+		return "└"
 	case eventTruncation:
-		return "…"
+		return "░"
 	default:
 		return " "
 	}
@@ -509,9 +509,9 @@ func attemptNumbers(runOrder []int64) map[int64]int {
 // own bounded-transcript marker and means something else entirely.
 func evictionLine(dropped int) string {
 	if dropped > 0 {
-		return fmt.Sprintf("… earlier events not retained (%d dropped)", dropped)
+		return fmt.Sprintf("░ earlier events not retained (%d dropped)", dropped)
 	}
-	return "… earlier events not retained"
+	return "░ earlier events not retained"
 }
 
 // entryLines renders one entry, collapsed or expanded, through style: the
