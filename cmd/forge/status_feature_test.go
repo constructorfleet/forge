@@ -62,7 +62,7 @@ func TestLoadFeatureStatus_GoalOnly(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	report, err := loadFeatureStatus(ctx, store, featureID)
+	report, err := loadFeatureStatus(ctx, store, featureID, dir)
 	if err != nil {
 		t.Fatalf("loadFeatureStatus: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLoadFeatureStatus_UnapprovedSpec_ReportsApprovalGate(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	report, err := loadFeatureStatus(ctx, store, featureID)
+	report, err := loadFeatureStatus(ctx, store, featureID, dir)
 	if err != nil {
 		t.Fatalf("loadFeatureStatus: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestLoadFeatureStatus_AllApproved_NextActionIsMaterialize(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	report, err := loadFeatureStatus(ctx, store, featureID)
+	report, err := loadFeatureStatus(ctx, store, featureID, dir)
 	if err != nil {
 		t.Fatalf("loadFeatureStatus: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestLoadFeatureStatus_StaleSpec_ReportedAsStaleArtifact(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	report, err := loadFeatureStatus(ctx, store, featureID)
+	report, err := loadFeatureStatus(ctx, store, featureID, dir)
 	if err != nil {
 		t.Fatalf("loadFeatureStatus: %v", err)
 	}

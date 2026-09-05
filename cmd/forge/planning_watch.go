@@ -16,7 +16,7 @@ import (
 // PlanningModel over store, the planning-phase analogue of runLiveRoster's
 // wiring: a live *planningapprove.Approver backs the approve key (issue
 // #606), and answerer (from resolveAnswerer, nil-able) backs the answer key.
-func buildPlanningModel(ctx context.Context, store *storage.SQLiteStore, planningExecutionID string, answerer tui.Answerer) (*tui.PlanningModel, error) {
+func buildPlanningModel(ctx context.Context, store *storage.SQLiteStore, planningExecutionID string, answerer tui.Answerer, repoRoot string) (*tui.PlanningModel, error) {
 	pe, err := store.LoadPlanningExecution(ctx, planningExecutionID)
 	if err != nil {
 		return nil, fmt.Errorf("forge watch: load planning execution %s: %w", planningExecutionID, err)
@@ -25,15 +25,15 @@ func buildPlanningModel(ctx context.Context, store *storage.SQLiteStore, plannin
 	roster := tui.NewPlanningRoster(store)
 	model := tui.NewPlanningModel(roster, pe.FeatureID, 0)
 	model.SetFeed(tui.NewTranscriptFeed(store))
-	model.Approver = &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{}}
+	model.Approver = &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
 	model.Answerer = answerer
 	return model, nil
 }
 
 // runPlanningRoster drives the planning-phase Bubble Tea view for
 // planningExecutionID until it quits, mirroring runLiveRoster.
-func runPlanningRoster(ctx context.Context, store *storage.SQLiteStore, planningExecutionID string, answerer tui.Answerer) error {
-	model, err := buildPlanningModel(ctx, store, planningExecutionID, answerer)
+func runPlanningRoster(ctx context.Context, store *storage.SQLiteStore, planningExecutionID string, answerer tui.Answerer, repoRoot string) error {
+	model, err := buildPlanningModel(ctx, store, planningExecutionID, answerer, repoRoot)
 	if err != nil {
 		return err
 	}

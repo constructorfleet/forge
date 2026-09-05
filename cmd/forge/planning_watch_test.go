@@ -21,8 +21,9 @@ func seedPlanningExecution(t *testing.T, store *storage.SQLiteStore, id, feature
 func TestBuildPlanningModelWiresApproverAndFeatureID(t *testing.T) {
 	store := newWatchTestStore(t)
 	seedPlanningExecution(t, store, "plan-1", "feat-1", domain.PlanningStatusNeedsApproval)
+	repoRoot := t.TempDir()
 
-	model, err := buildPlanningModel(context.Background(), store, "plan-1", nil)
+	model, err := buildPlanningModel(context.Background(), store, "plan-1", nil, repoRoot)
 	if err != nil {
 		t.Fatalf("buildPlanningModel: %v", err)
 	}
@@ -40,12 +41,19 @@ func TestBuildPlanningModelWiresApproverAndFeatureID(t *testing.T) {
 	if approver.Artifacts == nil {
 		t.Fatal("approver.Artifacts is nil")
 	}
+	loader, ok := approver.Artifacts.(*fileArtifactLoader)
+	if !ok {
+		t.Fatalf("approver.Artifacts = %T, want *fileArtifactLoader", approver.Artifacts)
+	}
+	if loader.RepoRoot != repoRoot {
+		t.Fatalf("RepoRoot = %q, want %q", loader.RepoRoot, repoRoot)
+	}
 }
 
 func TestBuildPlanningModelUnknownExecutionErrors(t *testing.T) {
 	store := newWatchTestStore(t)
 
-	if _, err := buildPlanningModel(context.Background(), store, "missing", nil); err == nil {
+	if _, err := buildPlanningModel(context.Background(), store, "missing", nil, t.TempDir()); err == nil {
 		t.Fatal("buildPlanningModel: want error for an unknown planning execution id, got nil")
 	}
 }

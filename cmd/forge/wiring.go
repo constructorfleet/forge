@@ -259,7 +259,7 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// trigger as a created/reopened Decision under
 	// .forge/features/<id>/decisions/.
 	eng.PlanningLease = planengine.New(store)
-	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{}}
+	eng.ReplanDecisions = replan.DecisionRecorder{Decisions: &fileArtifactLoader{RepoRoot: repoRoot}}
 	if cfg.PullRequests.WatchCI {
 		// The CI Supervisor's checks/merge-requirements seam is CI-domain
 		// work, composed independently of Tracker/SCM per cfg.CI.Type — see
@@ -364,19 +364,11 @@ func absoluteAgainst(base, path string) string {
 // need.
 //
 // configPath and dbPath must already be resolved exactly the way the caller
-// itself loaded them: runExecute passes resolveConfigDBPaths' result (an
-// explicit override as typed, an unset flag's default joined onto the
-// discovered repo root), runWatch still passes its flags as typed relative
-// to os.Getwd(). Either way, absoluteAgainst below only needs to make a
-// relative path absolute against the process's own working directory (a
-// no-op for the already-absolute repo-root-joined case); resolving a
-// relative path against the discovered repo root instead — as an earlier
-// version of this function did — pointed the retry child at a different
-// config and, critically, a different database than the one the caller
-// actually loaded, reintroducing the #459 bug class this same issue guards
-// against. The child's own working directory is still the discovered git
-// top level (#459 again, for the child's own relative-path resolution),
-// independent of where its --config/--db flags point.
+// itself loaded them: callers pass resolveConfigDBPaths' result. Explicit
+// overrides stay as typed. Unset flags use paths joined to the repository
+// root. absoluteAgainst only makes a relative override absolute against the
+// process working directory. The child still runs from the discovered git
+// root, separate from where its --config and --db flags point.
 func resolveRetrier(configPath, dbPath string) tui.Retrier {
 	cwd, err := os.Getwd()
 	if err != nil {

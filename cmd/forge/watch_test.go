@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,4 +117,62 @@ func TestListLiveExecutionsFiltersInactive(t *testing.T) {
 	if live[0].Active != 1 {
 		t.Fatalf("live[0].Active = %d, want 1", live[0].Active)
 	}
+}
+
+func TestRunWatch_DefaultDBResolvesFromRepoRoot(t *testing.T) {
+	repoRoot, _ := newTempRepo(t)
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".forge"), 0o755); err != nil {
+		t.Fatalf("MkdirAll .forge: %v", err)
+	}
+	store, err := storage.Open(filepath.Join(repoRoot, defaultDBPath))
+	if err != nil {
+		t.Fatalf("Open root store: %v", err)
+	}
+	if err := store.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate root store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close root store: %v", err)
+	}
+
+	subdir := filepath.Join(repoRoot, "sub", "dir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll subdir: %v", err)
+	}
+	chdir(t, subdir)
+
+	stderr := captureStderr(t, func() {
+		if code := runWatch(nil); code != 1 {
+			t.Fatalf("runWatch = %d, want 1", code)
+		}
+	})
+	if !strings.Contains(stderr, "forge watch: no active executions") {
+		t.Fatalf("stderr = %q, want root store no-active-executions message", stderr)
+	}
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe: %v", err)
+	}
+	os.Stderr = write
+	t.Cleanup(func() { os.Stderr = original })
+
+	fn()
+
+	if err := write.Close(); err != nil {
+		t.Fatalf("Close pipe writer: %v", err)
+	}
+	data, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatalf("ReadAll stderr: %v", err)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("Close pipe reader: %v", err)
+	}
+	os.Stderr = original
+	return string(data)
 }

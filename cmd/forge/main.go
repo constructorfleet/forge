@@ -184,7 +184,13 @@ func runApprove(args []string) int {
 
 	ctx := context.Background()
 
-	dsn := filepath.Join(".forge", "forge.db")
+	repoRoot, err := discoverRepoRootOrCWD()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge approve: %v\n", err)
+		return 1
+	}
+
+	dsn := filepath.Join(repoRoot, defaultDBPath)
 	store, err := storage.Open(dsn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "storage.Open: %v\n", err)
@@ -197,7 +203,7 @@ func runApprove(args []string) int {
 		return 1
 	}
 
-	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
 
 	currentRev, err := approver.ApproveSpec(ctx, featureID)
 	if err != nil {
@@ -235,7 +241,13 @@ func runApproveTickets(args []string) int {
 
 	ctx := context.Background()
 
-	dsn := filepath.Join(".forge", "forge.db")
+	repoRoot, err := discoverRepoRootOrCWD()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge approve: %v\n", err)
+		return 1
+	}
+
+	dsn := filepath.Join(repoRoot, defaultDBPath)
 	store, err := storage.Open(dsn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "storage.Open: %v\n", err)
@@ -248,7 +260,7 @@ func runApproveTickets(args []string) int {
 		return 1
 	}
 
-	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{}}
+	approver := &planningapprove.Approver{Store: store, Artifacts: &fileArtifactLoader{RepoRoot: repoRoot}}
 
 	result, err := approver.ApproveTicketPlan(ctx, featureID)
 	if err != nil {

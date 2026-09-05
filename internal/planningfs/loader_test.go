@@ -26,6 +26,14 @@ func chdirTemp(t *testing.T, dir string) {
 	})
 }
 
+func TestFeatureDirResolvesUnderRepoRoot(t *testing.T) {
+	got := FeatureDir("/repo", "widget")
+	want := filepath.Join("/repo", ".forge", "features", "widget")
+	if got != want {
+		t.Fatalf("FeatureDir = %q, want %q", got, want)
+	}
+}
+
 func TestFileArtifactLoader_SaveGoal_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
@@ -84,6 +92,44 @@ func TestFileArtifactLoader_SaveGoal_CreatesFeatureDir(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, ".forge", "features", featureID, "goal.md")); err != nil {
 		t.Fatalf("expected goal.md to exist: %v", err)
+	}
+}
+
+func TestFileArtifactLoader_RepoRootControlsArtifactDirectory(t *testing.T) {
+	repoRoot := t.TempDir()
+	sub := filepath.Join(repoRoot, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	chdirTemp(t, sub)
+
+	featureID := "rooted-feature"
+	goal := &planning.Artifact{
+		Kind:     planning.KindGoal,
+		Sections: []planning.Section{{Heading: "Goal", Body: "Use the repo root"}},
+	}
+	goal.Revision = planning.ComputeRevision(goal)
+
+	loader := &FileArtifactLoader{RepoRoot: repoRoot}
+	if err := loader.SaveGoal(context.Background(), featureID, goal); err != nil {
+		t.Fatalf("SaveGoal: %v", err)
+	}
+
+	rootPath := filepath.Join(repoRoot, ".forge", "features", featureID, "goal.md")
+	if _, err := os.Stat(rootPath); err != nil {
+		t.Fatalf("expected goal.md under repo root: %v", err)
+	}
+	cwdPath := filepath.Join(sub, ".forge", "features", featureID, "goal.md")
+	if _, err := os.Stat(cwdPath); !os.IsNotExist(err) {
+		t.Fatalf("goal.md under cwd exists or failed unexpectedly: %v", err)
+	}
+
+	loaded, err := loader.LoadGoal(context.Background(), featureID)
+	if err != nil {
+		t.Fatalf("LoadGoal: %v", err)
+	}
+	if loaded.Revision != goal.Revision {
+		t.Fatalf("Revision = %q, want %q", loaded.Revision, goal.Revision)
 	}
 }
 

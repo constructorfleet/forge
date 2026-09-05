@@ -519,11 +519,8 @@ func TestRunPlan_FailsLoudlyOutsideGitRepo(t *testing.T) {
 // wayfinding; falling back to config.Default()'s GitHub tracker would
 // instead fail on the missing 'origin' remote.
 //
-// The goal.md fixture lives under sub, not repoRoot, because the Planning
-// Artifact loader resolves .forge/features/<feature-id> relative to the
-// process's cwd — a separate, pre-existing gap outside this issue's
-// --config/--db scope — so this isolates the test to only the --config
-// resolution behavior issue #576 fixes here.
+// The goal.md fixture lives under repoRoot, so this test also covers the
+// Planning Artifact loader path when `forge plan` starts from a subdirectory.
 func TestRunPlan_ResolvesConfigFromSubdirectory(t *testing.T) {
 	bin := buildBinary(t)
 	repoRoot := planFixtureRepo(t)
@@ -538,7 +535,7 @@ func TestRunPlan_ResolvesConfigFromSubdirectory(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	writeGoalFixture(t, sub, "widget")
+	writeGoalFixture(t, repoRoot, "widget")
 
 	cmd := exec.Command(bin, "plan", "widget")
 	cmd.Dir = sub

@@ -38,6 +38,13 @@ func runStatus(args []string) int {
 		return 2
 	}
 
+	repoRoot, err := discoverRepoRootOrCWD()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
+		return 1
+	}
+	_, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, defaultConfigPath, *dbPath)
+
 	// A single argument naming a Feature (one with a
 	// .forge/features/<id> Planning Artifact directory) is `forge status
 	// <feature-id>`, ticket 21's planning-side status view -- distinct from
@@ -46,14 +53,14 @@ func runStatus(args []string) int {
 	// (Execution IDs are UUIDs; Feature IDs are operator-chosen slugs), so
 	// this is resolved by which directory actually exists on disk rather
 	// than by a separate subcommand.
-	if fs.NArg() == 1 && !*transcript && isFeatureID(fs.Arg(0)) {
-		return runFeatureStatus(fs.Arg(0), *dbPath)
+	if fs.NArg() == 1 && !*transcript && isFeatureID(fs.Arg(0), repoRoot) {
+		return runFeatureStatus(fs.Arg(0), resolvedDBPath, repoRoot)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	store, err := openStore(ctx, *dbPath)
+	store, err := openStore(ctx, resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge status: %v\n", err)
 		return 1

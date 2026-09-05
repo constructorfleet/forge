@@ -99,12 +99,13 @@ func runWatch(args []string) int {
 
 	ctx := context.Background()
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRootOrCWD()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}
-	cfg, err := loadConfig(*configPath)
+	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
@@ -112,7 +113,7 @@ func runWatch(args []string) int {
 
 	// Watch is a read-only observer: never run Migrate, and fail loudly
 	// against a schema that predates the live roster rather than misrender.
-	store, err := storage.Open(*dbPath)
+	store, err := storage.Open(resolvedDBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
@@ -161,7 +162,7 @@ func runWatch(args []string) int {
 
 	answerer := resolveAnswerer(ctx, cfg, repoRoot)
 	if !target.isCoding {
-		if err := runPlanningRoster(ctx, store, target.id, answerer); err != nil {
+		if err := runPlanningRoster(ctx, store, target.id, answerer, repoRoot); err != nil {
 			fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 			return 1
 		}
@@ -172,7 +173,7 @@ func runWatch(args []string) int {
 	// controls: it satisfies both narrow seams. The retry control uses a
 	// separate detached forge child.
 	operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
-	retrier := resolveRetrier(*configPath, *dbPath)
+	retrier := resolveRetrier(resolvedConfigPath, resolvedDBPath)
 	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, operationalEngine, answerer); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1

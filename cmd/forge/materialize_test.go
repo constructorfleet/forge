@@ -174,11 +174,6 @@ func TestMaterialize_ResolvesConfigFromSubdirectory(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	// The Planning Artifact loader resolves .forge/features/<feature-id>
-	// relative to the process's cwd (a separate, pre-existing gap from
-	// this issue's --config/--db scope — see the FAILED->follow-ups note),
-	// so the fixtures live under sub, not dir, to isolate this test to only
-	// the --config resolution issue #576 actually fixes here.
 	sub := filepath.Join(dir, "sub", "dir")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -192,7 +187,7 @@ func TestMaterialize_ResolvesConfigFromSubdirectory(t *testing.T) {
 	}
 	specArtifact.Revision = planning.ComputeRevision(specArtifact)
 	specArtifact.ApprovedRevision = specArtifact.Revision
-	writeSpecFixture(t, sub, featureID, specArtifact)
+	writeSpecFixture(t, dir, featureID, specArtifact)
 
 	tpArtifact := &planning.Artifact{
 		Kind: planning.KindTicketPlan,
@@ -205,7 +200,7 @@ func TestMaterialize_ResolvesConfigFromSubdirectory(t *testing.T) {
 	}
 	tpArtifact.Revision = planning.ComputeRevision(tpArtifact)
 	tpArtifact.ApprovedRevision = tpArtifact.Revision
-	writeTicketPlanFixture(t, sub, featureID, tpArtifact)
+	writeTicketPlanFixture(t, dir, featureID, tpArtifact)
 
 	cmd := exec.Command(bin, "materialize", featureID)
 	cmd.Dir = sub
