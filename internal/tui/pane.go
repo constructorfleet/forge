@@ -88,6 +88,9 @@ type TranscriptScroller interface {
 	ScrollDown(n int)
 	// ScrollToTail returns the window to following the tail.
 	ScrollToTail()
+	// PageSize returns the viewport height in events. A page scroll moves
+	// by this many events.
+	PageSize() int
 }
 
 // TranscriptPane holds the transcript window plus its selection and the one
@@ -139,6 +142,12 @@ type TranscriptPane struct {
 	// The pane holds its own intent here and never writes to view, which stays
 	// the tailer's snapshot alone.
 	tailRequested bool
+	// pendingPageMove records a page scroll the current window cannot satisfy.
+	// Unlike pendingMove, a page move lands at a window edge (top for page up,
+	// bottom for page down) rather than at a specific entry key. The sign of
+	// the value gives the direction: negative for page up, positive for page
+	// down. The magnitude is the number of pages requested.
+	pendingPageMove int
 }
 
 // NewTranscriptPane returns an empty, fully collapsed pane.
@@ -195,7 +204,8 @@ func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 // rebuild derives the entries from the current window and gate rows, then
 // re-derives the selection and the expansion by key. Every entry change goes
 // through here, so the two callers cannot diverge. pending applies a selection
-// move that an earlier window could not satisfy.
+// move that an earlier window could not satisfy. pendingPageMove applies a
+// page scroll that lands at a window edge.
 func (p *TranscriptPane) rebuild(pending int) {
 	prevEntry, hadSelection := p.SelectedEntry()
 	prevKey := prevEntry.key()
@@ -214,6 +224,22 @@ func (p *TranscriptPane) rebuild(pending int) {
 	}
 	if pending != 0 && idx != noSelection {
 		idx = clampIndex(idx+pending, len(p.entries))
+	}
+
+	// Handle pending page move: land at the appropriate edge of the new
+	// window. Page up (negative) lands at the top (index 0); page down
+	// (positive) lands at the last event entry.
+	if p.pendingPageMove != 0 && len(p.entries) > 0 {
+		if p.pendingPageMove < 0 {
+			idx = 0
+		} else {
+			if edge := p.eventEdge(); edge != noSelection {
+				idx = edge
+			} else {
+				idx = len(p.entries) - 1
+			}
+		}
+		p.pendingPageMove = 0
 	}
 
 	p.selection = idx
@@ -266,6 +292,7 @@ func (p *TranscriptPane) FollowTail() {
 	p.tailRequested = true
 	p.pinned = false
 	p.pendingMove = 0
+	p.pendingPageMove = 0
 	p.expanded = noSelection
 	p.selection = p.defaultSelection()
 }
@@ -319,33 +346,44 @@ func (p *TranscriptPane) MoveSelection(n int) {
 	p.Select(target)
 }
 
-// pageSize returns one page of scrollback: the current window's event count,
-// or 1 while the window holds none.
-func (p *TranscriptPane) pageSize() int {
-	if n := len(p.view.Events); n > 0 {
-		return n
+// MoveSelectionPage moves the selection n pages towards the tail. Negative n
+// moves towards the retained start. A page is the viewport height from the
+// scroller. A move past a window edge asks the scroller for the neighbouring
+// events. Page up lands at the top of the new window; page down lands at the
+// bottom.
+func (p *TranscriptPane) MoveSelectionPage(n int) {
+	if n == 0 || len(p.entries) == 0 || p.scroller == nil {
+		return
 	}
-	return 1
+	page := p.scroller.PageSize()
+	if page <= 0 {
+		return
+	}
+	// Page up: scroll towards retained start, then land at the top of the
+	// new window. Page down: scroll towards tail, then land at the bottom of
+	// the new window.
+	if n < 0 {
+		if p.view.AtStart {
+			return
+		}
+		p.scroller.ScrollUp(page * -n)
+		p.pendingPageMove = n
+		p.pinned = true
+		return
+	}
+	if p.view.AtTail {
+		return
+	}
+	p.scroller.ScrollDown(page * n)
+	p.pendingPageMove = n
+	p.pinned = true
 }
 
-// PageUp moves the window one page towards the retained start and anchors
-// the selection to the window's own top entry, so an operator reaches
-// scrollback in a few key presses instead of one event at a time. An inert
-// request (already at the retained start) changes no state.
-func (p *TranscriptPane) PageUp() {
-	if p.requestScroll(p.pageSize()) {
-		p.Select(0)
-	}
-}
+// PageUp moves the selection one page towards the retained start.
+func (p *TranscriptPane) PageUp() { p.MoveSelectionPage(-1) }
 
-// PageDown moves the window one page towards the tail and anchors the
-// selection to the window's own bottom entry. An inert request (already at
-// the tail) changes no state.
-func (p *TranscriptPane) PageDown() {
-	if p.requestScroll(-p.pageSize()) {
-		p.Select(p.eventEdge())
-	}
-}
+// PageDown moves the selection one page towards the tail.
+func (p *TranscriptPane) PageDown() { p.MoveSelectionPage(1) }
 
 // requestScroll asks for n events of scrollback (negative n moves towards the
 // tail) and records the move for the window that answers, reporting whether it
@@ -509,7 +547,8 @@ func buildEntries(events []TranscriptEvent) []TranscriptEntry {
 // focus. Derived from the pane's own state, so the footer can never advertise
 // an expand on prose. The follow-tail key appears while the window is scrolled
 // back, and also while the selection is pinned at the tail: it is then the only
-// key that unpins an operator selection. No roster action (cancel, retry,
+// key that unpins an operator selection. Page scroll keys appear when the
+// window can scroll in that direction. No roster action (cancel, retry,
 // answer) appears here: those act on a Worker, not on an event.
 func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 	keys := []KeyBinding{{Key: "q", Label: "quit"}, {Key: "tab", Label: "roster"}}
@@ -526,11 +565,16 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 	if len(p.entries) > 1 || !p.view.AtTail {
 		keys = append(keys, KeyBinding{Key: "k", Label: "up"}, KeyBinding{Key: "j", Label: "down"})
 	}
-	if p.scroller != nil && (!p.view.AtStart || !p.view.AtTail) {
-		keys = append(keys, KeyBinding{Key: "pgup", Label: "page up"}, KeyBinding{Key: "pgdown", Label: "page down"})
-	}
-	if p.scroller != nil && !p.tailRequested && (!p.view.AtTail || p.pinned) {
-		keys = append(keys, KeyBinding{Key: "G", Label: "follow tail"})
+	if p.scroller != nil {
+		if !p.view.AtStart {
+			keys = append(keys, KeyBinding{Key: "ctrl+u/pgup", Label: "page up"})
+		}
+		if !p.view.AtTail {
+			keys = append(keys, KeyBinding{Key: "ctrl+d/pgdown", Label: "page down"})
+		}
+		if !p.tailRequested && (!p.view.AtTail || p.pinned) {
+			keys = append(keys, KeyBinding{Key: "G", Label: "follow tail"})
+		}
 	}
 	return keys
 }

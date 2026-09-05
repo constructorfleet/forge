@@ -24,6 +24,10 @@ type fakeRosterStore struct {
 
 	// reviews holds the Review history per Issue, in insertion order.
 	reviews map[string][]storage.ReviewRun
+	// verdictReads counts LatestReviewVerdicts calls, so a test can prove a
+	// poll pass reads the whole Execution's verdicts in one call rather than
+	// one call per Issue.
+	verdictReads int
 	// runReads counts LatestReviewDiff calls, so a test can prove a poll pass
 	// never reads the diff blobs.
 	runReads int
@@ -61,13 +65,17 @@ func (f *fakeRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, issueID s
 	return checkpoint, nil
 }
 
-func (f *fakeRosterStore) LatestReviewOutcome(_ context.Context, _, issueID string) (storage.ReviewOutcome, error) {
-	runs := f.reviews[issueID]
-	if len(runs) == 0 {
-		return storage.ReviewOutcome{}, nil
+func (f *fakeRosterStore) LatestReviewVerdicts(_ context.Context, _ string) (map[string]storage.ReviewOutcome, error) {
+	f.verdictReads++
+	out := make(map[string]storage.ReviewOutcome)
+	for issueID, runs := range f.reviews {
+		if len(runs) == 0 {
+			continue
+		}
+		last := runs[len(runs)-1]
+		out[issueID] = storage.ReviewOutcome{Verdict: last.Verdict, HasDiff: last.Diff != "", Recorded: true}
 	}
-	last := runs[len(runs)-1]
-	return storage.ReviewOutcome{Verdict: last.Verdict, HasDiff: last.Diff != "", Recorded: true}, nil
+	return out, nil
 }
 
 func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string) (string, error) {
@@ -256,6 +264,52 @@ func TestRosterFetchDerivesLiveBadgeFromClock(t *testing.T) {
 	}
 }
 
+// TestRosterFetchReadsReviewVerdictsOnceRegardlessOfIssueCount proves one poll
+// pass resolves every row's Review verdict from a single whole-Execution read
+// rather than one query per Issue (issue #537): the roster must not go
+// N+1 in the Issue count.
+func TestRosterFetchReadsReviewVerdictsOnceRegardlessOfIssueCount(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "a", State: domain.StateImplementing},
+				{ID: "#2", Title: "b", State: domain.StateImplementing},
+				{ID: "#3", Title: "c", State: domain.StateImplementing},
+			},
+		},
+		reviews: map[string][]storage.ReviewRun{
+			"#1": {{Verdict: "APPROVED", Diff: ""}},
+			"#2": {{Verdict: "CHANGES_REQUIRED", Diff: "diff --git a b"}},
+		},
+	}
+	r := tui.NewRoster(store, func() time.Time { return now })
+
+	vm, err := r.Fetch(context.Background(), "ex-1", now)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if store.verdictReads != 1 {
+		t.Fatalf("verdictReads = %d, want 1 for a 3-issue pass", store.verdictReads)
+	}
+
+	byID := make(map[string]tui.WorkerRow, len(vm.Workers))
+	for _, row := range vm.Workers {
+		byID[row.IssueID] = row
+	}
+	if got := byID["#1"]; got.Verdict != "APPROVED" || got.HasDiff {
+		t.Errorf("#1 = %+v, want Verdict APPROVED, HasDiff false", got)
+	}
+	if got := byID["#2"]; got.Verdict != "CHANGES_REQUIRED" || !got.HasDiff {
+		t.Errorf("#2 = %+v, want Verdict CHANGES_REQUIRED, HasDiff true", got)
+	}
+	if got := byID["#3"]; got.Verdict != "" || got.HasDiff {
+		t.Errorf("#3 = %+v, want no verdict for an unreviewed issue", got)
+	}
+}
+
 // TestRosterFetchPropagatesStoreError proves a failed store read surfaces as
 // an error from Fetch rather than being swallowed into a partial view.
 func TestRosterFetchPropagatesStoreError(t *testing.T) {
@@ -310,8 +364,8 @@ func (missingExecutionRosterStore) LatestReviewDiff(_ context.Context, _, _ stri
 	return "", nil
 }
 
-func (missingExecutionRosterStore) LatestReviewOutcome(_ context.Context, _, _ string) (storage.ReviewOutcome, error) {
-	return storage.ReviewOutcome{}, nil
+func (missingExecutionRosterStore) LatestReviewVerdicts(_ context.Context, _ string) (map[string]storage.ReviewOutcome, error) {
+	return nil, nil
 }
 
 func (missingExecutionRosterStore) GetReplanCheckpoint(_ context.Context, _, _ string) (storage.ReplanCheckpoint, error) {
@@ -342,8 +396,8 @@ func (f *failingLoadRosterStore) LatestReviewDiff(_ context.Context, _, _ string
 	return "", nil
 }
 
-func (f *failingLoadRosterStore) LatestReviewOutcome(_ context.Context, _, _ string) (storage.ReviewOutcome, error) {
-	return storage.ReviewOutcome{}, nil
+func (f *failingLoadRosterStore) LatestReviewVerdicts(_ context.Context, _ string) (map[string]storage.ReviewOutcome, error) {
+	return nil, nil
 }
 
 func (f *failingLoadRosterStore) GetReplanCheckpoint(_ context.Context, _, _ string) (storage.ReplanCheckpoint, error) {

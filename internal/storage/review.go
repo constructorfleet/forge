@@ -253,7 +253,7 @@ func (s *SQLiteStore) LatestReviewOutcome(ctx context.Context, executionID, issu
 // the on-request pager read never loads the whole review history. An Issue with
 // no Review run, or a run that stored an empty diff, returns "".
 //
-// It repeats LatestReviewOutcome's "highest id wins" rule, so the strip's
+// It repeats LatestReviewVerdicts's "highest id wins" rule, so the strip's
 // verdict and the pager's diff always name one run.
 func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID string) (string, error) {
 	var diff string
@@ -272,4 +272,114 @@ func (s *SQLiteStore) LatestReviewDiff(ctx context.Context, executionID, issueID
 		return "", fmt.Errorf("storage: latest review diff for issue %s/%s: %w", executionID, issueID, err)
 	}
 	return diff, nil
+}
+
+// LatestReviewVerdicts returns the current Review verdict for every Issue in
+// executionID that has at least one recorded Review run, keyed by IssueID.
+// It reads no diff body, one query for the whole Execution rather than one
+// per Issue: a roster poll pass costs a single round trip whatever the Issue
+// count. An Issue with no Review run is absent from the map.
+func (s *SQLiteStore) LatestReviewVerdicts(ctx context.Context, executionID string) (map[string]ReviewOutcome, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT rr.issue_id, rr.verdict, LENGTH(rr.diff) > 0
+		FROM review_runs rr
+		JOIN (
+			SELECT issue_id, MAX(id) AS max_id
+			FROM review_runs
+			WHERE execution_id = ?
+			GROUP BY issue_id
+		) latest ON latest.issue_id = rr.issue_id AND latest.max_id = rr.id
+		WHERE rr.execution_id = ?`,
+		executionID, executionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: latest review verdicts for execution %s: %w", executionID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string]ReviewOutcome)
+	for rows.Next() {
+		var (
+			issueID string
+			outcome ReviewOutcome
+		)
+		if err := rows.Scan(&issueID, &outcome.Verdict, &outcome.HasDiff); err != nil {
+			return nil, fmt.Errorf("storage: scan latest review verdict: %w", err)
+		}
+		outcome.Recorded = true
+		out[issueID] = outcome
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: latest review verdicts for execution %s: %w", executionID, err)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) reviewFindingsByRun(ctx context.Context, reviewRunID int64) ([]ReviewFinding, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT severity, file, line, message
+		FROM review_findings
+		WHERE review_run_id = ?
+		ORDER BY id`,
+		reviewRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var findings []ReviewFinding
+	for rows.Next() {
+		var f ReviewFinding
+		if err := rows.Scan(&f.Severity, &f.File, &f.Line, &f.Message); err != nil {
+			return nil, fmt.Errorf("scan review finding: %w", err)
+		}
+		findings = append(findings, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return findings, nil
+}
+
+// reviewAxisEnvelopesByRun returns every ReviewAxisEnvelope recorded for one
+// ReviewRun (issue #162), ordered by insertion — the same one-row-per-axis
+// order Reviewer.Review's fan-out wrote them in.
+func (s *SQLiteStore) reviewAxisEnvelopesByRun(ctx context.Context, reviewRunID int64) ([]ReviewAxisEnvelope, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT axis, ran, reason, input_tokens, output_tokens, raw_envelope
+		FROM review_axis_envelopes
+		WHERE review_run_id = ?
+		ORDER BY id`,
+		reviewRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var envelopes []ReviewAxisEnvelope
+	for rows.Next() {
+		var (
+			e           ReviewAxisEnvelope
+			inputTokens sql.NullInt64
+			outTokens   sql.NullInt64
+		)
+		if err := rows.Scan(&e.Axis, &e.Ran, &e.Reason, &inputTokens, &outTokens, &e.RawEnvelope); err != nil {
+			return nil, fmt.Errorf("scan review axis envelope: %w", err)
+		}
+		if inputTokens.Valid {
+			v := int(inputTokens.Int64)
+			e.InputTokens = &v
+		}
+		if outTokens.Valid {
+			v := int(outTokens.Int64)
+			e.OutputTokens = &v
+		}
+		envelopes = append(envelopes, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return envelopes, nil
 }

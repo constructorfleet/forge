@@ -21,10 +21,11 @@ import (
 type RosterStore interface {
 	LoadExecution(ctx context.Context, executionID string) (storage.ExecutionState, error)
 	WorkerClaim(ctx context.Context, executionID, issueID string) (storage.WorkerClaim, error)
-	// LatestReviewOutcome supplies the aggregate Review verdict for the detail
-	// strip, and tells the frame whether a stored diff exists to page. A poll
-	// pass calls it per Issue, so it must not carry the diff body.
-	LatestReviewOutcome(ctx context.Context, executionID, issueID string) (storage.ReviewOutcome, error)
+	// LatestReviewVerdicts supplies the aggregate Review verdict for every
+	// Issue in the Execution, keyed by IssueID, and tells the frame whether
+	// each carries a stored diff to page. A poll pass calls it once per pass
+	// rather than once per Issue, and it must not carry any diff body.
+	LatestReviewVerdicts(ctx context.Context, executionID string) (map[string]storage.ReviewOutcome, error)
 
 	// LatestReviewDiff serves the on-request diff read only (see diff.go). It
 	// reads the one diff column, so the pager path loads no finding and no axis
@@ -79,9 +80,16 @@ func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (
 		return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
 	}
 
+	verdicts, err := r.Store.LatestReviewVerdicts(ctx, state.Execution.ID)
+	if err != nil {
+		// A read failure degrades to no verdicts: the roster is an observer
+		// and must not abort a pass over one failed aggregate read.
+		verdicts = nil
+	}
+
 	rows := make([]WorkerRow, 0, len(state.Issues))
 	for _, issue := range state.Issues {
-		rows = append(rows, r.row(ctx, state.Execution.ID, issue, now))
+		rows = append(rows, r.row(ctx, state.Execution.ID, issue, now, verdicts))
 	}
 	vm := ViewModel{Workers: rows}
 	if len(rows) == 0 {
@@ -93,7 +101,7 @@ func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (
 // row resolves one Issue into a WorkerRow. A heartbeat missing or stale is
 // displayed, never detected (ADR-0031); a claim read failure other than
 // ErrNotFound degrades to a no-heartbeat row rather than aborting the pass.
-func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue, now time.Time) WorkerRow {
+func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue, now time.Time, verdicts map[string]storage.ReviewOutcome) WorkerRow {
 	row := WorkerRow{
 		IssueID: issue.ID,
 		Title:   issue.Title,
@@ -110,7 +118,7 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 	}
 	row.Attempt, row.Budget = attemptBudget(len(runs), issue.RetryBudget)
 
-	row.Verdict, row.HasDiff = r.lastReview(ctx, executionID, issue.ID)
+	row.Verdict, row.HasDiff = lastReview(verdicts, issue.ID)
 
 	claim, err := r.Store.WorkerClaim(ctx, executionID, issue.ID)
 	if err == nil && !claim.LastHeartbeat.IsZero() {
@@ -123,12 +131,13 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 	return row
 }
 
-// lastReview returns the Issue's current Review verdict plus whether that run
-// stored a diff. A read failure degrades to no verdict: the roster is an
-// observer and must not abort a pass.
-func (r *Roster) lastReview(ctx context.Context, executionID, issueID string) (verdict string, hasDiff bool) {
-	out, err := r.Store.LatestReviewOutcome(ctx, executionID, issueID)
-	if err != nil || !out.Recorded {
+// lastReview looks up issueID's current Review verdict plus whether that run
+// stored a diff, from the whole-Execution map Fetch already read. An Issue
+// absent from verdicts (no recorded run, or the aggregate read failed) reports
+// no verdict.
+func lastReview(verdicts map[string]storage.ReviewOutcome, issueID string) (verdict string, hasDiff bool) {
+	out, ok := verdicts[issueID]
+	if !ok {
 		return "", false
 	}
 	return out.Verdict, out.HasDiff
