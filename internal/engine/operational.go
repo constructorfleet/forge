@@ -249,11 +249,12 @@ func (e *Engine) refreshRetryBase(ctx context.Context, exec domain.Execution, is
 
 	oldBase, err := e.workerBase(ctx, exec, issueID)
 	if err != nil {
-		return err
+		return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "old_base_lookup_failed", "", "", err)
 	}
 	newBase, err := e.TargetTip.CurrentTip(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: resolve target tip for issue %s retry: %w", issueID, err)
+		wrapped := fmt.Errorf("engine: resolve target tip for issue %s retry: %w", issueID, err)
+		return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "resolve_target_tip_failed", oldBase, "", wrapped)
 	}
 	if newBase == "" || newBase == oldBase {
 		return nil
@@ -262,24 +263,35 @@ func (e *Engine) refreshRetryBase(ctx context.Context, exec domain.Execution, is
 	if e.Ancestry != nil {
 		ok, err := e.Ancestry.IsAncestor(ctx, oldBase, newBase)
 		if err != nil {
-			return fmt.Errorf("engine: verify base refresh for issue %s (%s -> %s): %w", issueID, oldBase, newBase, err)
+			wrapped := fmt.Errorf("engine: verify base refresh for issue %s (%s -> %s): %w", issueID, oldBase, newBase, err)
+			return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "ancestry_check_failed", oldBase, newBase, wrapped)
 		}
 		if !ok {
-			return fmt.Errorf(
+			refusal := fmt.Errorf(
 				"engine: refusing to refresh issue %s base %s -> %s: %s does not descend from the current base, which would risk dropping a merged dependency",
 				issueID, oldBase, newBase, newBase)
+			if err := e.appendEvent(ctx, exec.ID, issueID, "worker.base_refresh_refused", map[string]string{
+				"old_base": oldBase,
+				"new_base": newBase,
+				"reason":   "not_descendant",
+			}); err != nil {
+				return err
+			}
+			return refusal
 		}
 	}
 
 	if _, err := e.Workspaces.Validate(ctx, exec.ID, issueID); err == nil {
 		rebaser, ok := e.Workspaces.(WorkspaceRebaser)
 		if !ok {
-			return fmt.Errorf(
+			wrapped := fmt.Errorf(
 				"engine: cannot refresh base for issue %s: a Workspace exists but Workspaces does not support Rebase", issueID)
+			return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "rebase_unsupported", oldBase, newBase, wrapped)
 		}
 		conflicts, err := rebaser.Rebase(ctx, exec.ID, issueID, newBase)
 		if err != nil {
-			return fmt.Errorf("engine: rebase issue %s workspace onto %s: %w", issueID, newBase, err)
+			wrapped := fmt.Errorf("engine: rebase issue %s workspace onto %s: %w", issueID, newBase, err)
+			return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "rebase_failed", oldBase, newBase, wrapped)
 		}
 		if len(conflicts) > 0 {
 			if err := e.appendEvent(ctx, exec.ID, issueID, "worker.base_refresh_conflict", map[string]string{
@@ -297,6 +309,30 @@ func (e *Engine) refreshRetryBase(ctx context.Context, exec domain.Execution, is
 		"base":     newBase,
 		"old_base": oldBase,
 	})
+}
+
+// reportBaseRefreshFailure appends a worker.base_refresh_failed event naming
+// reason and cause, so a refreshRetryBase fault leaves a trace in the store
+// instead of the bare return that left RetryIssue's FAILED Issue
+// indistinguishable from one nobody retried. oldBase and newBase are
+// omitted from the event when not yet known. It returns cause, or the
+// append error if the append itself fails, matching the existing
+// worker.base_refresh_conflict convention below.
+func (e *Engine) reportBaseRefreshFailure(ctx context.Context, executionID, issueID, reason, oldBase, newBase string, cause error) error {
+	data := map[string]string{
+		"reason": reason,
+		"error":  cause.Error(),
+	}
+	if oldBase != "" {
+		data["old_base"] = oldBase
+	}
+	if newBase != "" {
+		data["new_base"] = newBase
+	}
+	if err := e.appendEvent(ctx, executionID, issueID, "worker.base_refresh_failed", data); err != nil {
+		return err
+	}
+	return cause
 }
 
 // workerOwners groups an Execution's Worker claims by what the Engine knows
