@@ -347,6 +347,11 @@ func frameKeys(vm ViewModel) []KeyBinding {
 			// store holds a diff to open.
 			keys = append(keys, KeyBinding{Key: "d", Label: "diff"})
 		}
+		if len(vm.Workers) > 1 {
+			// The move key has nowhere to go with one row, so it appears
+			// only where a sequential run holds more than one Issue.
+			keys = append(keys, KeyBinding{Key: "j/k", Label: "select"})
+		}
 		return keys
 	}
 	return []KeyBinding{{Key: "q", Label: "quit"}}

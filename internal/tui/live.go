@@ -182,6 +182,14 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.MatchString("a") && m.vm.Focus == PaneRoster {
 			return m, m.openSelectedAnswer()
 		}
+		if key.MatchString("j", "down") && m.vm.Focus == PaneRoster {
+			m.moveSelection(1)
+			return m, m.readTranscript()
+		}
+		if key.MatchString("k", "up") && m.vm.Focus == PaneRoster {
+			m.moveSelection(-1)
+			return m, m.readTranscript()
+		}
 		m.handleTranscriptKey(key)
 	case diffNoticeMsg:
 		m.vm.ActionNotice = msg.text
@@ -266,12 +274,35 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		return
 	}
 	vm := msg.vm
-	// The roster refresh keeps the operator's pane and focus. The feed read owns
-	// the pane, and it detaches the pane when the selected row disappears.
+	// The roster refresh keeps the operator's pane, focus, and chosen row: a
+	// sequential run's later Issues would otherwise vanish behind the first
+	// row every time a poll pass replaced the view-model.
 	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 	vm.ActionNotice = m.vm.ActionNotice
 	vm.TranscriptNotice = m.vm.TranscriptNotice
+	vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
 	m.vm = vm
+}
+
+// moveSelection shifts the roster selection by delta, clamped to the
+// current rows. It is a no-op on an empty roster.
+func (m *LiveModel) moveSelection(delta int) {
+	m.vm.Selection = clampSelection(m.vm.Selection+delta, len(m.vm.Workers))
+}
+
+// clampSelection bounds a roster selection to [0, n-1], or 0 for an empty
+// roster.
+func clampSelection(sel, n int) int {
+	if n == 0 {
+		return 0
+	}
+	if sel < 0 {
+		return 0
+	}
+	if sel >= n {
+		return n - 1
+	}
+	return sel
 }
 
 // openSelectedDiff reads the selected Worker's stored Review diff and defers it
