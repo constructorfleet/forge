@@ -98,8 +98,9 @@ func (e *CancelOwnerError) Unwrap() error { return e.Err }
 // "nothing was cancelled". Any other non-nil error comes with a zero
 // ExecutionState, even when earlier Issues in the loop already transitioned.
 // withIssueLock runs fn with executionID/issueID's IssueLock held, so
-// CancelExecution's per-Issue transition-and-release and RetryIssue's
-// claim-through-resume cannot interleave for the same Issue (issue 552).
+// CancelExecution's per-Issue transition-and-release, ResumeExecution's
+// per-Issue resume, and RetryIssue's claim-through-resume cannot interleave
+// for the same Issue (issue 552, issue 684).
 func (e *Engine) withIssueLock(ctx context.Context, executionID, issueID string, fn func() error) error {
 	return e.IssueLock.WithLock(ctx, fmt.Sprintf("issue:%s/%s", executionID, issueID), fn)
 }
@@ -232,12 +233,11 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 // in RetryResumeStuckError instead, naming the operator action needed.
 //
 // Claiming first also publishes the Issue as READY with no Worker claim for
-// the duration of the base refresh, and a concurrent `forge resume` reads
-// that shape as resumable. The overlap is safe but not free: both actors
-// then work in one Workspace. This whole method runs under IssueLock, which
-// rules out that same overlap with CancelExecution (issue 552); a
-// concurrent `forge resume` does not take IssueLock and can still see the
-// same window.
+// the duration of the base refresh, and a concurrent `forge resume` could
+// read that shape as resumable. This whole method runs under IssueLock,
+// which rules out that overlap with both CancelExecution (issue 552) and
+// ResumeExecution (issue 684): each takes the same per-Issue lock before it
+// acts, so it waits for the in-flight retry to finish first.
 func (e *Engine) RetryIssue(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
