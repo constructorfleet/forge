@@ -34,6 +34,10 @@ type RosterStore interface {
 	// GetReplanCheckpoint serves the on-request replan-artifact read only (see
 	// approve.go). It is the record the approve key defers to $PAGER.
 	GetReplanCheckpoint(ctx context.Context, executionID, issueID string) (storage.ReplanCheckpoint, error)
+
+	// GetNeedsInfoCheckpoint serves the on-request needs-info question read
+	// only (see answer.go). It is the record the answer key defers to $EDITOR.
+	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (storage.NeedsInfoCheckpoint, error)
 }
 
 // Roster fetches an Execution's Worker state into a ViewModel on demand.
