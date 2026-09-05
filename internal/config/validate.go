@@ -265,6 +265,10 @@ func validate(cfg Config) error {
 		errs = append(errs, fieldErr("quality.max_output_bytes", fmt.Sprint(cfg.Quality.MaxOutputBytes), "must be >= 1"))
 	}
 
+	if cfg.Quality.Timeout <= 0 {
+		errs = append(errs, fieldErr("quality.timeout", fmt.Sprint(cfg.Quality.Timeout), "must be > 0"))
+	}
+
 	for issueID, deps := range cfg.Dependencies.Overrides {
 		if strings.TrimSpace(issueID) == "" {
 			errs = append(errs, fieldErr("dependencies.overrides", "", "issue ID key must not be empty"))

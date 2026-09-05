@@ -241,6 +241,17 @@ type QualityGate struct {
 type QualityConfig struct {
 	Gates          []QualityGate `yaml:"gates"`
 	MaxOutputBytes int           `yaml:"max_output_bytes"`
+
+	// Timeout bounds one Quality Gate command run (constructorfleet/forge#669)
+	// so a hung gate subprocess (e.g. a stalled `go test ./...`) cannot block
+	// a Worker forever, the same structural guarantee issue #467 gives one
+	// Agent invocation. It is a distinct field from Agent.Timeout, and the
+	// engine derives its own multiplier from it (qualityDeadlineMultiplier)
+	// rather than reusing agentDeadlineMultiplier: a Quality Gate command runs
+	// through env.Execute, not env.Agent().Execute, and its expected duration
+	// has no link to how long one Agent turn takes. Must be positive; see
+	// Default for the shipped value.
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 // PullRequestsConfig configures pull-request publication behavior.
@@ -595,6 +606,13 @@ const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}
 // block a Worker before Forge kills it.
 const defaultAgentTimeout = 20 * time.Minute
 
+// defaultQualityGateTimeout is QualityConfig.Timeout's default: generous
+// enough for a typical, genuinely-running gate command (e.g. `go test
+// ./...` on a mid-size repository), while still bounding how long a wedged
+// gate subprocess can block a Worker before Forge kills it
+// (constructorfleet/forge#669).
+const defaultQualityGateTimeout = 10 * time.Minute
+
 // defaultLSPReadinessTimeout is LSPConfig.ReadinessTimeout's default: long
 // enough for a cold gopls (package load + type-check on first request) to
 // complete its initialize/initialized handshake on a typical repository,
@@ -661,7 +679,7 @@ func unresolvedDefault() Config {
 			Review:                true,
 			ReviewConfidenceFloor: defaultReviewConfidenceFloor,
 		},
-		Quality: QualityConfig{MaxOutputBytes: 20000},
+		Quality: QualityConfig{MaxOutputBytes: 20000, Timeout: defaultQualityGateTimeout},
 		PullRequests: PullRequestsConfig{
 			Enabled:               true,
 			WatchCI:               true,
