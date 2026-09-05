@@ -110,7 +110,7 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 
 	var newComments []tracker.Comment
 	for _, c := range comments {
-		if needsinfo.IsForgeComment(c.Body, executionID, issueID) {
+		if needsinfo.IsForgeComment(c.Body, needsinfo.KindNeedsInfo, executionID, issueID) {
 			continue // Forge's own posted comment, never "new human input".
 		}
 		if c.CreatedAt.After(baseline) {

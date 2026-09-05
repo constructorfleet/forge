@@ -9,6 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/decisiongraph"
 	"github.com/Teagan42/forge/internal/decisionresolution"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -108,7 +109,7 @@ func (p *PauseHandler) Handle(ctx context.Context, decisionID string, decision *
 	}
 
 	if p.PostComment && p.Tracker != nil && !checkpoint.CommentPosted {
-		posted, err := p.Tracker.AddComment(ctx, p.FeatureID, needsHumanCommentBody(decisionID, detail))
+		posted, err := p.Tracker.AddComment(ctx, p.FeatureID, needsHumanCommentBody(p.ExecutionID, decisionID, detail))
 		if err != nil {
 			return nil, fmt.Errorf("wayfinding: post needs-human comment for decision %s: %w", decisionID, err)
 		}
@@ -134,12 +135,20 @@ func (p *PauseHandler) now() time.Time {
 	return time.Now().UTC()
 }
 
-// needsHumanCommentBody renders the structured comment PauseHandler posts
-// on NEEDS_HUMAN, mirroring internal/engine's needsInfoCommentBody shape.
-func needsHumanCommentBody(decisionID string, detail decisionresolution.NeedsHumanDetail) string {
+// needsHumanCommentBody renders the structured comment PauseHandler posts on
+// NEEDS_HUMAN, mirroring internal/engine's needsInfoCommentBody shape. It
+// carries Forge's hidden needsinfo.KindNeedsHuman marker so ResumeDecision
+// can recognize Forge's own posted comment by content, not by
+// tracker-account identity (see internal/needsinfo.CommentMarker for the
+// execution-phase equivalent this mirrors). A comment_author match is not a
+// safe proxy: any tool that answers a paused Decision using the same
+// GITHUB_TOKEN Forge itself posts as -- a shared bot account, an
+// automation, or the TUI -- would otherwise be silently excluded as
+// "forge's own comment".
+func needsHumanCommentBody(executionID, decisionID string, detail decisionresolution.NeedsHumanDetail) string {
 	body := fmt.Sprintf("Forge's wayfinding needs your input on decision `%s`:\n\n**Question:** %s", decisionID, detail.Question)
 	if detail.Context != "" {
 		body += "\n\n**Context:** " + detail.Context
 	}
-	return body
+	return needsinfo.AppendCommentMarker(body, needsinfo.KindNeedsHuman, executionID, decisionID)
 }

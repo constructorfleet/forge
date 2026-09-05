@@ -44,7 +44,7 @@ func (s *Supervisor) routeToNeedsInfo(ctx context.Context, executionID, issueID,
 		if context != "" {
 			body += "\n\n**Context:** " + context
 		}
-		body = needsinfo.AppendCommentMarker(body, executionID, issueID)
+		body = needsinfo.AppendCommentMarker(body, needsinfo.KindNeedsInfo, executionID, issueID)
 		posted, err := s.NeedsInfoTracker.AddComment(ctx, issueID, body)
 		if err != nil {
 			return "", fmt.Errorf("ci: post needs-info comment on issue %s: %w", issueID, err)

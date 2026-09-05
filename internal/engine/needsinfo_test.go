@@ -188,10 +188,10 @@ func TestExecute_NeedsInfo_LabelsCommentsChecksAndPreservesWorkspace(t *testing.
 	if !strings.Contains(body, "two plausible flags exist in .forge.yaml") {
 		t.Errorf("comment body missing context: %s", body)
 	}
-	if !strings.Contains(body, needsinfo.CommentMarker(result.ExecutionID, "7")) {
+	if !strings.Contains(body, needsinfo.CommentMarker(needsinfo.KindNeedsInfo, result.ExecutionID, "7")) {
 		t.Errorf("comment body missing needs-info marker: %s", body)
 	}
-	if !needsinfo.IsForgeComment(body, result.ExecutionID, "7") {
+	if !needsinfo.IsForgeComment(body, needsinfo.KindNeedsInfo, result.ExecutionID, "7") {
 		t.Errorf("IsForgeComment(body) = false for forge's own posted comment: %s", body)
 	}
 

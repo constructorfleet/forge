@@ -742,14 +742,17 @@ type Store interface {
 // NEEDS_INFO: the question asked, the context it arose from, when, and the
 // state of the idempotent label/comment side effects.
 //
-// CommentAuthor/CommentPostedAt are the tracker-reported (server-clock)
-// identity and timestamp of forge's own posted comment, returned by
-// tracker.Tracker.AddComment — NOT locally captured — so `forge resume` can
-// (a) compare candidate "new" comments against the same clock the tracker
-// itself stamped them with, avoiding false positives from local/tracker
-// clock skew, and (b) exclude forge's own comment from the "new human
-// input" check by author. Both are zero/empty if no comment was ever
-// posted (e.g. Blocked.Comment is configured false).
+// CommentPostedAt is the tracker-reported (server-clock) timestamp of
+// forge's own posted comment, returned by tracker.Tracker.AddComment — NOT
+// locally captured — so `forge resume` can compare candidate "new"
+// comments against the same clock the tracker itself stamped them with,
+// avoiding false positives from local/tracker clock skew. It is zero if no
+// comment was ever posted (e.g. Blocked.Comment is configured false).
+// `forge resume` excludes forge's own comment from the "new human input"
+// check by its needsinfo.CommentMarker content, not by CommentAuthor —
+// CommentAuthor is audit data only, since author matching would drop a
+// genuine human answer posted through the same tracker account Forge
+// itself posts as.
 //
 // ResumedAt/ResumedContext are populated once `forge resume` detects new
 // human input and moves the Issue back to READY — ResumedContext is the
@@ -787,10 +790,11 @@ type StatusSignalCheckpoint struct {
 // Decision pausing on NEEDS_HUMAN: the question asked, the Decision
 // provenance (DecisionRevision) it arose from, when, and the state of the
 // idempotent label/comment side effects. Mirrors NeedsInfoCheckpoint's
-// shape and the same crash-window rationale (see
-// internal/wayfinding's pause handling) -- CommentAuthor/CommentPostedAt
-// are the tracker-reported (server-clock) values, not locally captured,
-// for the same clock-skew and self-comment-exclusion reasons.
+// shape and the same crash-window rationale (see internal/wayfinding's
+// pause handling) -- CommentPostedAt is the tracker-reported (server-clock)
+// value, not locally captured, for the same clock-skew reason.
+// CommentAuthor is audit data only: `forge resume` excludes forge's own
+// comment by its needsinfo.KindNeedsHuman marker content, not by author.
 //
 // ResumedAt/ResumedContext are write-only for now, a forward seam for
 // ticket 15b's resume handling, mirroring NeedsInfoCheckpoint's identical
