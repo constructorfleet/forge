@@ -258,7 +258,8 @@ func (m *PlanningModel) readTranscript() tea.Cmd {
 // Execution and the Issue, so the read a Feature ever gets back always
 // answers that same FeatureID: it is never stale.
 func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	return m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, _ := m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	return cmd
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript

@@ -614,6 +614,62 @@ func TestLiveModelOnlyOneReadInFlight(t *testing.T) {
 	}
 }
 
+// TestLiveModelMarksHeaderWhenTranscriptReadOutlivesPoll proves a store slower
+// than the poll interval — which leaves the one in-flight read outstanding
+// across several ticks (see TestLiveModelOnlyOneReadInFlight) — surfaces in
+// the frame once its age passes the lag threshold, rather than only thinning
+// the refresh rate with no signal to the operator.
+func TestLiveModelMarksHeaderWhenTranscriptReadOutlivesPoll(t *testing.T) {
+	clock := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "Write tests", State: domain.StateImplementing},
+			},
+		},
+		claimOK: map[string]bool{"#1": true},
+		claims:  map[string]storage.WorkerClaim{"#1": {LastHeartbeat: clock}},
+	}
+	roster := tui.NewRoster(store, func() time.Time { return clock })
+	poll := time.Second
+	m := tui.NewLiveModel(roster, "ex-1", poll)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+
+	// The first tick commits a read: the pane shows real content and the model
+	// records the commit at clock.
+	nextPollTick(t, m)
+	if got := m.View().Content; !strings.Contains(got, "starting work") {
+		t.Fatalf("the first tick did not commit a transcript read:\n%s", got)
+	}
+
+	// The second tick starts a read it never finishes (the returned command is
+	// never invoked), mirroring a store slower than the poll interval. Every
+	// later tick's readTranscript then finds one already in flight and starts
+	// none of its own (see live.go's in-flight guard), so the age keeps
+	// growing against the first tick's commit alone.
+	cmd := m.Init()
+	_, cmd2 := m.Update(cmd())
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("a poll tick must schedule the read and the next tick")
+	}
+	if _, next := m.Update(batch[0]()); next == nil {
+		t.Fatal("the roster read did not start a transcript read")
+	}
+
+	if got := m.View().Content; strings.Contains(got, "lagging") {
+		t.Fatalf("the frame marks lag before the outstanding read ages past the threshold:\n%s", got)
+	}
+
+	clock = clock.Add(4 * poll)
+	nextPollTick(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, "lagging") {
+		t.Fatalf("the frame never marks the pane header once the read has outlived several polls:\n%s", got)
+	}
+}
+
 // countReads runs one poll tick and counts the transcript reads its batch holds.
 func countReads(t *testing.T, m *tui.LiveModel) int {
 	t.Helper()
