@@ -163,3 +163,62 @@ func TestPrBody_ContainsRequiredSections(t *testing.T) {
 		}
 	}
 }
+
+// TestPrBody_SummaryDiffersFromWhatWasChanged covers issue 583: the Summary
+// section must give a short overview, and the What Was Changed section must
+// give the detailed description. The two sections must not repeat the same
+// text verbatim.
+func TestPrBody_SummaryDiffersFromWhatWasChanged(t *testing.T) {
+	summary := "Fixed the duplicated PR body. The Summary section now gives a short overview. The What Was Changed section keeps the full detail."
+	body := prBody(domain.Issue{ID: "583", Title: "PR body is duplicated"}, summary)
+
+	summarySection := sectionBody(t, body, "## Summary", "## Why")
+	whatChangedSection := sectionBody(t, body, "## What Was Changed", "## How it Was Tested")
+
+	if summarySection == "" {
+		t.Fatalf("prBody = %q, want a non-empty Summary section", body)
+	}
+	if whatChangedSection == "" {
+		t.Fatalf("prBody = %q, want a non-empty What Was Changed section", body)
+	}
+	if summarySection == whatChangedSection {
+		t.Errorf("Summary section == What Was Changed section (%q); want the Summary to be a short overview distinct from the detailed What Was Changed", summarySection)
+	}
+	if !strings.Contains(whatChangedSection, "full detail") {
+		t.Errorf("What Was Changed section = %q, want it to contain the full description", whatChangedSection)
+	}
+}
+
+// TestPrBody_SingleSentenceDescriptionStaysDistinct covers issue 583's
+// regression case: a description that is only one sentence (for example the
+// changeDescription fallback "Implements the requirements described in issue
+// #<id>.") must not make Summary equal What Was Changed. Before the fix,
+// summaryOverview returned the whole single-sentence description untouched,
+// so both sections rendered the same text verbatim.
+func TestPrBody_SingleSentenceDescriptionStaysDistinct(t *testing.T) {
+	issue := domain.Issue{ID: "583", Title: "PR body is duplicated"}
+	body := prBody(issue, "")
+
+	summarySection := sectionBody(t, body, "## Summary", "## Why")
+	whatChangedSection := sectionBody(t, body, "## What Was Changed", "## How it Was Tested")
+
+	if summarySection == whatChangedSection {
+		t.Errorf("Summary section == What Was Changed section (%q) for a single-sentence description; want a distinct overview", summarySection)
+	}
+}
+
+// sectionBody extracts the text between the start and end markdown headers
+// (exclusive), trimmed of surrounding whitespace.
+func sectionBody(t *testing.T, body, start, end string) string {
+	t.Helper()
+	startIdx := strings.Index(body, start)
+	if startIdx == -1 {
+		t.Fatalf("prBody = %q, missing section header %q", body, start)
+	}
+	startIdx += len(start)
+	endIdx := strings.Index(body[startIdx:], end)
+	if endIdx == -1 {
+		t.Fatalf("prBody = %q, missing section header %q", body, end)
+	}
+	return strings.TrimSpace(body[startIdx : startIdx+endIdx])
+}

@@ -412,21 +412,47 @@ func changeDescription(issue domain.Issue, summary string) string {
 // runCommitAndPR runs — the resting-state doc comments on
 // runQualityGates/runReview establish that invariant — so "How it Was
 // Tested" reports that checklist rather than re-deriving it.
+//
+// Summary and What Was Changed read from the same changeDescription, but
+// Summary holds only its overview sentence, so the two sections do not
+// repeat the same text verbatim (issue 583).
 func prBody(issue domain.Issue, summary string) string {
-	description := wrapText(changeDescription(issue, summary), commitMessageWrapWidth)
+	description := changeDescription(issue, summary)
+	overview := wrapText(summaryOverview(issue, description), commitMessageWrapWidth)
+	detail := wrapText(description, commitMessageWrapWidth)
 
 	var b strings.Builder
 	b.WriteString("## Summary\n\n")
-	b.WriteString(description)
+	b.WriteString(overview)
 	b.WriteString("\n\n## Why\n\n")
 	fmt.Fprintf(&b, "Addresses issue #%s: %s\n\n", issue.ID, prTitle(issue))
 	b.WriteString("## What Was Changed\n\n")
-	b.WriteString(description)
+	b.WriteString(detail)
 	b.WriteString("\n\n## How it Was Tested\n\n")
 	b.WriteString("- [x] Quality Gates passed\n")
 	b.WriteString("- [x] Review approved\n\n")
 	fmt.Fprintf(&b, "Closes #%s\n", issue.ID)
 	return b.String()
+}
+
+// summaryOverview reduces description to the text up to its first `.`, `!`,
+// or `?` character, so the PR's Summary section stays a short overview
+// instead of repeating the full What Was Changed detail (issue 583). This is
+// a plain character search, not sentence-boundary detection: text with an
+// abbreviation, initialism, or decimal number before the real sentence end
+// (for example "e.g.", "v1.2") truncates early.
+//
+// When description has no earlier boundary, or the found boundary is its
+// last character (description is only one sentence), the whole description
+// would equal the extracted text, which would make Summary and What Was
+// Changed identical. In that case, summaryOverview falls back to issue's
+// title instead, so the two sections always stay distinct.
+func summaryOverview(issue domain.Issue, description string) string {
+	description = strings.TrimSpace(description)
+	if idx := strings.IndexAny(description, ".!?"); idx != -1 && idx+1 < len(description) {
+		return strings.TrimSpace(description[:idx+1])
+	}
+	return prTitle(issue)
 }
 
 // renderIssueTemplate replaces the {type}, {title}, {body}, and {issue}
