@@ -1,5 +1,7 @@
 package tui
 
+import "time"
+
 // RingBuffer is a capped FIFO of TranscriptEvents keyed by stable Seq. Once
 // the cap is exceeded the oldest retained event is dropped, producing a seq
 // gap the reader can detect. A zero cap means unbounded.
@@ -29,6 +31,10 @@ type TranscriptEvent struct {
 	// transcript_events.subagent. Empty for the single implementation Agent,
 	// which needs no label.
 	Subagent string
+	// OccurredAt is the event's own recorded time. The pane compares it
+	// against a gate row's FinishedAt, so a gate that ran early interleaves
+	// into the timeline instead of trailing every event.
+	OccurredAt time.Time
 }
 
 // NewRingBuffer returns an empty RingBuffer that retains at most cap events.

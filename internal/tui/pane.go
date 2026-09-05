@@ -96,12 +96,14 @@ type TranscriptScroller interface {
 type TranscriptPane struct {
 	view    TranscriptViewModel
 	entries []TranscriptEntry
-	// gates are the quality-gate rows the pane appends after the event window.
+	// gates are the quality-gate rows the pane interleaves into the event
+	// timeline by finish time.
 	gates []GateRow
-	// eventCount is the number of leading entries that come from the event
-	// window. The trailing gate rows are no part of the window, so a move past
-	// this edge must still ask the scroller for newer events.
-	eventCount int
+	// lastEventIndex is the index of the last entry in entries that comes from
+	// the event window, or noSelection where the window holds no event. A gate
+	// row is not part of the window, so a move past this edge must still ask
+	// the scroller for newer events.
+	lastEventIndex int
 
 	// scroller moves the window anchor. Nil means the pane cannot follow the
 	// tail, and the footer then hides the follow-tail key.
@@ -163,12 +165,11 @@ func (p *TranscriptPane) SetWidth(w int) { p.width = w }
 // yet reported a terminal size.
 func (p *TranscriptPane) SetHeight(h int) { p.height = h }
 
-// SetGates replaces the quality-gate rows the pane appends after the event
-// window. Gate runs follow the Agent's own work, so they render last. The call
-// rebuilds the entries through rebuild, the pane's one rebuild path, so
-// selection and expansion follow the same key-based rules a poll obeys. It
-// leaves pendingMove and tailRequested alone: both wait for the poll that
-// answers them.
+// SetGates replaces the quality-gate rows the pane interleaves into the event
+// timeline by finish time. The call rebuilds the entries through rebuild, the
+// pane's one rebuild path, so selection and expansion follow the same
+// key-based rules a poll obeys. It leaves pendingMove and tailRequested
+// alone: both wait for the poll that answers them.
 //
 // TranscriptFeed calls this on each poll with the store's runs for the Issue.
 func (p *TranscriptPane) SetGates(rows []GateRow) {
@@ -178,11 +179,11 @@ func (p *TranscriptPane) SetGates(rows []GateRow) {
 	p.rebuild(0)
 }
 
-// SetView replaces the visible window and re-appends the gate rows. A pinned
-// selection holds its entry by key where the new window still retains it, so a
-// poll that appends events does not move the operator's selection. An unpinned
-// selection follows the tail while the window is at the tail. Expansion
-// survives only where the selection holds the same entry.
+// SetView replaces the visible window and re-interleaves the gate rows. A
+// pinned selection holds its entry by key where the new window still retains
+// it, so a poll that appends events does not move the operator's selection.
+// An unpinned selection follows the tail while the window is at the tail.
+// Expansion survives only where the selection holds the same entry.
 func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 	pending := p.pendingMove
 	p.pendingMove = 0
@@ -201,8 +202,8 @@ func (p *TranscriptPane) rebuild(pending int) {
 	wasExpanded := p.expanded != noSelection
 
 	events := buildEntries(p.view.Events)
-	p.eventCount = len(events)
-	p.entries = append(events, gateEntries(p.gates)...)
+	p.entries = mergeTimeline(events, gateEntries(p.gates))
+	p.lastEventIndex = lastEventIndex(p.entries)
 
 	idx := p.defaultSelection()
 	if hadSelection && (p.pinned || !p.view.AtTail) {
@@ -404,28 +405,56 @@ func (p *TranscriptPane) SelectedEntry() (TranscriptEntry, bool) {
 }
 
 // eventEdge returns the index of the last event entry, or noSelection where the
-// window holds no event. rebuild appends the gate rows after the event entries,
-// so eventCount is the whole layout rule and this is the one place that turns it
-// into an index.
+// window holds no event. A gate row is not part of the window, so a move past
+// this edge must still ask the scroller for newer events even where a gate
+// row interleaves after it.
 func (p *TranscriptPane) eventEdge() int {
-	if p.eventCount == 0 {
-		return noSelection
-	}
-	return p.eventCount - 1
+	return p.lastEventIndex
 }
 
-// defaultSelection selects the newest event entry, so a fresh pane follows the
-// tail. An unpinned selection must hold the live Agent event and must not stick
-// to the newest gate row. A pane that holds gate rows alone selects the last of
-// them.
+// defaultSelection selects the newest entry, so a fresh pane follows the tail.
+// rebuild interleaves the gate rows into the event timeline by finish time, so
+// the newest entry already holds the live Agent event unless a gate genuinely
+// finished after it.
 func (p *TranscriptPane) defaultSelection() int {
-	if edge := p.eventEdge(); edge != noSelection {
-		return edge
-	}
 	if len(p.entries) == 0 {
 		return noSelection
 	}
 	return len(p.entries) - 1
+}
+
+// lastEventIndex returns the index of the last entry in entries that comes
+// from the event window, or noSelection where entries holds no event.
+func lastEventIndex(entries []TranscriptEntry) int {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if !entries[i].IsGate() {
+			return i
+		}
+	}
+	return noSelection
+}
+
+// mergeTimeline interleaves the gate rows into the event entries by finish
+// time, so a gate that ran early takes its place ahead of a later event
+// instead of always trailing the whole window. Both inputs arrive sorted
+// oldest first, so the merge only ever compares the two current heads. A gate
+// goes first when its FinishedAt is strictly before the event's OccurredAt;
+// an exact tie keeps the event first.
+func mergeTimeline(events, gates []TranscriptEntry) []TranscriptEntry {
+	merged := make([]TranscriptEntry, 0, len(events)+len(gates))
+	i, j := 0, 0
+	for i < len(events) && j < len(gates) {
+		if gates[j].Gate.FinishedAt.Before(events[i].Event.OccurredAt) {
+			merged = append(merged, gates[j])
+			j++
+			continue
+		}
+		merged = append(merged, events[i])
+		i++
+	}
+	merged = append(merged, events[i:]...)
+	merged = append(merged, gates[j:]...)
+	return merged
 }
 
 // clampIndex holds i inside a list of n entries.

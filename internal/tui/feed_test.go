@@ -81,18 +81,20 @@ func (f *fakeFeedStore) TranscriptEventsAfter(_ context.Context, runID, afterSeq
 }
 
 // feedFixture builds a store with one attempt, one prose event, one tool call
-// with its result, and one failed gate run.
+// with its result, and one failed gate run that finished before the events, so
+// the gate interleaves ahead of them in the timeline.
 func feedFixture() *fakeFeedStore {
-	ran := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	ran := time.Date(2026, 9, 3, 11, 0, 0, 0, time.UTC)
+	worked := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	return &fakeFeedStore{
 		runs: map[string][]storage.AgentRun{
 			"#1": {{ID: 7, ExecutionID: "ex-1", IssueID: "#1"}},
 		},
 		events: map[int64][]storage.TranscriptEvent{
 			7: {
-				{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "starting work"},
-				{AgentRunID: 7, Seq: 1, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build ./...", ToolCallID: "t1"},
-				{AgentRunID: 7, Seq: 2, Type: "TOOL_RESULT", ToolName: "bash", ToolOutput: "ok", ToolCallID: "t1"},
+				{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "starting work", OccurredAt: worked},
+				{AgentRunID: 7, Seq: 1, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build ./...", ToolCallID: "t1", OccurredAt: worked},
+				{AgentRunID: 7, Seq: 2, Type: "TOOL_RESULT", ToolName: "bash", ToolOutput: "ok", ToolCallID: "t1", OccurredAt: worked},
 			},
 		},
 		gates: map[string][]storage.GateRun{
