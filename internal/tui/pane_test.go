@@ -30,9 +30,9 @@ func TestTranscriptGlyph(t *testing.T) {
 		event tui.TranscriptEvent
 		want  string
 	}{
-		{"call", call(0, "a", "bash", "ls"), "\u2192"},
-		{"result", result(1, "a", "bash", "ok"), "\u2190"},
-		{"truncation", tui.TranscriptEvent{Seq: 2, Type: "TRUNCATION", Text: "5 dropped"}, "\u2026"},
+		{"call", call(0, "a", "bash", "ls"), "▸"},
+		{"result", result(1, "a", "bash", "ok"), "└"},
+		{"truncation", tui.TranscriptEvent{Seq: 2, Type: "TRUNCATION", Text: "5 dropped"}, "░"},
 		{"prose has no glyph", prose(3, "hello"), " "},
 	}
 	for _, tc := range cases {
@@ -58,7 +58,7 @@ func TestPaneCollapsedToolCall(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("collapsed render has %d lines, want 2:\n%s", len(lines), got)
 	}
-	if !strings.Contains(lines[0], "\u2192") || !strings.Contains(lines[0], "bash") {
+	if !strings.Contains(lines[0], "▸") || !strings.Contains(lines[0], "bash") {
 		t.Errorf("call line = %q, want the call glyph and the tool name", lines[0])
 	}
 	if !strings.Contains(lines[1], "ok forge 0.1s") {
@@ -217,6 +217,9 @@ func TestPaneEvictionWordingIsDistinctFromTruncation(t *testing.T) {
 	if !strings.Contains(got, "not retained") {
 		t.Errorf("render is missing the eviction marker:\n%s", got)
 	}
+	if !strings.Contains(got, "░ earlier events not retained") {
+		t.Errorf("eviction marker uses the wrong glyph:\n%s", got)
+	}
 	if !strings.Contains(got, "12") {
 		t.Errorf("eviction marker omits the dropped count:\n%s", got)
 	}
@@ -240,7 +243,7 @@ func TestPaneUnpairedResultStaysVisible(t *testing.T) {
 		t.Fatalf("entries = %d, want 1", len(pane.Entries()))
 	}
 	got := tui.RenderTranscript(pane)
-	if !strings.Contains(got, "←") || !strings.Contains(got, "orphan output") {
+	if !strings.Contains(got, "└") || !strings.Contains(got, "orphan output") {
 		t.Errorf("unpaired result render = %q, want the result glyph and its first line", got)
 	}
 }
@@ -514,9 +517,9 @@ func TestPaneGlyphsFollowTheAgentEventTypes(t *testing.T) {
 		typ  agent.TranscriptEventType
 		want string
 	}{
-		{agent.TranscriptEventToolCall, "→"},
-		{agent.TranscriptEventToolResult, "←"},
-		{agent.TranscriptEventTruncation, "…"},
+		{agent.TranscriptEventToolCall, "▸"},
+		{agent.TranscriptEventToolResult, "└"},
+		{agent.TranscriptEventTruncation, "░"},
 		{agent.TranscriptEventMessage, " "},
 	}
 	for _, tc := range cases {
