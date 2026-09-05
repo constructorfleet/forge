@@ -30,6 +30,10 @@ type RosterStore interface {
 	// reads the one diff column, so the pager path loads no finding and no axis
 	// envelope.
 	LatestReviewDiff(ctx context.Context, executionID, issueID string) (string, error)
+
+	// GetReplanCheckpoint serves the on-request replan-artifact read only (see
+	// approve.go). It is the record the approve key defers to $PAGER.
+	GetReplanCheckpoint(ctx context.Context, executionID, issueID string) (storage.ReplanCheckpoint, error)
 }
 
 // Roster fetches an Execution's Worker state into a ViewModel on demand.

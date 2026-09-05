@@ -27,6 +27,18 @@ type fakeRosterStore struct {
 	// runReads counts LatestReviewDiff calls, so a test can prove a poll pass
 	// never reads the diff blobs.
 	runReads int
+
+	// checkpoints holds the replan checkpoint per Issue, for the approve key's
+	// on-request read (see approve_test.go).
+	checkpoints map[string]storage.ReplanCheckpoint
+}
+
+func (f *fakeRosterStore) GetReplanCheckpoint(_ context.Context, _, issueID string) (storage.ReplanCheckpoint, error) {
+	checkpoint, ok := f.checkpoints[issueID]
+	if !ok {
+		return storage.ReplanCheckpoint{}, storage.ErrNotFound
+	}
+	return checkpoint, nil
 }
 
 func (f *fakeRosterStore) LatestReviewOutcome(_ context.Context, _, issueID string) (storage.ReviewOutcome, error) {
@@ -235,6 +247,10 @@ func (missingExecutionRosterStore) LatestReviewOutcome(_ context.Context, _, _ s
 	return storage.ReviewOutcome{}, nil
 }
 
+func (missingExecutionRosterStore) GetReplanCheckpoint(_ context.Context, _, _ string) (storage.ReplanCheckpoint, error) {
+	return storage.ReplanCheckpoint{}, storage.ErrNotFound
+}
+
 type failingLoadRosterStore struct {
 	fake *fakeRosterStore
 }
@@ -253,4 +269,8 @@ func (f *failingLoadRosterStore) LatestReviewDiff(_ context.Context, _, _ string
 
 func (f *failingLoadRosterStore) LatestReviewOutcome(_ context.Context, _, _ string) (storage.ReviewOutcome, error) {
 	return storage.ReviewOutcome{}, nil
+}
+
+func (f *failingLoadRosterStore) GetReplanCheckpoint(_ context.Context, _, _ string) (storage.ReplanCheckpoint, error) {
+	return storage.ReplanCheckpoint{}, storage.ErrNotFound
 }

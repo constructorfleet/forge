@@ -89,14 +89,33 @@ type LiveModel struct {
 	// the same call cannot double-issue it.
 	retrying bool
 
+	// OpenApprove defers a replan-checkpoint artifact to $PAGER, writing it
+	// under the given directory. Injected so a test drives the whole key path
+	// without spawning a process; nil uses OpenApprovalArtifactInPager.
+	OpenApprove func(dir, artifact string) tea.Cmd
+
+	// Approver issues ResumeAfterReplan. Nil disables the control: the
+	// approve key then explains itself instead of silently doing nothing.
+	Approver Approver
+
+	// approving records an approve flow in flight — from the pager opening
+	// through ResumeAfterReplan returning — so a second approve key press on
+	// the same row cannot double-issue it.
+	approving bool
+	// approvingIssueID is the Issue the in-flight approve flow names, read
+	// back once the pager closes so the write fires against the row the
+	// artifact was actually read for.
+	approvingIssueID string
+
 	// winHeight is the last terminal height the runtime reported. Zero means the
 	// runtime has sent no size yet: the frame then clips nothing and the tailer
 	// keeps its own default.
 	winHeight int
 
-	// diffDir holds this session's diff artifacts. A pager killed before its
-	// own cleanup callback runs leaves a file, so quit removes the directory.
-	diffDir string
+	// artifactDir holds this session's pager artifacts (diffs and replan
+	// checkpoints). A pager killed before its own cleanup callback runs leaves
+	// a file, so quit removes the directory.
+	artifactDirPath string
 }
 
 // NewLiveModel builds a live roster model over r for executionID, polling
@@ -163,6 +182,9 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.MatchString("r") && m.vm.Focus == PaneRoster {
 			return m, m.startRetry()
 		}
+		if key.MatchString("p") && m.vm.Focus == PaneRoster {
+			return m, m.openSelectedApprove()
+		}
 		m.handleTranscriptKey(key)
 	case diffNoticeMsg:
 		m.vm.ActionNotice = msg.text
@@ -176,6 +198,23 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyCancelResult(msg)
 	case retryResultMsg:
 		m.applyRetryResult(msg)
+	case approveNoticeMsg:
+		m.vm.ActionNotice = msg.text
+	case approveReadyMsg:
+		m.approving = true
+		m.approvingIssueID = msg.issueID
+		m.vm.ActionNotice = fmt.Sprintf("opening replan artifact for %s in $PAGER…", msg.issueID)
+		return m, m.openApprove(msg.dir, msg.artifact)
+	case ApproveClosedMsg:
+		if msg.Err != nil {
+			m.approving = false
+			m.approvingIssueID = ""
+			m.vm.ActionNotice = msg.Err.Error()
+			return m, nil
+		}
+		return m, m.startApprove()
+	case approveResultMsg:
+		m.applyApproveResult(msg)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
 		m.removeDiffArtifacts()
@@ -230,7 +269,7 @@ func (m *LiveModel) openSelectedDiff() tea.Cmd {
 	}
 	// The directory is model state, so the event loop creates it. Only the store
 	// read runs inside the command, where a large blob cannot block the frame.
-	dir, err := m.diffArtifactDir()
+	dir, err := m.artifactDir()
 	if err != nil {
 		m.vm.ActionNotice = err.Error()
 		return nil
@@ -269,21 +308,21 @@ func (m *LiveModel) openDiff(dir, diff string) tea.Cmd {
 	return open(dir, diff)
 }
 
-// diffArtifactDir returns this session's artifact directory, creating it on
-// first use.
-func (m *LiveModel) diffArtifactDir() (string, error) {
-	if m.diffDir != "" {
-		return m.diffDir, nil
+// artifactDir returns this session's pager-artifact directory (diffs and
+// replan checkpoints), creating it on first use.
+func (m *LiveModel) artifactDir() (string, error) {
+	if m.artifactDirPath != "" {
+		return m.artifactDirPath, nil
 	}
 	dir, err := os.MkdirTemp("", "forge-diffs-*")
 	if err != nil {
-		return "", fmt.Errorf("tui: create diff artifact directory: %w", err)
+		return "", fmt.Errorf("tui: create pager artifact directory: %w", err)
 	}
-	m.diffDir = dir
+	m.artifactDirPath = dir
 	return dir, nil
 }
 
-// Close drops every diff artifact the session wrote. The caller defers it
+// Close drops every pager artifact the session wrote. The caller defers it
 // around the Bubble Tea program, so an exit path other than the quit keys — a
 // context cancellation, a signal, or a panic — leaks no temp directory.
 func (m *LiveModel) Close() { m.removeDiffArtifacts() }
@@ -291,11 +330,11 @@ func (m *LiveModel) Close() { m.removeDiffArtifacts() }
 // removeDiffArtifacts drops every artifact the session wrote. A failure is
 // silent: an observer never aborts on temp-file cleanup.
 func (m *LiveModel) removeDiffArtifacts() {
-	if m.diffDir == "" {
+	if m.artifactDirPath == "" {
 		return
 	}
-	_ = os.RemoveAll(m.diffDir)
-	m.diffDir = ""
+	_ = os.RemoveAll(m.artifactDirPath)
+	m.artifactDirPath = ""
 }
 
 // handleTranscriptKey applies the pane keys. Tab moves focus; the movement
