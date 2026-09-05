@@ -81,24 +81,19 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-// TestWrapWidthSplitsLongLines proves wrapWidth breaks a line into rows no
-// wider than width cells, so a line the terminal would wrap itself is instead
-// counted as the several rows it actually draws.
-func TestWrapWidthSplitsLongLines(t *testing.T) {
-	cases := []struct {
-		name  string
-		line  string
-		width int
-		want  []string
-	}{
-		{"fits inside width", "short", 10, []string{"short"}},
-		{"exact width", "abcde", 5, []string{"abcde"}},
-		{"one row over", "abcdefghij", 5, []string{"abcde", "fghij"}},
-		{"remainder row", "abcdefghijk", 5, []string{"abcde", "fghij", "k"}},
-		{"zero width applies no wrap", "abcdefghijk", 0, []string{"abcdefghijk"}},
-		{"negative width applies no wrap", "abcdefghijk", -1, []string{"abcdefghijk"}},
-		{"empty line", "", 5, []string{""}},
-	}
+// wrapWidthCase is one wrapWidth input and its expected rows, shared by every
+// table-driven wrapWidth test so the run-and-assert loop lives in one place.
+type wrapWidthCase struct {
+	name  string
+	line  string
+	width int
+	want  []string
+}
+
+// runWrapWidthCases runs each case through wrapWidth and fails the subtest if
+// the result does not match want exactly, row for row.
+func runWrapWidthCases(t *testing.T, cases []wrapWidthCase) {
+	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := wrapWidth(tc.line, tc.width)
@@ -112,4 +107,36 @@ func TestWrapWidthSplitsLongLines(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWrapWidthSplitsLongLines proves wrapWidth breaks a line into rows no
+// wider than width cells, so a line the terminal would wrap itself is instead
+// counted as the several rows it actually draws.
+func TestWrapWidthSplitsLongLines(t *testing.T) {
+	runWrapWidthCases(t, []wrapWidthCase{
+		{"fits inside width", "short", 10, []string{"short"}},
+		{"exact width", "abcde", 5, []string{"abcde"}},
+		{"one row over", "abcdefghij", 5, []string{"abcde", "fghij"}},
+		{"remainder row", "abcdefghijk", 5, []string{"abcde", "fghij", "k"}},
+		{"zero width applies no wrap", "abcdefghijk", 0, []string{"abcdefghijk"}},
+		{"negative width applies no wrap", "abcdefghijk", -1, []string{"abcdefghijk"}},
+		{"empty line", "", 5, []string{""}},
+	})
+}
+
+// TestWrapWidthAccountsForDisplayWidth proves wrapWidth splits on terminal
+// display width, not rune count, so a wide (double-width) rune or a
+// combining character never drifts the wrap point from where the terminal
+// itself would wrap the line.
+func TestWrapWidthAccountsForDisplayWidth(t *testing.T) {
+	runWrapWidthCases(t, []wrapWidthCase{
+		// Each CJK rune fills two cells, so four runes fill eight cells. A
+		// rune-count wrap would wrongly fit all four runes in width 4; a
+		// display-width wrap fits only two.
+		{"wide runes split by cell width", "你好世界", 4, []string{"你好", "世界"}},
+		// "e" followed by a combining acute accent is two runes but one
+		// grapheme cluster that fills one cell, so it must not force a
+		// split of its own.
+		{"combining character stays with its base rune", "ééé", 2, []string{"éé", "é"}},
+	})
 }
