@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.2](https://github.com/constructorfleet/forge/compare/forge-v0.42.1...forge-v0.42.2) (2026-09-05)
+
+
+### Bug Fixes
+
+* Reset workers.owner_pid and owner_token when a worker process exits cleanly ([#630](https://github.com/constructorfleet/forge/issues/630)) ([c2ccc44](https://github.com/constructorfleet/forge/commit/c2ccc443473a716fefc62f4a6f39f026b5f409fa)), closes [#563](https://github.com/constructorfleet/forge/issues/563)
+
 ## [0.42.1](https://github.com/constructorfleet/forge/compare/forge-v0.42.0...forge-v0.42.1) (2026-09-05)
 
 
