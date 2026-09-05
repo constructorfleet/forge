@@ -35,6 +35,9 @@ const maxTranscriptEvents = 500
 // internal/engine's sink.
 const defaultFlushInterval = 250 * time.Millisecond
 
+// defaultFlushTimeout bounds one transcript store write.
+const defaultFlushTimeout = 5 * time.Second
+
 // TranscriptStore is the subset of storage.Store an AgentBackend needs to
 // record a planning invocation's agent_runs row and its transcript,
 // narrowed (rather than taking all of storage.Store) for testability and to
@@ -81,11 +84,12 @@ func toStorageTranscriptEvents(events []agent.TranscriptEvent, phase, subagent s
 // it: engine depends on the lower-level packages, not the reverse, so
 // planning must not import it.
 type persistingTranscriptSink struct {
-	// ctx is cancel-immune (issue 454). Best-effort capture must outlive the
-	// invocation it describes: an invocation cancelled before it streams
-	// anything emits only its diagnostic fallback, and database/sql rejects a
-	// write on an already cancelled context, which would leave a blank
-	// transcript.
+	// ctx is cancel-immune (issue 454). Each flush adds its own timeout.
+	// Best-effort capture must outlive the invocation it describes: an
+	// invocation cancelled before it streams anything emits only its
+	// diagnostic fallback, and database/sql rejects a write on an already
+	// cancelled context. The flush timeout prevents a stuck store from
+	// blocking the invocation forever.
 	ctx                  context.Context
 	store                TranscriptStore
 	executionID, issueID string
@@ -168,7 +172,9 @@ func (s *persistingTranscriptSink) flushLocked() {
 	if len(unflushed) == 0 {
 		return
 	}
-	if err := s.store.RecordTranscriptEvents(s.ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(unflushed, s.phase, s.subagent)); err != nil {
+	ctx, cancel := context.WithTimeout(s.ctx, defaultFlushTimeout)
+	defer cancel()
+	if err := s.store.RecordTranscriptEvents(ctx, s.executionID, s.issueID, s.agentRunID, toStorageTranscriptEvents(unflushed, s.phase, s.subagent)); err != nil {
 		return
 	}
 	s.lastFlushedSeq = highWater
