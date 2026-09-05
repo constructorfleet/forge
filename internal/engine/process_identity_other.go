@@ -2,10 +2,6 @@
 
 package engine
 
-import "fmt"
-
-// darwinStartToken only runs on darwin. Elsewhere processStartToken falls
-// through to /proc or ps.
-func darwinStartToken(pid int) (string, error) {
-	return "", fmt.Errorf("engine: darwinStartToken unsupported on this platform (pid %d)", pid)
-}
+// platformStartToken is nil on a non-darwin platform, so processStartToken
+// falls through to /proc or ps. See issue 561.
+var platformStartToken func(pid int) (string, error)
