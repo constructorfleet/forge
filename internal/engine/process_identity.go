@@ -67,8 +67,10 @@ func (e *Engine) claimOwnerIsLive(ctx context.Context, claim storage.WorkerClaim
 
 // processStartToken reads pid's start time, which changes when the operating
 // system reuses the pid. It tries /proc/<pid>/stat first, which needs no
-// external program, and runs ps when that fails for any reason. ps runs under
-// LC_ALL=C, because ps formats the start time for the locale.
+// external program, then darwinStartToken on darwin, which reads
+// kinfo_proc.p_starttime through sysctl at microsecond precision, and runs ps
+// when both fail. ps runs under LC_ALL=C, because ps formats the start time
+// for the locale.
 //
 // The ps start time has a granularity of one second, so a pid the operating
 // system reuses inside the same second can still give the same token. A
@@ -79,6 +81,9 @@ func processStartToken(ctx context.Context, pid int) string {
 		return ""
 	}
 	if token, err := procStartToken(pid); err == nil {
+		return token
+	}
+	if token, err := darwinStartToken(pid); err == nil {
 		return token
 	}
 	cmd := exec.CommandContext(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
