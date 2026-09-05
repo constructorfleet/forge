@@ -242,6 +242,7 @@ type gateScroller struct {
 func (s *gateScroller) ScrollUp(n int)   { s.up += n }
 func (s *gateScroller) ScrollDown(n int) { s.down += n }
 func (s *gateScroller) ScrollToTail()    { s.tails++ }
+func (s *gateScroller) PageSize() int    { return 10 }
 
 func TestDownAtTheLastEventScrollsPastTrailingGateRows(t *testing.T) {
 	p := NewTranscriptPane()

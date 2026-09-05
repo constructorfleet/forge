@@ -289,6 +289,9 @@ func (t *TranscriptTailer) ScrollDown(n int) {
 // ScrollToTail returns the viewport to following the tail.
 func (t *TranscriptTailer) ScrollToTail() { t.offset = 0 }
 
+// PageSize returns the viewport height in events.
+func (t *TranscriptTailer) PageSize() int { return t.height }
+
 // clampOffset keeps the scrollback offset inside the retained window.
 func (t *TranscriptTailer) clampOffset() {
 	max := t.ring.Len() - t.height
