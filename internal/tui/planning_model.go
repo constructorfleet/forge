@@ -98,6 +98,13 @@ type PlanningModel struct {
 	transcriptController
 	rosterReading bool
 
+	// lastCommit is the clock time of the last transcript read that actually
+	// committed to the pane or notice (a stale-retry never sets it), mirroring
+	// LiveModel.lastCommit. Zero holds before the first commit. The planning
+	// pane can suffer the same slow-store thinning the live roster's can, so
+	// it gets the same lag signal.
+	lastCommit time.Time
+
 	// Approver issues ApprovePlanningArtifact. Nil disables the control.
 	Approver    PlanningApprover
 	approveFlow actionFlow
@@ -124,7 +131,7 @@ func NewPlanningModel(r *PlanningRoster, featureID string, poll time.Duration) *
 		Roster:    r,
 		FeatureID: featureID,
 		poll:      poll,
-		vm:        PlanningViewModel{Style: DefaultStyle()},
+		vm:        PlanningViewModel{Style: DefaultStyle(), PollInterval: poll},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -141,7 +148,7 @@ func (m *PlanningModel) SetFeed(f *TranscriptFeed) {
 // Init returns a command that paints the first frame immediately, then the
 // poll loop takes over.
 func (m *PlanningModel) Init() tea.Cmd {
-	return func() tea.Msg { return pollTickMsg{time.Now()} }
+	return func() tea.Msg { return pollTickMsg{m.Roster.Now()} }
 }
 
 // Update drives the planning poller: a poll tick refetches the stage
@@ -151,6 +158,11 @@ func (m *PlanningModel) Init() tea.Cmd {
 func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollTickMsg:
+		// The lag age is resolved against this tick's own clock, so it grows
+		// tick over tick while a slow store leaves the one in-flight read
+		// outstanding (see transcriptController.reading), mirroring
+		// LiveModel's pollTickMsg case.
+		m.vm.TranscriptLagAge = m.transcriptLagAge(msg.now)
 		next := tea.Tick(m.poll, func(t time.Time) tea.Msg { return pollTickMsg{t} })
 		return m, tea.Batch(m.readRoster(), next)
 	case planningRosterReadMsg:
@@ -236,6 +248,12 @@ func (m *PlanningModel) applyRoster(msg planningRosterReadMsg) {
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
 	vm.Style = m.vm.Style
+	// The lag age and the poll interval it is measured against are both
+	// resolved elsewhere (the pollTickMsg case, and construction) rather than
+	// by this roster refresh, so a fresh view-model's zero values must not
+	// overwrite them here, mirroring LiveModel.applyRoster.
+	vm.TranscriptLagAge = m.vm.TranscriptLagAge
+	vm.PollInterval = m.vm.PollInterval
 	m.vm = vm
 }
 
@@ -258,8 +276,22 @@ func (m *PlanningModel) readTranscript() tea.Cmd {
 // Execution and the Issue, so the read a Feature ever gets back always
 // answers that same FeatureID: it is never stale.
 func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	cmd, _ := m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	if committed {
+		m.lastCommit = m.Roster.Now()
+	}
 	return cmd
+}
+
+// transcriptLagAge returns the time since the last committed transcript
+// read, measured against now, mirroring LiveModel.transcriptLagAge. It is
+// zero before the first commit: a pane that has not read yet is starting,
+// not lagging.
+func (m *PlanningModel) transcriptLagAge(now time.Time) time.Duration {
+	if m.lastCommit.IsZero() {
+		return 0
+	}
+	return now.Sub(m.lastCommit)
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript

@@ -93,8 +93,8 @@ func (t *transcriptController) handleTranscriptKey(key uv.Key, transcript *Trans
 // feed already holds and reports the failure in notice, so a transient
 // failure never blanks the transcript. LiveModel and PlanningModel share this
 // one retry-on-stale path so a future change to it cannot drift between the
-// two call sites; the committed bool lets LiveModel track lag age without
-// PlanningModel paying for it.
+// two call sites; the committed bool lets each model stamp its own lag-age
+// clock only on a read that actually lands.
 func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantIssueID string, notice *string, pane **TranscriptPane, retry func() tea.Cmd) (cmd tea.Cmd, committed bool) {
 	if t.feed == nil || msg.feed != t.feed {
 		return nil, false
