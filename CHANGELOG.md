@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.47.0](https://github.com/constructorfleet/forge/compare/forge-v0.46.0...forge-v0.47.0) (2026-09-05)
+
+
+### Features
+
+* TUI: order gate rows into the timeline by finish time ([#661](https://github.com/constructorfleet/forge/issues/661)) ([69a772c](https://github.com/constructorfleet/forge/commit/69a772c4dfce9d625bb9fab474455d81884a14f0)), closes [#530](https://github.com/constructorfleet/forge/issues/530)
+
 ## [0.46.0](https://github.com/constructorfleet/forge/compare/forge-v0.45.0...forge-v0.46.0) (2026-09-05)
 
 
