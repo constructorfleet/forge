@@ -522,7 +522,12 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	defer stopHeartbeat()
 	go RunWorkerHeartbeat(heartbeatCtx, e.Store, execution.ID, issueID, heartbeatInterval, e.Now)
 	defer func() {
-		if err := e.Store.ReleaseWorkerClaim(ctx, execution.ID, issueID); err != nil {
+		// Cancel-immune (issue 560): this runs on every return path,
+		// including one where ctx itself is already cancelled (e.g. a
+		// SIGINT-interrupted `forge execute`). database/sql rejects a
+		// write on an already-cancelled context, which would leave
+		// owner_pid/owner_token stale instead of cleared.
+		if err := e.Store.ReleaseWorkerClaim(context.WithoutCancel(ctx), execution.ID, issueID); err != nil {
 			retErr = errors.Join(retErr, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err))
 		}
 	}()
