@@ -27,3 +27,9 @@ func darwinStartToken(pid int) (string, error) {
 	}
 	return fmt.Sprintf("%d.%06d", start.Sec, start.Usec), nil
 }
+
+// platformStartToken is darwinStartToken on darwin. processStartToken calls
+// it through this var, not the function directly, so staticcheck cannot
+// prove across build tags that the non-darwin stub always errors. See issue
+// 561.
+var platformStartToken = darwinStartToken
