@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.40.0](https://github.com/constructorfleet/forge/compare/forge-v0.39.0...forge-v0.40.0) (2026-09-05)
+
+
+### Features
+
+* colorize the TUI transcript and frame ([#609](https://github.com/constructorfleet/forge/issues/609)) ([4cb00d3](https://github.com/constructorfleet/forge/commit/4cb00d321248ddef25c0fcd8e5192a164d085001))
+* Implement a production PlanningApprover ([#607](https://github.com/constructorfleet/forge/issues/607)) ([3a70c9f](https://github.com/constructorfleet/forge/commit/3a70c9fb57fa3081aad131a64f302deca3c4d242)), closes [#593](https://github.com/constructorfleet/forge/issues/593)
+* PR body is duplicated ([#605](https://github.com/constructorfleet/forge/issues/605)) ([8d0c10b](https://github.com/constructorfleet/forge/commit/8d0c10bb8d7b2e4ab7f2f4b37e6a03bf1c85ef44)), closes [#583](https://github.com/constructorfleet/forge/issues/583)
+
 ## [0.39.0](https://github.com/constructorfleet/forge/compare/forge-v0.38.0...forge-v0.39.0) (2026-09-05)
 
 
