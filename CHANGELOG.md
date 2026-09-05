@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.42.0](https://github.com/constructorfleet/forge/compare/forge-v0.41.0...forge-v0.42.0) (2026-09-05)
+
+
+### Features
+
+* gate_runs has no AgentRun/attempt scoping column, forcing a time-window heuristic in the TUI ([#621](https://github.com/constructorfleet/forge/issues/621)) ([a51b271](https://github.com/constructorfleet/forge/commit/a51b2712083d87e2beda7c17d7c01b9d0c6d8a33)), closes [#596](https://github.com/constructorfleet/forge/issues/596)
+
+
+### Bug Fixes
+
+* avoid staticcheck SA4023 in process_identity fallback ([#623](https://github.com/constructorfleet/forge/issues/623)) ([1527f5b](https://github.com/constructorfleet/forge/commit/1527f5b67a4713424a739e12459e4e8ddff60015))
+* Reset workers.owner_pid and owner_token when a worker process exits cleanly ([#620](https://github.com/constructorfleet/forge/issues/620)) ([642e276](https://github.com/constructorfleet/forge/commit/642e276fe598d1b8fef10255ae5ea946a7ad9222)), closes [#563](https://github.com/constructorfleet/forge/issues/563)
+* Reset workers.owner_pid and owner_token when a worker process exits cleanly ([#626](https://github.com/constructorfleet/forge/issues/626)) ([a0b0eec](https://github.com/constructorfleet/forge/commit/a0b0eec8446f26d9636b97b6bbb662248e149237)), closes [#563](https://github.com/constructorfleet/forge/issues/563)
+* TUI wrapWidth does one hard rune-count wrap, not a real terminal-column wrap ([#622](https://github.com/constructorfleet/forge/issues/622)) ([641c521](https://github.com/constructorfleet/forge/commit/641c52198ad4a0c258d11a9ce4fe484106e62945)), closes [#602](https://github.com/constructorfleet/forge/issues/602)
+* TUI wrapWidth does one hard rune-count wrap, not a real terminal-column wrap ([#625](https://github.com/constructorfleet/forge/issues/625)) ([201bd17](https://github.com/constructorfleet/forge/commit/201bd17e14c6b005f6a1e55442243104045bbaaf)), closes [#602](https://github.com/constructorfleet/forge/issues/602)
+
 ## [0.41.0](https://github.com/constructorfleet/forge/compare/forge-v0.40.0...forge-v0.41.0) (2026-09-05)
 
 
