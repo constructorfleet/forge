@@ -41,6 +41,7 @@ import (
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/tracker/gitlab"
 	"github.com/Teagan42/forge/internal/tracker/linear"
+	"github.com/Teagan42/forge/internal/tui"
 	"github.com/Teagan42/forge/internal/workspace"
 )
 
@@ -283,6 +284,61 @@ func lspToSemanticConfig(lsp config.LSPConfig, agentProvider string) semantic.Co
 
 func buildOperationalEngine(store storage.Store, cfg config.Config, repoRoot string) *engine.Engine {
 	return engine.New(store, nil, nil, nil, cfg, repoRoot)
+}
+
+// buildRetrier wires the TUI's retry key to a detached forge child (issue
+// #503): RetryIssue ends in resumeIssue, full re-entry into the
+// orchestrator the TUI observes, so retry must run out-of-process rather
+// than call the operational Engine directly. repoRoot is the git top level,
+// used only as the child's own working directory (#459: a retry run from
+// any other directory can silently create an empty DB or default a config
+// it should have loaded); configPath and dbPath must already be absolute,
+// so the child targets the exact files the caller resolved, regardless of
+// where repoRoot points.
+func buildRetrier(repoRoot, configPath, dbPath string) tui.Retrier {
+	return tui.ProcessRetrier{
+		RepoRoot:   repoRoot,
+		ConfigPath: configPath,
+		DBPath:     dbPath,
+	}
+}
+
+// absoluteAgainst returns path unchanged when it is already absolute,
+// otherwise path joined onto base.
+func absoluteAgainst(base, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
+}
+
+// resolveRetrier wires buildRetrier for `forge execute`/`forge watch`,
+// leaving the retry control present but inert (a nil Retrier) when the
+// current directory is not inside a git work tree, rather than failing the
+// whole watch or execute run over a control that a Failed Worker may never
+// need.
+//
+// configPath and dbPath are absolutized against the process's own working
+// directory, exactly how runExecute/runWatch already load them (loadConfig/
+// openStore take *configPath/*dbPath as typed, relative to os.Getwd(), never
+// to the git top level). Resolving them against the discovered repo root
+// instead — as an earlier version of this function did — pointed the retry
+// child at a different config and, critically, a different database than
+// the one the running Execution actually uses whenever the process runs
+// from a subdirectory of the repo, reintroducing the #459 bug class this
+// same issue guards against. The child's own working directory is still the
+// discovered git top level (#459 again, for the child's own relative-path
+// resolution), independent of where its --config/--db flags point.
+func resolveRetrier(configPath, dbPath string) tui.Retrier {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	repoRoot, err := discoverRepoRoot()
+	if err != nil {
+		return nil
+	}
+	return buildRetrier(repoRoot, absoluteAgainst(cwd, configPath), absoluteAgainst(cwd, dbPath))
 }
 
 type executeRuntime struct {

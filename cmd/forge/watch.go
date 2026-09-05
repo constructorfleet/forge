@@ -164,7 +164,8 @@ func runWatch(args []string) int {
 	}
 
 	canceller := buildOperationalEngine(store, cfg, repoRoot)
-	if err := runLiveRoster(ctx, store, target.id, canceller); err != nil {
+	retrier := resolveRetrier(*configPath, *dbPath)
+	if err := runLiveRoster(ctx, store, target.id, canceller, retrier); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}

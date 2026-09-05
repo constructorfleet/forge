@@ -9,7 +9,6 @@ package codex
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -121,17 +120,9 @@ func (a *Adapter) Execute(ctx context.Context, req agent.AgentRequest) (agent.Ag
 }
 
 // forgeExecutable resolves the currently-running forge binary's absolute
-// path (os.Executable) so Codex spawns the exact same forge that dispatched
-// it, falling back to the bare "forge" name (resolved via PATH by Codex's
-// own subprocess spawn) if that lookup fails. A package var so tests can
-// override it.
-var forgeExecutable = func() string {
-	path, err := os.Executable()
-	if err != nil {
-		return "forge"
-	}
-	return path
-}
+// path so Codex spawns the exact same forge that dispatched it. A package
+// var wrapping clicommon.SelfExecutable so tests can override it.
+var forgeExecutable = clicommon.SelfExecutable
 
 // mcpArgs translates req.Semantic.MCPServers (see CONTEXT.md "Injection
 // Channel": InjectionChannelMCP) into the Codex CLI flags that point Codex
