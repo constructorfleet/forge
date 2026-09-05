@@ -227,3 +227,68 @@ func TestPlanningModelAnswerKeyIgnoredWhenNoDecisionPending(t *testing.T) {
 		t.Fatalf("editor opened %d times, want 0 while no decision is pending", opened)
 	}
 }
+
+// planningFeedFixture builds a TranscriptFeedStore double keyed on
+// featureID for both the executionID and issueID, mirroring feedFixture but
+// under the (featureID, featureID) pair PlanningModel reads its transcript
+// with.
+func planningFeedFixture(featureID string) *fakeFeedStore {
+	ran := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	return &fakeFeedStore{
+		runs: map[string][]storage.AgentRun{
+			featureID: {{ID: 7, ExecutionID: featureID, IssueID: featureID}},
+		},
+		events: map[int64][]storage.TranscriptEvent{
+			7: {
+				{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: "starting work"},
+				{AgentRunID: 7, Seq: 1, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build ./...", ToolCallID: "t1"},
+				{AgentRunID: 7, Seq: 2, Type: "TOOL_RESULT", ToolName: "bash", ToolOutput: "ok", ToolCallID: "t1"},
+			},
+		},
+		gates: map[string][]storage.GateRun{
+			featureID: {{Name: "go-test", Command: "go test ./...", ExitCode: 1, Stdout: "FAIL forge", FinishedAt: ran}},
+		},
+	}
+}
+
+// TestPlanningModelWindowSizeSetsTranscriptHeight proves the terminal size
+// reaches the planning feed's tailer, mirroring
+// TestLiveModelWindowSizeSetsTranscriptHeight: a short terminal drops the
+// oldest transcript entries and keeps the newest.
+func TestPlanningModelWindowSizeSetsTranscriptHeight(t *testing.T) {
+	m, _ := planningFixture(t, domain.PlanningStatusActive)
+	m.SetFeed(tui.NewTranscriptFeed(planningFeedFixture("feat-1")))
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 5})
+	planningNextPollTick(t, m)
+
+	got := m.View().Content
+	if strings.Contains(got, "starting work") {
+		t.Errorf("the transcript ignored the terminal height:\n%s", got)
+	}
+	if !strings.Contains(got, "gate go-test") {
+		t.Errorf("frame omits the newest entries:\n%s", got)
+	}
+}
+
+// TestPlanningModelWindowSizeSetsTranscriptWidth proves the terminal width
+// reaches the planning feed's pane, mirroring
+// TestLiveModelWindowSizeSetsTranscriptWidth: a narrow terminal wraps the
+// transcript's lines to more rows than a wide one.
+func TestPlanningModelWindowSizeSetsTranscriptWidth(t *testing.T) {
+	m, _ := planningFixture(t, domain.PlanningStatusActive)
+	m.SetFeed(tui.NewTranscriptFeed(planningFeedFixture("feat-1")))
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 100})
+	planningNextPollTick(t, m)
+	wide := len(splitLines(m.View().Content))
+
+	m2, _ := planningFixture(t, domain.PlanningStatusActive)
+	m2.SetFeed(tui.NewTranscriptFeed(planningFeedFixture("feat-1")))
+	m2.Update(tea.WindowSizeMsg{Width: 5, Height: 100})
+	planningNextPollTick(t, m2)
+	narrow := len(splitLines(m2.View().Content))
+
+	if narrow <= wide {
+		t.Errorf("a width of 5 produced %d rows, want more than the width-200 render's %d", narrow, wide)
+	}
+}
