@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	charm.land/bubbletea/v2 v2.0.9
+	charm.land/lipgloss/v2 v2.0.3
 	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0

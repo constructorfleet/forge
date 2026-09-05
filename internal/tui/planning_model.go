@@ -368,8 +368,14 @@ func (m *PlanningModel) artifactDir() (string, error) {
 // the Bubble Tea program.
 func (m *PlanningModel) Close() { m.removeArtifacts() }
 
-// View renders the current frame headless.
-func (m *PlanningModel) View() tea.View { return tea.NewView(RenderPlanning(m.vm)) }
+// View renders the current frame and claims the alternate screen buffer, so
+// the terminal redraws the whole frame from a fixed top on every poll instead
+// of scrolling earlier frames above the visible window.
+func (m *PlanningModel) View() tea.View {
+	v := tea.NewView(RenderPlanning(m.vm))
+	v.AltScreen = true
+	return v
+}
 
 // Stages exposes the current stage-history rows, for the model's own tests.
 func (m *PlanningModel) Stages() []PlanningStageRow { return m.vm.Stages }

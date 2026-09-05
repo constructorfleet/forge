@@ -153,6 +153,7 @@ func (f *TranscriptFeed) reset(executionID, issueID string) {
 	f.executionID = executionID
 	f.issueID = issueID
 	f.pane = NewTranscriptPane()
+	f.pane.SetStyle(DefaultStyle())
 	f.tailer = nil
 }
 

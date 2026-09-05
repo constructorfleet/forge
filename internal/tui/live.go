@@ -436,9 +436,15 @@ func (m *LiveModel) detachTranscript() {
 	m.vm.Focus = PaneRoster
 }
 
-// View renders the current frame headless.
+// View renders the current frame headless. It claims the alternate screen
+// buffer, so the terminal redraws the whole frame from a fixed top on every
+// poll instead of appending it below the last one: without it, a frame
+// taller than the terminal scrolls earlier frames above the visible window
+// and the header stops tracking the top row.
 func (m *LiveModel) View() tea.View {
-	return tea.NewView(Render(m.vm))
+	v := tea.NewView(Render(m.vm))
+	v.AltScreen = true
+	return v
 }
 
 // Workers exposes the current roster rows, for the model's own tests.

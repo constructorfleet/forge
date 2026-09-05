@@ -108,6 +108,19 @@ func TestLiveModelPollTickFetchesAndRenders(t *testing.T) {
 	}
 }
 
+// TestLiveModelViewRunsInAltScreen proves the live view claims the terminal's
+// alternate screen buffer, so a frame taller than the last never scrolls
+// earlier frames above the visible window: the terminal redraws the whole
+// screen from a fixed top rather than appending output.
+func TestLiveModelViewRunsInAltScreen(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+
+	if !m.View().AltScreen {
+		t.Fatal("View().AltScreen = false, want true")
+	}
+}
+
 // TestLiveModelQuitKeyLeavesExecutionRunning proves q quits the model (the
 // Bubble Tea run returns) but does not signal any stop-work: the model has no
 // path to cancel an Execution, so quitting is always safe.

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // Event type names the pane renders. They mirror agent.TranscriptEventType,
@@ -105,6 +107,11 @@ type TranscriptPane struct {
 	// tail, and the footer then hides the follow-tail key.
 	scroller TranscriptScroller
 
+	// style colours a rendered header by entry kind. The zero value applies no
+	// colour, which every headless render test relies on; the live view sets
+	// forge's real scheme.
+	style Style
+
 	selection int
 	// expanded holds the selection index that is expanded, or noSelection.
 	// It tracks the index rather than a flag so any selection move resets it.
@@ -130,6 +137,10 @@ func NewTranscriptPane() *TranscriptPane {
 // SetScroller attaches the window-anchor seam. The follow-tail key, a selection
 // move past a window edge, and a lost pinned anchor all drive it.
 func (p *TranscriptPane) SetScroller(s TranscriptScroller) { p.scroller = s }
+
+// SetStyle sets the colour scheme a rendered header applies by entry kind.
+// The zero Style applies no colour.
+func (p *TranscriptPane) SetStyle(s Style) { p.style = s }
 
 // SetGates replaces the quality-gate rows the pane appends after the event
 // window. Gate runs follow the Agent's own work, so they render last. The call
@@ -460,7 +471,7 @@ func RenderTranscript(p *TranscriptPane) string {
 		if !e.IsGate() {
 			prevRun = e.Event.AgentRunID
 		}
-		for _, line := range entryLines(e, i == p.selection, p.Expanded(i)) {
+		for _, line := range entryLines(e, i == p.selection, p.Expanded(i), p.style) {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
@@ -489,8 +500,9 @@ func evictionLine(dropped int) string {
 	return "… earlier events not retained"
 }
 
-// entryLines renders one entry, collapsed or expanded.
-func entryLines(e TranscriptEntry, selected, expanded bool) []string {
+// entryLines renders one entry, collapsed or expanded, through style: the
+// pane's colour scheme by entry kind. The zero Style applies no colour.
+func entryLines(e TranscriptEntry, selected, expanded bool, style Style) []string {
 	cur := " "
 	if selected {
 		cur = ">"
@@ -501,20 +513,21 @@ func entryLines(e TranscriptEntry, selected, expanded bool) []string {
 	glyph := TranscriptGlyph(e.Event)
 	switch e.Event.Type {
 	case eventToolCall:
-		return toolCallLines(e, cur, glyph, expanded)
+		return toolCallLines(e, cur, glyph, expanded, style.Tool)
 	case eventToolResult:
-		return withFirstOutput([]string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName})}, e.Event.ToolOutput)
+		return withFirstOutput([]string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style.Tool)}, e.Event.ToolOutput)
 	case eventTruncation:
-		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)})}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)}, lipgloss.Style{})}
 	default:
-		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)})}
+		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)}, style.Message)}
 	}
 }
 
 // toolCallLines renders a tool call: collapsed to its name plus the first
-// output line of its result, or expanded to the whole call and result.
-func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool) []string {
-	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName})}
+// output line of its result, or expanded to the whole call and result. style
+// colours both the call's and the result's header.
+func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style lipgloss.Style) []string {
+	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style)}
 	if !expanded {
 		if e.Result != nil {
 			lines = withFirstOutput(lines, e.Result.ToolOutput)
@@ -523,7 +536,7 @@ func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool) []string
 	}
 	lines = append(lines, indentedBlock(e.Event.ToolInput)...)
 	if e.Result != nil {
-		lines = append(lines, header(headerParts{cursor: " ", glyph: TranscriptGlyph(*e.Result), axis: e.Result.Subagent, text: e.Result.ToolName}))
+		lines = append(lines, header(headerParts{cursor: " ", glyph: TranscriptGlyph(*e.Result), axis: e.Result.Subagent, text: e.Result.ToolName}, style))
 		lines = append(lines, indentedBlock(e.Result.ToolOutput)...)
 	}
 	return lines
@@ -584,14 +597,17 @@ type headerParts struct {
 }
 
 // header renders one entry's first line: cursor, glyph column, inline axis
-// label, then text. The three review axes interleave in the one pane, so every
-// entry kind carries its label from here: the label is the only separation.
-func header(h headerParts) string {
+// label, then text, through style. The three review axes interleave in the
+// one pane, so every entry kind carries its label from here: the label is the
+// only separation. The zero Style applies no colour, so a headless render
+// stays plain.
+func header(h headerParts, style lipgloss.Style) string {
 	label := ""
 	if h.axis != "" {
 		label = "[" + h.axis + "] "
 	}
-	return strings.TrimRight(fmt.Sprintf("%s %s %s%s", h.cursor, h.glyph, label, h.text), " ")
+	line := strings.TrimRight(fmt.Sprintf("%s %s %s%s", h.cursor, h.glyph, label, h.text), " ")
+	return style.Render(line)
 }
 
 // indented renders one continuation line under an entry's header.
