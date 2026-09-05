@@ -157,10 +157,15 @@ func runWatch(args []string) int {
 			fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 			return 1
 		}
-		if !target.isCoding {
-			fmt.Fprintf(os.Stderr, "forge watch: %s is a planning execution; the planning roster is not available in this build\n", target.id)
+	}
+
+	answerer := resolveAnswerer(ctx, cfg, repoRoot)
+	if !target.isCoding {
+		if err := runPlanningRoster(ctx, store, target.id, answerer); err != nil {
+			fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 			return 1
 		}
+		return 0
 	}
 
 	// One operational Engine instance wires both the cancel and approve
@@ -168,7 +173,6 @@ func runWatch(args []string) int {
 	// separate detached forge child.
 	operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 	retrier := resolveRetrier(*configPath, *dbPath)
-	answerer := resolveAnswerer(ctx, cfg, repoRoot)
 	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, operationalEngine, answerer); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
