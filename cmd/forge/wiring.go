@@ -1115,13 +1115,16 @@ func cloneStringMap(in map[string]string) map[string]string {
 // #248), the way execution and review agents already do.
 //
 // featureID is used as both the execution_id and the issue_id those rows are
-// keyed by. `forge plan` has no single durable execution id spanning its
-// stages (runWayfindingStage opens a planning_executions row, but only when
-// wayfinding actually runs, and spec/ticket-plan generation never sees one),
-// and planning has no repeating "issue" concept the way ticket execution
-// does -- so the Feature is the one stable scope every stage shares, and
-// correlating a Feature's whole planning transcript is a single lookup.
-// FakeBackend records nothing: it never reaches an agent.Agent at all.
+// keyed by: planning has no repeating "issue" concept the way ticket
+// execution does, so the Feature is the one stable scope every stage
+// shares, and correlating a Feature's whole planning transcript is a single
+// lookup. (The Planning Execution runPlan starts before any stage runs --
+// see planengine.Runtime -- has its own durable id, but that id spans one
+// Planning Execution, not the Feature's whole planning history. A run that
+// pauses at a human or approval gate keeps the same execution id across
+// separate `forge plan` invocations, via lease reclaim; transcript
+// correlation still keys on the Feature.) FakeBackend records nothing: it
+// never reaches an agent.Agent at all.
 func buildPlanningBackend(cfg config.Config, store planningagent.TranscriptStore, featureID string) (planningagent.Backend, error) {
 	switch cfg.Agent.Provider {
 	case "fake":

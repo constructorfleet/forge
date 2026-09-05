@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningagent"
+	"github.com/Teagan42/forge/internal/storage"
 )
 
 // chdirTemp changes the working directory to dir for the duration of the
@@ -119,7 +121,7 @@ func TestRunPlan_NoGoal_StopsCleanly(t *testing.T) {
 // ticket plan already on disk, `forge plan` must not regenerate either and
 // must report the pipeline complete.
 func TestRunPlan_SkipsGenerationWhenArtifactsAlreadyApproved(t *testing.T) {
-	dir := t.TempDir()
+	dir := planFixtureRepo(t)
 	featureID := "widget"
 	writeGoalFixture(t, dir, featureID)
 	writeApprovedSpecFixture(t, dir, featureID)
@@ -155,7 +157,7 @@ func TestRunPlan_SkipsGenerationWhenArtifactsAlreadyApproved(t *testing.T) {
 // spec.md blocks `forge plan` from ever generating a ticket plan -- the
 // human gate criterion.
 func TestRunPlan_StopsAtSpecApprovalGate(t *testing.T) {
-	dir := t.TempDir()
+	dir := planFixtureRepo(t)
 	featureID := "widget"
 	writeGoalFixture(t, dir, featureID)
 
@@ -179,7 +181,7 @@ func TestRunPlan_StopsAtSpecApprovalGate(t *testing.T) {
 // bounds the run to the spec stage even when the spec is already approved
 // and a ticket plan could otherwise be generated.
 func TestRunPlan_UntilSpec_StopsEvenWhenSpecApproved(t *testing.T) {
-	dir := t.TempDir()
+	dir := planFixtureRepo(t)
 	featureID := "widget"
 	writeGoalFixture(t, dir, featureID)
 	writeApprovedSpecFixture(t, dir, featureID)
@@ -197,7 +199,7 @@ func TestRunPlan_UntilSpec_StopsEvenWhenSpecApproved(t *testing.T) {
 // ticket-plan.md is reported as awaiting approval rather than being
 // regenerated or silently passed through.
 func TestRunPlan_StopsAtTicketApprovalGate(t *testing.T) {
-	dir := t.TempDir()
+	dir := planFixtureRepo(t)
 	featureID := "widget"
 	writeGoalFixture(t, dir, featureID)
 	writeApprovedSpecFixture(t, dir, featureID)
@@ -237,6 +239,185 @@ func TestRunPlan_InvalidUntilValue_Errors(t *testing.T) {
 func TestRunPlan_MissingFeatureID_Errors(t *testing.T) {
 	if code := runPlan([]string{"--until", "spec"}); code != 1 {
 		t.Fatalf("runPlan with no feature-id = %d, want 1", code)
+	}
+}
+
+// planFixtureRepo builds a temp git repo with a .forge.yaml resolvable
+// git.base, the layout runPlan needs to resolve a base revision without
+// touching a tracker (Tracker.Type is left at "github" but never invoked,
+// since these fixtures always leave wayfinding skipped).
+func planFixtureRepo(t *testing.T) (repoRoot string) {
+	t.Helper()
+	repoRoot, _ = newTempRepo(t)
+	cfgPath := filepath.Join(repoRoot, ".forge.yaml")
+	yaml := "version: 1\ngit:\n  base: main\ntracker:\n  skip_auth_preflight: true\n"
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return repoRoot
+}
+
+func loadLatestPlanningExecution(t *testing.T, dbPath, featureID string) domain.PlanningExecution {
+	t.Helper()
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	execs, err := store.ListPlanningExecutionsByFeature(ctx, featureID)
+	if err != nil {
+		t.Fatalf("ListPlanningExecutionsByFeature: %v", err)
+	}
+	if len(execs) == 0 {
+		t.Fatalf("expected at least one planning execution for feature %s, got none", featureID)
+	}
+	return execs[len(execs)-1]
+}
+
+// TestRunPlan_SpecReviewStage_HasVisibleExecutionRow confirms a
+// planning_executions row exists (issue #470) even when `forge plan`'s only
+// work is spec review -- wayfinding is skipped because spec.md already
+// exists, which previously meant no row was ever created for this stage.
+func TestRunPlan_SpecReviewStage_HasVisibleExecutionRow(t *testing.T) {
+	repoRoot := planFixtureRepo(t)
+	featureID := "widget"
+	writeGoalFixture(t, repoRoot, featureID)
+
+	spec := &planning.Artifact{
+		Kind:     planning.KindSpec,
+		Sections: []planning.Section{{Heading: "Requirements", Body: "REQ-001: do it\n"}},
+	}
+	spec.Revision = planning.ComputeRevision(spec)
+	writeSpecFixture(t, repoRoot, featureID, spec)
+
+	chdirTemp(t, repoRoot)
+	if code := runPlan([]string{featureID}); code != 0 {
+		t.Fatalf("runPlan = %d, want 0", code)
+	}
+
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+	exec := loadLatestPlanningExecution(t, dbPath, featureID)
+	if exec.Status != domain.PlanningStatusNeedsApproval {
+		t.Errorf("planning execution status = %s, want NEEDS_APPROVAL", exec.Status)
+	}
+
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.FeaturePlanningLease(ctx, featureID); err != nil {
+		t.Errorf("expected planning lease to remain held while spec.md awaits approval, got %v", err)
+	}
+}
+
+// TestRunPlan_FullCompletion_MarksExecutionCompleteAndReleasesLease confirms
+// a Planning Execution that runs the whole pipeline to completion is marked
+// COMPLETE (not left ACTIVE forever) and releases its lease, so a second
+// `forge plan` run can start a fresh Planning Execution.
+func TestRunPlan_FullCompletion_MarksExecutionCompleteAndReleasesLease(t *testing.T) {
+	repoRoot := planFixtureRepo(t)
+	featureID := "widget"
+	writeGoalFixture(t, repoRoot, featureID)
+	writeApprovedSpecFixture(t, repoRoot, featureID)
+
+	tp := &planning.Artifact{
+		Kind:     planning.KindTicketPlan,
+		Sections: []planning.Section{{Heading: "Ticket: TKT-001", Body: "### Objective\nDo it.\n"}},
+	}
+	tp.Revision = planning.ComputeRevision(tp)
+	tp.ApprovedRevision = tp.Revision
+	tp.State = "approved"
+	writeTicketPlanFixture(t, repoRoot, featureID, tp)
+
+	chdirTemp(t, repoRoot)
+	if code := runPlan([]string{featureID}); code != 0 {
+		t.Fatalf("runPlan = %d, want 0", code)
+	}
+
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+	exec := loadLatestPlanningExecution(t, dbPath, featureID)
+	if exec.Status != domain.PlanningStatusComplete {
+		t.Errorf("planning execution status = %s, want COMPLETE", exec.Status)
+	}
+
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.FeaturePlanningLease(ctx, featureID); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("expected planning lease released once complete, got %v", err)
+	}
+}
+
+// TestRunPlan_UntilSpec_LeavesExecutionActive confirms a --until-bounded run
+// that stops before the pipeline is actually done leaves the Planning
+// Execution ACTIVE (not COMPLETE) with its lease held, so a follow-up
+// `forge plan` continuing past --until reclaims the same execution instead
+// of starting a new one.
+func TestRunPlan_UntilSpec_LeavesExecutionActive(t *testing.T) {
+	repoRoot := planFixtureRepo(t)
+	featureID := "widget"
+	writeGoalFixture(t, repoRoot, featureID)
+	writeApprovedSpecFixture(t, repoRoot, featureID)
+
+	chdirTemp(t, repoRoot)
+	if code := runPlan([]string{featureID, "--until", "spec"}); code != 0 {
+		t.Fatalf("runPlan = %d, want 0", code)
+	}
+
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+	exec := loadLatestPlanningExecution(t, dbPath, featureID)
+	if exec.Status != domain.PlanningStatusActive {
+		t.Errorf("planning execution status = %s, want ACTIVE", exec.Status)
+	}
+
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.FeaturePlanningLease(ctx, featureID); err != nil {
+		t.Errorf("expected planning lease to remain held after --until spec, got %v", err)
+	}
+}
+
+// TestRunPlan_ErrorMidPipeline_MarksExecutionFailed confirms a hard failure
+// after the Planning Execution has started (a corrupt ticket-plan.md, here)
+// marks the row FAILED rather than leaving it ACTIVE forever with no
+// terminal Status ever recorded (issue #470).
+func TestRunPlan_ErrorMidPipeline_MarksExecutionFailed(t *testing.T) {
+	repoRoot := planFixtureRepo(t)
+	featureID := "widget"
+	writeGoalFixture(t, repoRoot, featureID)
+	writeApprovedSpecFixture(t, repoRoot, featureID)
+	writeTicketPlanFixtureRaw(t, repoRoot, featureID, []byte("not a valid planning artifact\n"))
+
+	chdirTemp(t, repoRoot)
+	if code := runPlan([]string{featureID}); code != 1 {
+		t.Fatalf("runPlan = %d, want 1", code)
+	}
+
+	dbPath := filepath.Join(repoRoot, ".forge", "forge.db")
+	exec := loadLatestPlanningExecution(t, dbPath, featureID)
+	if exec.Status != domain.PlanningStatusFailed {
+		t.Errorf("planning execution status = %s, want FAILED", exec.Status)
+	}
+
+	ctx := context.Background()
+	store, err := openStore(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.FeaturePlanningLease(ctx, featureID); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("expected planning lease released once the execution failed, got %v", err)
 	}
 }
 
