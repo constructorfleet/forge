@@ -231,14 +231,7 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 // terminal bottom. Pure and headless.
 func Render(vm ViewModel) string {
 	above, below := chromeLines(vm)
-	lines := append(above, clippedTranscript(vm)...)
-	lines = append(lines, below...)
-	var b strings.Builder
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteByte('\n')
-	}
-	return b.String()
+	return assembleFrame(above, below, vm.Transcript, vm.Height)
 }
 
 // TranscriptRows returns the rows vm.Height leaves the transcript, after the
@@ -247,14 +240,8 @@ func Render(vm ViewModel) string {
 // the arithmetic. Zero means vm.Height is unset and nothing is clipped. One is
 // the floor: a terminal too short for the chrome must still show the newest row.
 func TranscriptRows(vm ViewModel) int {
-	if vm.Height <= 0 {
-		return 0
-	}
 	above, below := chromeLines(vm)
-	if rows := vm.Height - len(above) - len(below); rows > 1 {
-		return rows
-	}
-	return 1
+	return transcriptRows(vm.Height, above, below)
 }
 
 // chromeLines splits the frame's non-transcript rows into the rows above the
@@ -282,22 +269,50 @@ func chromeLines(vm ViewModel) (above, below []string) {
 	return above, append(below, footerLine(frameKeys(vm)))
 }
 
-// clippedTranscript renders the pane and keeps its last rows alone, so a pane
+// assembleFrame joins the chrome rows above and below the transcript with the
+// transcript itself, clipped to what height leaves. Shared by Render and
+// RenderPlanning so the row order, the clip arithmetic, and the one-row floor
+// cannot drift between the execution and planning views.
+func assembleFrame(above, below []string, transcript *TranscriptPane, height int) string {
+	lines := append(above, clipTranscript(transcript, transcriptRows(height, above, below))...)
+	lines = append(lines, below...)
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// transcriptRows returns the rows height leaves the transcript once above and
+// below are drawn. Zero means height is unset and nothing is clipped. One is
+// the floor: a terminal too short for the chrome must still show the newest
+// row.
+func transcriptRows(height int, above, below []string) int {
+	if height <= 0 {
+		return 0
+	}
+	if rows := height - len(above) - len(below); rows > 1 {
+		return rows
+	}
+	return 1
+}
+
+// clipTranscript renders the pane and keeps its last rows alone, so a pane
 // that draws more rows than its event window suggests cannot push the strip and
 // the footer off the screen. One event can draw several rows (a divider, the
 // eviction marker, a folded result, an expanded block), so the row budget must
 // hold here and not at the event window. A zero budget clips nothing: the
 // runtime sends no size before the first frame.
-func clippedTranscript(vm ViewModel) []string {
-	if vm.Transcript == nil {
+func clipTranscript(transcript *TranscriptPane, rows int) []string {
+	if transcript == nil {
 		return nil
 	}
-	out := RenderTranscript(vm.Transcript)
+	out := RenderTranscript(transcript)
 	if out == "" {
 		return nil
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	rows := TranscriptRows(vm)
 	if rows > 0 && len(lines) > rows {
 		lines = lines[len(lines)-rows:]
 	}
