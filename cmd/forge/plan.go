@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/decisiongraph"
@@ -51,13 +52,17 @@ func runPlan(args []string) int {
 		return code
 	}
 
-	repoRoot, err := os.Getwd()
+	repoRoot, err := discoverRepoRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 		return 1
 	}
 
-	cfg, err := loadConfig(defaultConfigPath)
+	// forge plan has no --config/--db flags to override (unlike execute,
+	// resume, cancel, and retry), so its defaults always resolve against the
+	// discovered repo root rather than the process's own working directory
+	// (issue #576, the same fix issue #459 made for `forge retry`).
+	cfg, err := loadConfig(filepath.Join(repoRoot, defaultConfigPath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 		return 1
@@ -66,7 +71,7 @@ func runPlan(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	store, err := openStore(ctx, defaultDBPath)
+	store, err := openStore(ctx, filepath.Join(repoRoot, defaultDBPath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 		return 1
