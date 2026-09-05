@@ -234,7 +234,7 @@ func (e *Engine) RetryIssue(ctx context.Context, executionID, issueID string) (d
 	if err := e.appendEvent(ctx, executionID, issueID, "issue.retry_requested", map[string]string{}); err != nil {
 		return domain.Issue{}, &RetryStartDeferredError{Err: err}
 	}
-	issue, err = e.resumeIssue(ctx, state.Execution, claim.Issue)
+	issue, err = e.resumeIssue(ctx, state.Execution, claim.Issue, nil)
 	if err != nil {
 		return domain.Issue{}, e.deferredOrStuckResumeError(ctx, executionID, issueID, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
@@ -159,4 +160,23 @@ func Resume(ctx context.Context, store ResumeStore, trk ResumeTracker, execution
 	}
 
 	return ResumeResult{Issue: issue, Resumed: true, Context: resumedCtx}, nil
+}
+
+// BuildResumedFeedback turns a ResumedContext into agent.Feedback so the
+// Agent invocation that follows a NEEDS_INFO resume carries the human's
+// answer, instead of re-running with only the Issue and no knowledge of
+// what was asked or answered (issue 475). One Feedback is produced per new
+// comment, each naming the previous question for context, mirroring
+// review.BuildFeedback's one-Feedback-per-item shape (unlike
+// gate.BuildFeedback, which builds a single Feedback from one Result).
+func BuildResumedFeedback(resumedCtx ResumedContext) []agent.Feedback {
+	feedback := make([]agent.Feedback, 0, len(resumedCtx.NewComments))
+	for _, c := range resumedCtx.NewComments {
+		feedback = append(feedback, agent.Feedback{
+			Source: agent.FeedbackSourceNeedsInfo,
+			Message: fmt.Sprintf("Question: %s\nAnswer (%s): %s",
+				resumedCtx.PreviousQuestion, c.Author, c.Body),
+		})
+	}
+	return feedback
 }

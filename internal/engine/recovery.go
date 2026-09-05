@@ -26,7 +26,7 @@ func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (stora
 	}
 
 	for i, issue := range state.Issues {
-		resumed, err := e.resumeIssue(ctx, state.Execution, issue)
+		resumed, err := e.resumeIssue(ctx, state.Execution, issue, nil)
 		if err != nil {
 			return storage.ExecutionState{}, fmt.Errorf("engine: resume execution %s issue %s: %w", executionID, issue.ID, err)
 		}
@@ -35,7 +35,11 @@ func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (stora
 	return state, nil
 }
 
-func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (_ domain.Issue, retErr error) {
+// feedback, when non-nil, is routed to the Agent invocation that resumes
+// this Issue from READY/CLAIMED/PREPARING — the seam a NEEDS_INFO resume
+// uses to carry the human's answer forward (see resumeNeedsInfoIssue and
+// BuildResumedFeedback). Every other caller passes nil.
+func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, retErr error) {
 	if issue.State.IsTerminal() {
 		return issue, nil
 	}
@@ -71,15 +75,15 @@ func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue d
 
 	switch issue.State {
 	case domain.StateReady:
-		return e.resumeFromReady(ctx, exec, issue, workerBase)
+		return e.resumeFromReady(ctx, exec, issue, workerBase, feedback)
 	case domain.StateClaimed:
 		issue, err = e.transition(ctx, exec.ID, issue.ID, domain.StatePreparing)
 		if err != nil {
 			return domain.Issue{}, err
 		}
-		return e.resumeFromPreparing(ctx, exec, issue, workerBase)
+		return e.resumeFromPreparing(ctx, exec, issue, workerBase, feedback)
 	case domain.StatePreparing:
-		return e.resumeFromPreparing(ctx, exec, issue, workerBase)
+		return e.resumeFromPreparing(ctx, exec, issue, workerBase, feedback)
 	case domain.StateImplementing:
 		return e.resumeFromImplementing(ctx, exec, issue, workerBase)
 	case domain.StateValidating:
@@ -111,9 +115,16 @@ func (e *Engine) resumeNeedsReplanIssue(ctx context.Context, exec domain.Executi
 		}
 		return domain.Issue{}, err
 	}
-	return e.resumeIssue(ctx, exec, resumed)
+	return e.resumeIssue(ctx, exec, resumed, nil)
 }
 
+// resumeNeedsInfoIssue is `forge resume`'s handling of an Issue parked in
+// NEEDS_INFO. Once Resume finds new human input and transitions the Issue
+// to READY, the human's answer (Resume's ResumedContext) must reach the
+// Agent invocation that follows, or the Agent re-runs with no knowledge of
+// what was asked or answered and is likely to ask the same question again
+// (issue 475) — BuildResumedFeedback carries it through resumeIssue as
+// agent.Feedback.
 func (e *Engine) resumeNeedsInfoIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (domain.Issue, error) {
 	resumeTracker, ok := e.NeedsInfoTracker.(ResumeTracker)
 	if !ok {
@@ -126,10 +137,10 @@ func (e *Engine) resumeNeedsInfoIssue(ctx context.Context, exec domain.Execution
 	if !result.Resumed {
 		return result.Issue, nil
 	}
-	return e.resumeIssue(ctx, exec, result.Issue)
+	return e.resumeIssue(ctx, exec, result.Issue, BuildResumedFeedback(result.Context))
 }
 
-func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
+func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string, feedback []agent.Feedback) (domain.Issue, error) {
 	if err := e.Store.ClaimIssue(ctx, exec.ID, issue.ID, workerRef(exec.ID, issue.ID)); err != nil && !errors.Is(err, storage.ErrAlreadyClaimed) {
 		return domain.Issue{}, fmt.Errorf("engine: claim issue %s: %w", issue.ID, err)
 	}
@@ -144,10 +155,10 @@ func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, iss
 	if err != nil {
 		return domain.Issue{}, err
 	}
-	return e.resumeFromPreparing(ctx, exec, issue, workerBase)
+	return e.resumeFromPreparing(ctx, exec, issue, workerBase, feedback)
 }
 
-func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string) (domain.Issue, error) {
+func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string, feedback []agent.Feedback) (domain.Issue, error) {
 	env, err := e.ensureWorkspace(ctx, exec.ID, issue.ID, workerBase)
 	if err != nil {
 		return domain.Issue{}, err
@@ -156,7 +167,7 @@ func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution,
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: compile repository context: %w", err)
 	}
-	issue, implemented, err := e.invokeAgent(ctx, exec.ID, issue.ID, env, repoCtx, issue, nil)
+	issue, implemented, err := e.invokeAgent(ctx, exec.ID, issue.ID, env, repoCtx, issue, feedback)
 	if err != nil {
 		return domain.Issue{}, err
 	}
