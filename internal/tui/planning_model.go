@@ -158,6 +158,7 @@ func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.readTranscript()
 	case tea.WindowSizeMsg:
 		m.winHeight = msg.Height
+		m.winWidth = msg.Width
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		return m, m.applyTranscript(msg)
@@ -260,7 +261,7 @@ func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
 // row budget, mirroring LiveModel.applyTranscriptHeight.
 func (m *PlanningModel) applyTranscriptHeight() {
 	m.vm.Height = m.winHeight
-	m.sizeFeed(PlanningTranscriptRows(m.vm))
+	m.sizeFeed(PlanningTranscriptRows(m.vm), m.winWidth)
 }
 
 // handleTranscriptKey applies the pane keys, mirroring

@@ -112,6 +112,11 @@ type TranscriptPane struct {
 	// forge's real scheme.
 	style Style
 
+	// width is the terminal width in cells RenderTranscript wraps a line to.
+	// Zero applies no wrap: the runtime has not yet reported a terminal size,
+	// which every headless render test relies on.
+	width int
+
 	selection int
 	// expanded holds the selection index that is expanded, or noSelection.
 	// It tracks the index rather than a flag so any selection move resets it.
@@ -141,6 +146,11 @@ func (p *TranscriptPane) SetScroller(s TranscriptScroller) { p.scroller = s }
 // SetStyle sets the colour scheme a rendered header applies by entry kind.
 // The zero Style applies no colour.
 func (p *TranscriptPane) SetStyle(s Style) { p.style = s }
+
+// SetWidth sets the terminal width RenderTranscript wraps a line to, so a
+// line the terminal would itself wrap renders as the several rows it draws.
+// A width of zero or less applies no wrap.
+func (p *TranscriptPane) SetWidth(w int) { p.width = w }
 
 // SetGates replaces the quality-gate rows the pane appends after the event
 // window. Gate runs follow the Agent's own work, so they render last. The call
@@ -453,9 +463,14 @@ func RenderTranscript(p *TranscriptPane) string {
 		return ""
 	}
 	var b strings.Builder
+	writeWrapped := func(line string) {
+		for _, row := range wrapWidth(line, p.width) {
+			b.WriteString(row)
+			b.WriteByte('\n')
+		}
+	}
 	if p.view.Evicted {
-		b.WriteString(evictionLine(p.view.Dropped))
-		b.WriteByte('\n')
+		writeWrapped(evictionLine(p.view.Dropped))
 	}
 	attempts := attemptNumbers(p.view.RunOrder)
 	divide := len(p.view.RunOrder) > 1
@@ -465,15 +480,14 @@ func RenderTranscript(p *TranscriptPane) string {
 		// carries no attempt number and draws no divider rather than a wrong one.
 		if divide && !e.IsGate() && (i == 0 || e.Event.AgentRunID != prevRun) {
 			if n, ok := attempts[e.Event.AgentRunID]; ok {
-				fmt.Fprintf(&b, "── attempt %d ──\n", n)
+				writeWrapped(fmt.Sprintf("── attempt %d ──", n))
 			}
 		}
 		if !e.IsGate() {
 			prevRun = e.Event.AgentRunID
 		}
 		for _, line := range entryLines(e, i == p.selection, p.Expanded(i), p.style) {
-			b.WriteString(line)
-			b.WriteByte('\n')
+			writeWrapped(line)
 		}
 	}
 	return b.String()

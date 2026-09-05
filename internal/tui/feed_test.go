@@ -450,6 +450,43 @@ func TestFeedSetHeightWindowsTheTailer(t *testing.T) {
 	}
 }
 
+// TestFeedSetWidthReachesTheHeldPane proves the feed passes the terminal width
+// to a pane it already holds, so a long line wraps to the rows it draws.
+func TestFeedSetWidthReachesTheHeldPane(t *testing.T) {
+	feed := tui.NewTranscriptFeed(feedFixture())
+	pane, err := feed.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	unwrapped := strings.Count(tui.RenderTranscript(pane), "\n")
+
+	feed.SetWidth(5)
+	if wrapped := strings.Count(tui.RenderTranscript(pane), "\n"); wrapped <= unwrapped {
+		t.Errorf("SetWidth(5) after Poll produced %d lines, want more than the unwrapped %d", wrapped, unwrapped)
+	}
+}
+
+// TestFeedSetWidthBeforePollReachesANewPane proves a width set before a pane
+// exists still reaches the pane ensureIssue builds on the first Poll.
+func TestFeedSetWidthBeforePollReachesANewPane(t *testing.T) {
+	unwidened := tui.NewTranscriptFeed(feedFixture())
+	basePane, err := unwidened.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	unwrapped := strings.Count(tui.RenderTranscript(basePane), "\n")
+
+	widened := tui.NewTranscriptFeed(feedFixture())
+	widened.SetWidth(5)
+	pane, err := widened.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if wrapped := strings.Count(tui.RenderTranscript(pane), "\n"); wrapped <= unwrapped {
+		t.Errorf("a pane built after SetWidth(5) produced %d lines, want more than the unwrapped %d", wrapped, unwrapped)
+	}
+}
+
 // TestFeedSetHeightAfterPollWindowsTheTailer proves a height set after the pane
 // exists reaches the tailer the feed already holds.
 func TestFeedSetHeightAfterPollWindowsTheTailer(t *testing.T) {

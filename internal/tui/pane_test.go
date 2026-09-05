@@ -72,6 +72,56 @@ func TestPaneCollapsedToolCall(t *testing.T) {
 	}
 }
 
+// TestRenderTranscriptWrapsLongLines proves a line longer than the pane's set
+// width renders as the several rows the terminal would itself wrap it into,
+// so a row-based clip downstream counts it correctly.
+func TestRenderTranscriptWrapsLongLines(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, strings.Repeat("x", 30)),
+	}})
+
+	unwrapped := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(unwrapped) != 1 {
+		t.Fatalf("render with no width set has %d lines, want 1:\n%s", len(unwrapped), strings.Join(unwrapped, "\n"))
+	}
+
+	pane.SetWidth(10)
+	wrapped := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(wrapped) < 3 {
+		t.Fatalf("render at width 10 has %d lines, want at least 3:\n%s", len(wrapped), strings.Join(wrapped, "\n"))
+	}
+	for _, l := range wrapped {
+		if len([]rune(l)) > 10 {
+			t.Errorf("wrapped line %q is %d runes, want at most 10", l, len([]rune(l)))
+		}
+	}
+}
+
+// TestRenderTranscriptWrapsStyledLines proves a styled header line (the
+// default colour scheme renders a tool call in Faint) that is longer than the
+// pane's set width still wraps into rows of at most the set width in visible
+// cells, with every SGR escape sequence intact, rather than splitting inside
+// an escape code.
+func TestRenderTranscriptWrapsStyledLines(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetStyle(tui.DefaultStyle())
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", strings.Repeat("x", 30), "ls"),
+	}})
+	pane.SetWidth(10)
+
+	wrapped := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(wrapped) < 3 {
+		t.Fatalf("styled render at width 10 has %d lines, want at least 3:\n%s", len(wrapped), strings.Join(wrapped, "\n"))
+	}
+	for _, l := range wrapped {
+		if strings.Count(l, "\x1b[") != strings.Count(l, "m") {
+			t.Errorf("wrapped styled line %q contains an unterminated escape sequence", l)
+		}
+	}
+}
+
 // TestPaneExpandShowsCallAndResult proves expansion reveals the full call
 // input and the full result output.
 func TestPaneExpandShowsCallAndResult(t *testing.T) {

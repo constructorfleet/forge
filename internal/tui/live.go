@@ -153,6 +153,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.readTranscript()
 	case tea.WindowSizeMsg:
 		m.winHeight = msg.Height
+		m.winWidth = msg.Width
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		return m, m.applyTranscript(msg)
@@ -461,7 +462,7 @@ func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
 // when a feed is attached.
 func (m *LiveModel) applyTranscriptHeight() {
 	m.vm.Height = m.winHeight
-	m.sizeFeed(TranscriptRows(m.vm))
+	m.sizeFeed(TranscriptRows(m.vm), m.winWidth)
 }
 
 // SetFeed attaches the transcript feed each poll drives. It is the pane's one
