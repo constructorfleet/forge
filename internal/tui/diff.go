@@ -73,18 +73,28 @@ func WriteDiffArtifact(dir, diff string) (string, error) {
 // notice: an observer never aborts on a failed artifact view.
 type diffClosedMsg struct{ err error }
 
-// OpenDiffInPager writes diff under dir and opens it in $PAGER.
-// tea.ExecProcess suspends the TUI while the pager owns the terminal, and
-// resumes on exit. The artifact file is removed after the pager exits.
-func OpenDiffInPager(dir, diff string) tea.Cmd {
-	path, err := WriteDiffArtifact(dir, diff)
+// openArtifactInPager writes text under dir and opens it in $PAGER, delivering
+// onClose's message when the pager exits. tea.ExecProcess suspends the TUI
+// while the pager owns the terminal, and resumes on exit. The artifact file is
+// removed after the pager exits. Shared by every control that defers a stored
+// artifact to $PAGER (the diff key and the approve key), so both read $PAGER
+// and clean up their temp file the same way.
+func openArtifactInPager(dir, text string, onClose func(err error) tea.Msg) tea.Cmd {
+	path, err := WriteDiffArtifact(dir, text)
 	if err != nil {
-		return func() tea.Msg { return diffClosedMsg{err: err} }
+		return func() tea.Msg { return onClose(err) }
 	}
 	argv := PagerCommand(os.Getenv, path)
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // $PAGER is the operator's own choice.
 	return tea.ExecProcess(cmd, func(runErr error) tea.Msg {
 		_ = os.Remove(path)
-		return diffClosedMsg{err: runErr}
+		return onClose(runErr)
 	})
+}
+
+// OpenDiffInPager writes diff under dir and opens it in $PAGER.
+// tea.ExecProcess suspends the TUI while the pager owns the terminal, and
+// resumes on exit. The artifact file is removed after the pager exits.
+func OpenDiffInPager(dir, diff string) tea.Cmd {
+	return openArtifactInPager(dir, diff, func(err error) tea.Msg { return diffClosedMsg{err: err} })
 }

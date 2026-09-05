@@ -163,9 +163,12 @@ func runWatch(args []string) int {
 		}
 	}
 
-	canceller := buildOperationalEngine(store, cfg, repoRoot)
+	// One operational Engine instance wires both the cancel and approve
+	// controls: it satisfies both narrow seams. The retry control uses a
+	// separate detached forge child.
+	operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 	retrier := resolveRetrier(*configPath, *dbPath)
-	if err := runLiveRoster(ctx, store, target.id, canceller, retrier); err != nil {
+	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, operationalEngine); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}

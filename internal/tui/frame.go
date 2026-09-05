@@ -190,11 +190,17 @@ func IsCancelLegal(state domain.IssueState) bool { return !state.IsTerminal() }
 // definition and cannot drift apart.
 func IsRetryLegal(state domain.IssueState) bool { return state == domain.StateFailed }
 
+// IsApproveLegal reports whether approve is legal for a Worker in state: only
+// while parked on NEEDS_REPLAN. LegalKeys and the approve key handler both
+// call this, so the footer's advertised key and the handler's accepted key
+// share one definition and cannot drift apart.
+func IsApproveLegal(state domain.IssueState) bool { return state == domain.StateNeedsReplan }
+
 // LegalKeys returns the keys legal for a Worker in state. Derived here so the
 // footer always mirrors the rows' own view-model and can never advertise a
 // state-illegal key: q is always legal (quit never stops work), c (cancel)
 // from any non-terminal state, r (retry) from FAILED, a (answer) while parked
-// on NEEDS_INFO.
+// on NEEDS_INFO, p (approve) while parked on NEEDS_REPLAN.
 func LegalKeys(state domain.IssueState) []KeyBinding {
 	keys := []KeyBinding{{Key: "q", Label: "quit"}}
 	if IsCancelLegal(state) {
@@ -205,6 +211,9 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	}
 	if state == domain.StateNeedsInfo {
 		keys = append(keys, KeyBinding{Key: "a", Label: "answer"})
+	}
+	if IsApproveLegal(state) {
+		keys = append(keys, KeyBinding{Key: "p", Label: "approve"})
 	}
 	return keys
 }

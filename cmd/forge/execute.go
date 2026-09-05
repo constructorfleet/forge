@@ -103,9 +103,12 @@ func runExecute(args []string) int {
 	}
 
 	if useTUI {
-		canceller := buildOperationalEngine(store, cfg, repoRoot)
+		// One operational Engine instance wires both the cancel and approve
+		// controls: it satisfies both narrow seams. The retry control uses a
+		// separate detached forge child.
+		operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 		retrier := resolveRetrier(*configPath, *dbPath)
-		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, canceller, retrier)
+		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, operationalEngine, retrier, operationalEngine)
 	}
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)
@@ -116,12 +119,12 @@ func runExecute(args []string) int {
 // in the background. The roster is the observer: quitting it early (q/Ctrl+C)
 // never cancels the run; when Scheduler.Run returns, the roster is stopped and
 // the final per-Issue states are printed.
-func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, canceller tui.Canceller, retrier tui.Retrier) int {
+func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver) int {
 	rosterCtx, cancelRoster := context.WithCancel(context.Background())
 	defer cancelRoster()
 	rosterDone := make(chan error, 1)
 	go func() {
-		rosterDone <- runLiveRoster(rosterCtx, store, executionID, canceller, retrier)
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID, canceller, retrier, approver)
 	}()
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)

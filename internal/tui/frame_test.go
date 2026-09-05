@@ -107,6 +107,8 @@ func TestLegalKeys(t *testing.T) {
 		{domain.StateFailed, []string{"[q] quit", "[r] retry"}},
 		// a (answer) is legal only while parked on a NEEDS_INFO decision.
 		{domain.StateNeedsInfo, []string{"[q] quit", "[c] cancel", "[a] answer"}},
+		// p (approve) is legal only while parked on NEEDS_REPLAN.
+		{domain.StateNeedsReplan, []string{"[q] quit", "[c] cancel", "[p] approve"}},
 		// Terminal states carry only q: no further transitions.
 		{domain.StateDone, []string{"[q] quit"}},
 		{domain.StateCancelled, []string{"[q] quit"}},

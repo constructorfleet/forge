@@ -22,19 +22,20 @@ type liveStore interface {
 // quits. Bubble Tea runs in raw mode and catches panics by default, restoring
 // the terminal, so an observer crash cannot leave the shell crosstalk-broken.
 // The program takes its own context so the caller can cancel the read loop
-// without touching the store. canceller wires the cancel key to the
-// in-process operational Engine (ADR 0031); a nil canceller leaves the
-// control present but inert, and the key explains itself instead of quietly
-// doing nothing. retrier wires the retry key to a detached forge child
-// (ADR 0031, issue #503); a nil retrier leaves that control present but
-// inert too.
-func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier) error {
+// without touching the store. canceller wires the cancel key and approver
+// wires the approve key to the in-process operational Engine (ADR 0031); a
+// nil canceller or approver leaves the control present but inert, and the key
+// explains itself instead of quietly doing nothing. retrier wires the retry
+// key to a detached forge child (ADR 0031, issue #503); a nil retrier leaves
+// that control present but inert too.
+func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver) error {
 	roster := tui.NewRoster(store, time.Now)
 	model := tui.NewLiveModel(roster, executionID, 0)
 	model.SetContext(ctx)
 	model.SetFeed(tui.NewTranscriptFeed(store))
 	model.Canceller = canceller
 	model.Retrier = retrier
+	model.Approver = approver
 
 	// A quit key removes the diff artifacts itself; this covers every other
 	// exit path (cancellation, signal, panic).
