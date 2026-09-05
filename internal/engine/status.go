@@ -91,7 +91,7 @@ type StatusStore interface {
 	EventsByExecution(ctx context.Context, executionID string) ([]storage.Event, error)
 	AgentRunsByExecution(ctx context.Context, executionID string) ([]storage.AgentRun, error)
 	GateRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.GateRun, error)
-	ReviewRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.ReviewRun, error)
+	ReviewRunsByIssueWithoutDiff(ctx context.Context, executionID, issueID string) ([]storage.ReviewRun, error)
 	CIRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.CIRun, error)
 	WorkerClaim(ctx context.Context, executionID, issueID string) (storage.WorkerClaim, error)
 	PullRequestsByIssue(ctx context.Context, executionID, issueID string) ([]storage.PullRequest, error)
@@ -199,7 +199,7 @@ func buildIssueStatuses(ctx context.Context, store StatusStore, state storage.Ex
 		if err != nil {
 			return nil, fmt.Errorf("engine: load gate runs for issue %s: %w", issue.ID, err)
 		}
-		reviews, err := store.ReviewRunsByIssue(ctx, state.Execution.ID, issue.ID)
+		reviews, err := store.ReviewRunsByIssueWithoutDiff(ctx, state.Execution.ID, issue.ID)
 		if err != nil {
 			return nil, fmt.Errorf("engine: load review runs for issue %s: %w", issue.ID, err)
 		}
@@ -300,7 +300,7 @@ func buildTelemetry(ctx context.Context, store StatusStore, state storage.Execut
 		if err != nil {
 			return TelemetryReport{}, fmt.Errorf("engine: load gate runs for issue %s: %w", issue.ID, err)
 		}
-		reviewRuns, err := store.ReviewRunsByIssue(ctx, state.Execution.ID, issue.ID)
+		reviewRuns, err := store.ReviewRunsByIssueWithoutDiff(ctx, state.Execution.ID, issue.ID)
 		if err != nil {
 			return TelemetryReport{}, fmt.Errorf("engine: load review runs for issue %s: %w", issue.ID, err)
 		}

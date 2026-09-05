@@ -137,9 +137,9 @@ func TestExecute_ReviewApproved_AdvancesToCommitting(t *testing.T) {
 	}
 
 	// The Review run was persisted.
-	runs, err := te.store.ReviewRunsByIssue(ctx, result.ExecutionID, "30")
+	runs, err := te.store.ReviewRunsByIssueWithoutDiff(ctx, result.ExecutionID, "30")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 1 || runs[0].Verdict != "APPROVED" || runs[0].Summary != "ship it" {
 		t.Fatalf("persisted review runs = %+v, want one APPROVED run", runs)
@@ -211,9 +211,9 @@ func TestExecute_ReviewChangesRequired_PersistsFindingsAndExhaustsToNeedsInfo(t 
 		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
 	}
 
-	runs, err := te.store.ReviewRunsByIssue(ctx, result.ExecutionID, "31")
+	runs, err := te.store.ReviewRunsByIssueWithoutDiff(ctx, result.ExecutionID, "31")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 1 {
 		t.Fatalf("got %d review runs, want 1", len(runs))

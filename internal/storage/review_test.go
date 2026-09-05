@@ -62,22 +62,33 @@ func TestRecordReviewRun_ApprovedPersistsWithNoFindings(t *testing.T) {
 		t.Fatalf("RecordReviewRun: %v", err)
 	}
 
-	runs, err := store.ReviewRunsByIssue(ctx, "exec-review", "issue-review")
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review", "issue-review")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 1 {
 		t.Fatalf("got %d review runs, want 1", len(runs))
 	}
 	got := runs[0]
-	if got.Verdict != "APPROVED" || got.Summary != "looks good" || got.Diff != "diff --git a b" {
-		t.Errorf("got = %+v, want Verdict APPROVED Summary %q Diff %q", got, "looks good", "diff --git a b")
+	if got.Verdict != "APPROVED" || got.Summary != "looks good" {
+		t.Errorf("got = %+v, want Verdict APPROVED Summary %q", got, "looks good")
+	}
+	if got.Diff != "" {
+		t.Errorf("Diff = %q, want empty from ReviewRunsByIssueWithoutDiff", got.Diff)
 	}
 	if len(got.Findings) != 0 {
 		t.Errorf("got %d findings, want 0", len(got.Findings))
 	}
 	if !got.StartedAt.Equal(started) || !got.FinishedAt.Equal(finished) {
 		t.Errorf("StartedAt/FinishedAt = %v/%v, want %v/%v", got.StartedAt, got.FinishedAt, started, finished)
+	}
+
+	diff, err := store.LatestReviewDiff(ctx, "exec-review", "issue-review")
+	if err != nil {
+		t.Fatalf("LatestReviewDiff: %v", err)
+	}
+	if diff != "diff --git a b" {
+		t.Errorf("LatestReviewDiff = %q, want %q", diff, "diff --git a b")
 	}
 }
 
@@ -102,9 +113,9 @@ func TestRecordReviewRun_ChangesRequiredPersistsFindings(t *testing.T) {
 		t.Fatalf("RecordReviewRun: %v", err)
 	}
 
-	runs, err := store.ReviewRunsByIssue(ctx, "exec-review-2", "issue-review-2")
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review-2", "issue-review-2")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 1 {
 		t.Fatalf("got %d review runs, want 1", len(runs))
@@ -171,8 +182,8 @@ func TestRecordReviewRun_AppendsReviewRunEvent(t *testing.T) {
 // storage acceptance criterion (widened by issue #182 to cover
 // assurances): a ReviewRun's per-axis raw envelopes (coverage, token usage,
 // raw findings+assurances JSON) round-trip through
-// RecordReviewRun/ReviewRunsByIssue exactly as given, so a past Review is
-// fully reconstructable.
+// RecordReviewRun/ReviewRunsByIssueWithoutDiff exactly as given, so a past
+// Review is fully reconstructable.
 func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -214,9 +225,9 @@ func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
 		t.Fatalf("RecordReviewRun: %v", err)
 	}
 
-	runs, err := store.ReviewRunsByIssue(ctx, "exec-review-5", "issue-review-5")
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review-5", "issue-review-5")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 1 {
 		t.Fatalf("got %d review runs, want 1", len(runs))
@@ -268,14 +279,14 @@ func TestRecordReviewRun_PersistsAxisEnvelopesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestReviewRunsByIssue_ReturnsEmptyForIssueWithNoReviewRuns(t *testing.T) {
+func TestReviewRunsByIssueWithoutDiff_ReturnsEmptyForIssueWithNoReviewRuns(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	seedIssueForReviewRun(t, store, "exec-review-4", "issue-review-4")
 
-	runs, err := store.ReviewRunsByIssue(ctx, "exec-review-4", "issue-review-4")
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review-4", "issue-review-4")
 	if err != nil {
-		t.Fatalf("ReviewRunsByIssue: %v", err)
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
 	}
 	if len(runs) != 0 {
 		t.Errorf("got %d review runs, want 0", len(runs))
@@ -364,5 +375,129 @@ func TestLatestReviewVerdicts_OmitsIssuesWithNoReviewRun(t *testing.T) {
 	}
 	if _, ok := got["issue-unreviewed"]; ok {
 		t.Errorf("got %+v, want no entry for an unreviewed issue", got)
+	}
+}
+
+// TestReviewRunsByIssueWithoutDiff_OmitsDiffButKeepsEverythingElse proves the
+// caller-selected variant (issue #540) drops only the diff blob: verdict,
+// summary, findings, and axis envelopes all still round-trip.
+func TestReviewRunsByIssueWithoutDiff_OmitsDiffButKeepsEverythingElse(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForReviewRun(t, store, "exec-review-8", "issue-review-8")
+
+	run := storage.ReviewRun{
+		ExecutionID: "exec-review-8",
+		IssueID:     "issue-review-8",
+		Verdict:     "CHANGES_REQUIRED",
+		Summary:     "one blocking issue",
+		Diff:        "diff --git a b",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Findings: []storage.ReviewFinding{
+			{Severity: "ERROR", File: "main.go", Line: 42, Message: "unhandled error"},
+		},
+		Envelopes: []storage.ReviewAxisEnvelope{
+			{Axis: "bugs", Ran: true, RawEnvelope: `{"findings":[],"assurances":[]}`},
+		},
+	}
+	if err := store.RecordReviewRun(ctx, run); err != nil {
+		t.Fatalf("RecordReviewRun: %v", err)
+	}
+
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review-8", "issue-review-8")
+	if err != nil {
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d review runs, want 1", len(runs))
+	}
+	got := runs[0]
+	if got.Diff != "" {
+		t.Errorf("Diff = %q, want empty", got.Diff)
+	}
+	if got.Verdict != "CHANGES_REQUIRED" || got.Summary != "one blocking issue" {
+		t.Errorf("got = %+v, want Verdict CHANGES_REQUIRED Summary %q", got, "one blocking issue")
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Message != "unhandled error" {
+		t.Errorf("Findings = %+v, want one finding with Message %q", got.Findings, "unhandled error")
+	}
+	if len(got.Envelopes) != 1 || got.Envelopes[0].Axis != "bugs" {
+		t.Errorf("Envelopes = %+v, want one envelope with Axis bugs", got.Envelopes)
+	}
+}
+
+// TestReviewRunsByIssueWithoutDiff_GroupsFindingsAndEnvelopesPerRun proves that scanning
+// a joined result set attributes each Finding and each ReviewAxisEnvelope to
+// its own ReviewRun and no other, even when runs carry different counts of
+// each — guarding the join-based scan against cross-run leakage.
+func TestReviewRunsByIssueWithoutDiff_GroupsFindingsAndEnvelopesPerRun(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForReviewRun(t, store, "exec-review-9", "issue-review-9")
+
+	first := storage.ReviewRun{
+		ExecutionID: "exec-review-9",
+		IssueID:     "issue-review-9",
+		Verdict:     "CHANGES_REQUIRED",
+		Summary:     "first pass",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Findings: []storage.ReviewFinding{
+			{Severity: "ERROR", File: "a.go", Line: 1, Message: "first finding one"},
+			{Severity: "WARNING", File: "b.go", Line: 2, Message: "first finding two"},
+		},
+		Envelopes: []storage.ReviewAxisEnvelope{
+			{Axis: "bugs", Ran: true, RawEnvelope: "first bugs envelope"},
+		},
+	}
+	if err := store.RecordReviewRun(ctx, first); err != nil {
+		t.Fatalf("RecordReviewRun first: %v", err)
+	}
+
+	second := storage.ReviewRun{
+		ExecutionID: "exec-review-9",
+		IssueID:     "issue-review-9",
+		Verdict:     "APPROVED",
+		Summary:     "second pass",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Findings:    nil,
+		Envelopes: []storage.ReviewAxisEnvelope{
+			{Axis: "bugs", Ran: true, RawEnvelope: "second bugs envelope"},
+			{Axis: "quality", Ran: true, RawEnvelope: "second quality envelope"},
+			{Axis: "docs", Ran: false, Reason: "unrecoverable"},
+		},
+	}
+	if err := store.RecordReviewRun(ctx, second); err != nil {
+		t.Fatalf("RecordReviewRun second: %v", err)
+	}
+
+	runs, err := store.ReviewRunsByIssueWithoutDiff(ctx, "exec-review-9", "issue-review-9")
+	if err != nil {
+		t.Fatalf("ReviewRunsByIssueWithoutDiff: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d review runs, want 2", len(runs))
+	}
+
+	if len(runs[0].Findings) != 2 || len(runs[0].Envelopes) != 1 {
+		t.Fatalf("runs[0] Findings=%d Envelopes=%d, want 2 and 1: %+v", len(runs[0].Findings), len(runs[0].Envelopes), runs[0])
+	}
+	if runs[0].Findings[0].Message != "first finding one" || runs[0].Findings[1].Message != "first finding two" {
+		t.Errorf("runs[0].Findings = %+v, want ordered first finding one/two", runs[0].Findings)
+	}
+	if runs[0].Envelopes[0].RawEnvelope != "first bugs envelope" {
+		t.Errorf("runs[0].Envelopes[0].RawEnvelope = %q, want %q", runs[0].Envelopes[0].RawEnvelope, "first bugs envelope")
+	}
+
+	if len(runs[1].Findings) != 0 || len(runs[1].Envelopes) != 3 {
+		t.Fatalf("runs[1] Findings=%d Envelopes=%d, want 0 and 3: %+v", len(runs[1].Findings), len(runs[1].Envelopes), runs[1])
+	}
+	wantAxes := []string{"bugs", "quality", "docs"}
+	for i, axis := range wantAxes {
+		if runs[1].Envelopes[i].Axis != axis {
+			t.Errorf("runs[1].Envelopes[%d].Axis = %q, want %q", i, runs[1].Envelopes[i].Axis, axis)
+		}
 	}
 }
