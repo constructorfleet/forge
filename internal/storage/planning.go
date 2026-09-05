@@ -38,10 +38,17 @@ func (e *PlanningLeaseConflictError) Unwrap() error { return ErrPlanningLeaseHel
 // owning process ID abandoned-lease recovery uses to distinguish a live
 // `forge plan` process from an orphaned one after a crash or termination —
 // the planning analogue of WorkerClaim.
+//
+// OwnerToken identifies the owning process itself, so a recycled pid does
+// not look like the same live owner (issue 557). It is empty for leases
+// claimed before migration 0032 added the column, or when the process
+// identity lookup fails; callers then fall back to a pid liveness test,
+// mirroring WorkerClaim.OwnerToken.
 type PlanningLease struct {
 	FeatureID   string
 	ExecutionID string
 	OwnerPID    int
+	OwnerToken  string
 	ClaimedAt   time.Time
 }
 
@@ -179,13 +186,13 @@ func (s *SQLiteStore) ClaimFeaturePlanningLease(ctx context.Context, featureID, 
 // Returns ErrNotFound if no active lease exists.
 func (s *SQLiteStore) FeaturePlanningLease(ctx context.Context, featureID string) (PlanningLease, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT feature_id, execution_id, owner_pid, claimed_at
+		SELECT feature_id, execution_id, owner_pid, owner_token, claimed_at
 		FROM feature_planning_leases
 		WHERE feature_id = ?`,
 		featureID,
 	)
 	var lease PlanningLease
-	if err := row.Scan(&lease.FeatureID, &lease.ExecutionID, &lease.OwnerPID, &lease.ClaimedAt); err != nil {
+	if err := row.Scan(&lease.FeatureID, &lease.ExecutionID, &lease.OwnerPID, &lease.OwnerToken, &lease.ClaimedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PlanningLease{}, fmt.Errorf("storage: planning lease for feature %s: %w", featureID, ErrNotFound)
 		}
@@ -195,12 +202,17 @@ func (s *SQLiteStore) FeaturePlanningLease(ctx context.Context, featureID string
 	return lease, nil
 }
 
-// UpdatePlanningLeaseOwner records the OS process ID currently owning the
-// active planning lease for featureID.
-func (s *SQLiteStore) UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int) error {
+// UpdatePlanningLeaseOwner records the OS process ID and process identity
+// token currently owning the active planning lease for featureID. It writes
+// both together, including an empty ownerToken. The pid and the token must
+// describe one process: a new pid beside the previous owner's token fails
+// the identity test and makes the new, live owner look dead. An empty token
+// means "identity unknown", which planengine's liveness check then answers
+// with the pid test alone — the planning analogue of UpdateWorkerOwner.
+func (s *SQLiteStore) UpdatePlanningLeaseOwner(ctx context.Context, featureID string, ownerPID int, ownerToken string) error {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE feature_planning_leases SET owner_pid = ? WHERE feature_id = ?`,
-		ownerPID, featureID,
+		UPDATE feature_planning_leases SET owner_pid = ?, owner_token = ? WHERE feature_id = ?`,
+		ownerPID, ownerToken, featureID,
 	)
 	if err != nil {
 		return fmt.Errorf("storage: update planning lease owner for feature %s: %w", featureID, err)
