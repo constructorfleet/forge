@@ -156,9 +156,10 @@ type WorkflowPolicy struct {
 type FeedbackSource string
 
 const (
-	FeedbackSourceGate   FeedbackSource = "GATE"
-	FeedbackSourceReview FeedbackSource = "REVIEW"
-	FeedbackSourceCI     FeedbackSource = "CI"
+	FeedbackSourceGate      FeedbackSource = "GATE"
+	FeedbackSourceReview    FeedbackSource = "REVIEW"
+	FeedbackSourceCI        FeedbackSource = "CI"
+	FeedbackSourceNeedsInfo FeedbackSource = "NEEDS_INFO"
 )
 
 // Feedback is one bounded diagnostic routed back to the Agent for a repair

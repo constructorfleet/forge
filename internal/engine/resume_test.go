@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,6 +231,67 @@ func TestResume_NoNewComment_StaysNeedsInfo(t *testing.T) {
 	}
 	if issue.State != domain.StateNeedsInfo {
 		t.Fatalf("persisted state = %s, want still NEEDS_INFO", issue.State)
+	}
+}
+
+// TestResumeExecution_NeedsInfoResumed_PassesHumanAnswerAsFeedback is issue
+// 475's fix: once Resume finds new human input and transitions an Issue
+// NEEDS_INFO -> READY, ResumeExecution's re-invocation of the Agent must
+// carry the human's answer (the resumed context's previous question and new
+// comments) as agent.Feedback, not nil, so the Agent does not re-ask the
+// same question.
+func TestResumeExecution_NeedsInfoResumed_PassesHumanAnswerAsFeedback(t *testing.T) {
+	eng, _, trk, fake, base := newNeedsInfoTestEngine(t, map[string]domain.Issue{
+		"7": {ID: "7"},
+	})
+	fake.ProgramResult("7", agent.AgentResult{
+		Status: agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{
+			Question: "which config flag?",
+		},
+	})
+	fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented})
+
+	ctx := context.Background()
+	result, err := eng.Execute(ctx, "7", base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateNeedsInfo {
+		t.Fatalf("state = %s, want NEEDS_INFO", result.Issue.State)
+	}
+
+	trk.AddHumanComment("7", "alice", "use FORGE_FOO", time.Now().Add(time.Hour))
+
+	// ResumeExecution alone drives the whole NEEDS_INFO -> READY -> Agent
+	// re-invocation path, mirroring `forge resume`'s real call (cmd/forge
+	// calls only ResumeExecution; it does not call Resume itself first).
+	if _, err := eng.ResumeExecution(ctx, result.ExecutionID); err != nil {
+		t.Fatalf("ResumeExecution: %v", err)
+	}
+
+	invocations := fake.Invocations()
+	if len(invocations) < 2 {
+		t.Fatalf("len(invocations) = %d, want at least 2 (original + resumed)", len(invocations))
+	}
+	last := invocations[len(invocations)-1]
+	if len(last.Feedback) == 0 {
+		t.Fatal("resumed invocation's Feedback is empty, want the human's answer")
+	}
+	var sawQuestion, sawAnswer bool
+	for _, fb := range last.Feedback {
+		if strings.Contains(fb.Message, "which config flag?") {
+			sawQuestion = true
+		}
+		if strings.Contains(fb.Message, "use FORGE_FOO") {
+			sawAnswer = true
+		}
+	}
+	if !sawQuestion {
+		t.Errorf("Feedback = %+v, want a message referencing the previous question", last.Feedback)
+	}
+	if !sawAnswer {
+		t.Errorf("Feedback = %+v, want a message containing the human's answer", last.Feedback)
 	}
 }
 

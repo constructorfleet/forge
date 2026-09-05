@@ -776,10 +776,12 @@ type Store interface {
 // ResumedAt/ResumedContext are populated once `forge resume` detects new
 // human input and moves the Issue back to READY — ResumedContext is the
 // JSON-encoded focused context (original Issue + previous question + only
-// the new comments). It is currently write-only: no ticket yet re-drives a
-// resumed Issue through Execute, so this is a forward seam for a future
-// re-execution path (tickets 21/24 territory) rather than something read
-// back today.
+// the new comments). The persisted column is audit data: the engine does
+// not read it back. Instead, resumeNeedsInfoIssue passes the same context,
+// still held in memory as ResumeResult.Context, straight to
+// BuildResumedFeedback, which carries the human's answer to the next Agent
+// invocation as agent.Feedback (see internal/engine/resume.go and issue
+// 475).
 type NeedsInfoCheckpoint struct {
 	ExecutionID     string
 	IssueID         string
