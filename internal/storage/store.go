@@ -392,6 +392,16 @@ type Store interface {
 	// returns to FAILED without a claim, which is what a fresh retry wants.
 	AbortRetry(ctx context.Context, executionID, issueID string, budget domain.RetryBudget) error
 
+	// ClaimCancel cancels one Issue as a single transaction: it CASes the
+	// Issue from `from` to CANCELLED, optionally releases its Worker claim
+	// (releaseClaim), and appends the transition Event — all guarded by the
+	// compare-and-set on `from`. A concurrent write that moves the Issue off
+	// `from` first therefore cannot be silently overwritten: this call
+	// instead returns a *CancelClaimConflictError (which wraps
+	// ErrConcurrentModification) naming the state it found, with no write
+	// applied. See engine.CancelExecution for releaseClaim's use.
+	ClaimCancel(ctx context.Context, executionID, issueID string, from domain.IssueState, releaseClaim bool) (domain.Issue, error)
+
 	// UpdateRetryBudget persists budget's current used-counters (gate,
 	// review, CI, provider limit) for issueID within executionID; the
 	// configured limits are immutable after CreateIssue and are not touched.
