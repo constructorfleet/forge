@@ -182,7 +182,7 @@ launch mode. [#447]
 | Control | Mechanism | Notes |
 |---|---|---|
 | **Cancel** | In-process: `CancelExecution` on an operational Engine (store writes + PID syscalls) | Legal with no live orchestrator; cancel-after-crash is the most valuable case. Depends on #457. Acknowledged pending-until-observed; `WaitForProcessExit` polls ≤5s |
-| **Retry** | Detached `forge` child, both entrypoints | `RetryIssue` ends in `resumeIssue` — workspace setup, rebase, coding agent, repair loop, gates, commit, PR (`agent.timeout` defaults to 20m). One behaviour beats one that changes with launch mode |
+| **Retry** | Detached `forge` child, both entrypoints | `RetryIssue` ends in `resumeIssue` — workspace setup, rebase, coding agent, repair loop, gates, commit, PR (`agent.idle_timeout` defaults to 20m for a CLI provider). One behaviour beats one that changes with launch mode |
 | **Resume-after-answering** | Detached `forge` child | Same shape as retry; ships agent + repair + CI wait |
 | **Approve** | In-process tracker write; reads artifact via `$PAGER` | Store-only write; pairs with `$EDITOR` as one suspend-and-return mechanic |
 | **Answer `NEEDS_INFO` / Decision** | In-process tracker POST | See below |

@@ -1061,18 +1061,18 @@ func (e *Engine) continueAgent(ctx context.Context, executionID, issueID string,
 }
 
 // agentDeadlineMultiplier sets the engine's own belt-and-braces deadline for
-// one Agent invocation as a multiple of Config.Agent.Timeout
-// (constructorfleet/forge#467). #455 bounds a wedged, output-free run inside
+// one Agent invocation as a multiple of Config.Agent.EffectiveTimeout()
+// (constructorfleet/forge#467, field split by #668). #455 bounds a wedged, output-free run inside
 // each Adapter's own Execute loop, but a hang outside that loop — in a
-// future Adapter that forgets to plumb Timeout through, or any other path
-// that reaches env.Agent().Execute without its own internal bound — stays
-// unbounded. This deadline catches that gap. It does not cover Workspace
-// setup, which runs before this call and stays unbounded by this change.
-// The quality-gate phase gets its own, separate deadline: see
-// qualityDeadlineMultiplier (constructorfleet/forge#669). It stays a
-// strict multiple, not equal to Timeout, so it never pre-empts an
-// Adapter's own idle timeout on a run
-// that is still making progress.
+// future Adapter that forgets to plumb IdleTimeout or RequestTimeout
+// through, or any other path that reaches env.Agent().Execute without its
+// own internal bound — stays unbounded. This deadline catches that gap. It
+// does not cover Workspace setup, which runs before this call and stays
+// unbounded by this change. The quality-gate phase gets its own, separate
+// deadline: see qualityDeadlineMultiplier (constructorfleet/forge#669). It
+// stays a strict multiple, not equal to EffectiveTimeout, so it never
+// pre-empts an Adapter's own idle timeout (CLI providers) or whole-request
+// bound (HTTP providers) on a run that is still making progress.
 const agentDeadlineMultiplier = 3
 
 // qualityDeadlineMultiplier sets the engine's own belt-and-braces deadline
@@ -1136,7 +1136,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	}
 	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now, func() { e.touchWorkerActivity(executionID, issueID) })
 
-	agentCtx, cancel := context.WithTimeout(ctx, agentDeadlineMultiplier*e.Config.Agent.Timeout)
+	agentCtx, cancel := context.WithTimeout(ctx, agentDeadlineMultiplier*e.Config.Agent.EffectiveTimeout())
 	defer cancel()
 	result, err := env.Agent().Execute(agentCtx, req)
 	req.Transcript.(*persistingTranscriptSink).Close()

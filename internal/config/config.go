@@ -245,8 +245,9 @@ type QualityConfig struct {
 	// Timeout bounds one Quality Gate command run (constructorfleet/forge#669)
 	// so a hung gate subprocess (e.g. a stalled `go test ./...`) cannot block
 	// a Worker forever, the same structural guarantee issue #467 gives one
-	// Agent invocation. It is a distinct field from Agent.Timeout, and the
-	// engine derives its own multiplier from it (qualityDeadlineMultiplier)
+	// Agent invocation. It is a distinct field from Agent.IdleTimeout and
+	// Agent.RequestTimeout, and the engine derives its own multiplier from
+	// it (qualityDeadlineMultiplier)
 	// rather than reusing agentDeadlineMultiplier: a Quality Gate command runs
 	// through env.Execute, not env.Agent().Execute, and its expected duration
 	// has no link to how long one Agent turn takes. Must be positive; see
@@ -341,20 +342,32 @@ type AgentConfig struct {
 	// boundary (CONTEXT.md "Workspace") the Agent already runs inside.
 	PermissionMode AgentPermissionMode `yaml:"permission_mode"`
 
-	// Timeout bounds one Agent invocation (issue 33, "Agent runs need a
-	// timeout") so a wedged subprocess (observed: `claude -p` stalled at 0%
-	// CPU for 14+ minutes) cannot block a Worker, and the whole `forge
-	// execute` process, forever. It is a liveness timeout: the deadline
-	// resets on every line of subprocess output, so a long-but-progressing
-	// run is never killed by it — only a genuine stall trips it. Must be
-	// positive; see Default for the shipped value.
-	//
-	// It applies to every provider. The CLI providers (claude-code, codex,
-	// opencode, pi) get the liveness timeout above. The HTTP providers
-	// (openai-responses, openai-chat-completions) read one complete,
-	// non-streaming response, which has no output stream to reset a
-	// deadline against, so there the value bounds the whole request.
-	Timeout time.Duration `yaml:"timeout"`
+	// IdleTimeout bounds one Agent invocation for a CLI provider
+	// (claude-code, codex, opencode, pi) (issue 33, "Agent runs need a
+	// timeout"; split from the former single agent.timeout key by issue
+	// 668) so a wedged subprocess (observed: `claude -p` stalled at 0% CPU
+	// for 14+ minutes) cannot block a Worker, and the whole `forge execute`
+	// process, forever. It is a liveness timeout: the deadline resets on
+	// every line of subprocess output, so a long-but-progressing run is
+	// never killed by it — only a genuine stall trips it. Must be positive;
+	// see Default for the shipped value. buildAgent (cmd/forge/wiring.go)
+	// resolves this field through EffectiveTimeout into a CLI Adapter's
+	// Timeout field; an HTTP provider gets RequestTimeout instead — see
+	// EffectiveTimeout.
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+
+	// RequestTimeout bounds one Agent invocation for an HTTP provider
+	// (openai-responses, openai-chat-completions) (issue 668, split from
+	// the former single agent.timeout key). An HTTP provider reads one
+	// complete, non-streaming response, which has no output stream to
+	// reset a deadline against the way a CLI provider's IdleTimeout does,
+	// so this value bounds the whole request instead of resetting on
+	// progress. Must be positive; see Default for the shipped value.
+	// buildAgent (cmd/forge/wiring.go) resolves this field through
+	// EffectiveTimeout into an HTTP Adapter's Timeout field; a CLI provider
+	// gets IdleTimeout instead. Use EffectiveTimeout to read whichever
+	// field applies to Provider without duplicating that selection.
+	RequestTimeout time.Duration `yaml:"request_timeout"`
 
 	// EnvPassthrough lists additional environment variable NAMES to forward
 	// to a CLI Agent subprocess, on top of each Adapter's base allowlist and
@@ -368,6 +381,36 @@ type AgentConfig struct {
 	// Each entry is a name, not an assignment: Forge reads the value from
 	// its own environment. An entry that names an unset variable is skipped.
 	EnvPassthrough []string `yaml:"env_passthrough"`
+}
+
+// httpAgentProviders names the Agent providers that bound one invocation by
+// RequestTimeout (a whole-request cap) rather than IdleTimeout (a
+// liveness cap reset by subprocess output) — see EffectiveTimeout. This is
+// the one place that names the CLI-vs-HTTP split; IsHTTPProvider is the
+// only reader outside this file, so a new HTTP provider needs one edit here.
+var httpAgentProviders = map[string]bool{
+	"openai-responses":        true,
+	"openai-chat-completions": true,
+}
+
+// IsHTTPProvider reports whether provider bounds one invocation by a
+// whole-request timeout (RequestTimeout) rather than a liveness timeout
+// (IdleTimeout). buildAgent (cmd/forge/wiring.go) calls this to keep its
+// Adapter-construction switch classifying providers the same way
+// EffectiveTimeout does — see wiring_test.go's
+// TestBuildAgent_MatchesIsHTTPProvider.
+func IsHTTPProvider(provider string) bool {
+	return httpAgentProviders[provider]
+}
+
+// EffectiveTimeout returns whichever of IdleTimeout or RequestTimeout
+// applies to Provider, so a caller does not need its own copy of the
+// CLI-vs-HTTP provider split (issue 668).
+func (a AgentConfig) EffectiveTimeout() time.Duration {
+	if IsHTTPProvider(a.Provider) {
+		return a.RequestTimeout
+	}
+	return a.IdleTimeout
 }
 
 // AgentPermissionMode selects the Claude Code CLI's `--permission-mode`
@@ -598,13 +641,21 @@ type Config struct {
 // placeholder rendering.
 const defaultCommitMessageTemplate = "{type}: {title}\n\n{body}\n\nRefs #{issue}"
 
-// defaultAgentTimeout is AgentConfig.Timeout's default: generous enough for
-// a genuinely long-running (but progressing) agent turn, since Timeout is a
-// liveness bound reset by every line of output rather than a flat cap on
-// total run length, while still bounding how long a truly wedged subprocess
-// (issue 33 was discovered from one stalled 14+ minutes with no output) can
-// block a Worker before Forge kills it.
-const defaultAgentTimeout = 20 * time.Minute
+// defaultAgentIdleTimeout is AgentConfig.IdleTimeout's default: generous
+// enough for a genuinely long-running (but progressing) CLI-provider agent
+// turn, since IdleTimeout is a liveness bound reset by every line of output
+// rather than a flat cap on total run length, while still bounding how long
+// a truly wedged subprocess (issue 33 was discovered from one stalled 14+
+// minutes with no output) can block a Worker before Forge kills it.
+const defaultAgentIdleTimeout = 20 * time.Minute
+
+// defaultAgentRequestTimeout is AgentConfig.RequestTimeout's default. Unlike
+// IdleTimeout, it bounds a whole non-streaming HTTP request with no
+// progress signal to reset a deadline against, so it needs to be generous
+// enough for a genuinely slow model response, but does not need
+// IdleTimeout's 20-minute allowance for a long-but-progressing run — issue
+// 668 ("agent.timeout still carries two meanings under one key").
+const defaultAgentRequestTimeout = 5 * time.Minute
 
 // defaultQualityGateTimeout is QualityConfig.Timeout's default: generous
 // enough for a typical, genuinely-running gate command (e.g. `go test
@@ -695,7 +746,8 @@ func unresolvedDefault() Config {
 		Agent: AgentConfig{
 			Provider:       "claude-code",
 			PermissionMode: PermissionModeBypassPermissions,
-			Timeout:        defaultAgentTimeout,
+			IdleTimeout:    defaultAgentIdleTimeout,
+			RequestTimeout: defaultAgentRequestTimeout,
 		},
 		StatusReflection: StatusReflectionConfig{
 			Enabled:         false,

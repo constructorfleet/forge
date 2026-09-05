@@ -195,7 +195,7 @@ type Adapter struct {
 	// clicommon.IdleTimeout), so a long-but-progressing run is never
 	// killed — only a genuine stall (no output at all for Timeout) trips
 	// it. Zero disables the timeout, matching pre-ticket-33 behavior;
-	// production wiring always sets this from config.Config.Agent.Timeout,
+	// production wiring always sets this from config.Config.Agent.IdleTimeout,
 	// which defaults to a nonzero value.
 	Timeout time.Duration
 }

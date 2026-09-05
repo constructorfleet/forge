@@ -216,7 +216,8 @@ execution:
 		t.Errorf("Retry = %+v, want default %+v", cfg.Retry, def.Retry)
 	}
 	if cfg.Agent.Provider != def.Agent.Provider || cfg.Agent.PermissionMode != def.Agent.PermissionMode ||
-		cfg.Agent.Timeout != def.Agent.Timeout || !slices.Equal(cfg.Agent.EnvPassthrough, def.Agent.EnvPassthrough) {
+		cfg.Agent.IdleTimeout != def.Agent.IdleTimeout || cfg.Agent.RequestTimeout != def.Agent.RequestTimeout ||
+		!slices.Equal(cfg.Agent.EnvPassthrough, def.Agent.EnvPassthrough) {
 		t.Errorf("Agent = %+v, want default %+v", cfg.Agent, def.Agent)
 	}
 }
@@ -610,33 +611,85 @@ func TestLoad_AgentPermissionModeOverride(t *testing.T) {
 	}
 }
 
-func TestDefault_AgentTimeoutIsPositive(t *testing.T) {
-	if Default().Agent.Timeout <= 0 {
-		t.Fatalf("Default().Agent.Timeout = %v, want > 0", Default().Agent.Timeout)
+func TestDefault_AgentIdleTimeoutIsPositive(t *testing.T) {
+	if Default().Agent.IdleTimeout <= 0 {
+		t.Fatalf("Default().Agent.IdleTimeout = %v, want > 0", Default().Agent.IdleTimeout)
 	}
 }
 
-func TestLoad_AgentTimeoutParsesDuration(t *testing.T) {
-	path := writeTemp(t, "agent:\n  timeout: 5m\n")
+func TestDefault_AgentRequestTimeoutIsPositive(t *testing.T) {
+	if Default().Agent.RequestTimeout <= 0 {
+		t.Fatalf("Default().Agent.RequestTimeout = %v, want > 0", Default().Agent.RequestTimeout)
+	}
+}
+
+func TestLoad_AgentIdleTimeoutParsesDuration(t *testing.T) {
+	path := writeTemp(t, "agent:\n  idle_timeout: 5m\n")
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Agent.Timeout != 5*time.Minute {
-		t.Fatalf("Agent.Timeout = %v, want 5m", cfg.Agent.Timeout)
+	if cfg.Agent.IdleTimeout != 5*time.Minute {
+		t.Fatalf("Agent.IdleTimeout = %v, want 5m", cfg.Agent.IdleTimeout)
 	}
 }
 
-func TestLoad_InvalidAgentTimeout(t *testing.T) {
-	path := writeTemp(t, "agent:\n  timeout: 0s\n")
+func TestLoad_AgentRequestTimeoutParsesDuration(t *testing.T) {
+	path := writeTemp(t, "agent:\n  request_timeout: 3m\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agent.RequestTimeout != 3*time.Minute {
+		t.Fatalf("Agent.RequestTimeout = %v, want 3m", cfg.Agent.RequestTimeout)
+	}
+}
+
+func TestLoad_InvalidAgentIdleTimeout(t *testing.T) {
+	path := writeTemp(t, "agent:\n  idle_timeout: 0s\n")
 
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("Load() error = nil, want validation error")
 	}
-	if !strings.Contains(err.Error(), "agent.timeout") {
-		t.Errorf("Load() error = %v, want it to identify agent.timeout", err)
+	if !strings.Contains(err.Error(), "agent.idle_timeout") {
+		t.Errorf("Load() error = %v, want it to identify agent.idle_timeout", err)
+	}
+}
+
+func TestLoad_InvalidAgentRequestTimeout(t *testing.T) {
+	path := writeTemp(t, "agent:\n  request_timeout: 0s\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.request_timeout") {
+		t.Errorf("Load() error = %v, want it to identify agent.request_timeout", err)
+	}
+}
+
+func TestAgentConfig_EffectiveTimeout(t *testing.T) {
+	cfg := AgentConfig{IdleTimeout: 20 * time.Minute, RequestTimeout: 5 * time.Minute}
+
+	cases := []struct {
+		provider string
+		want     time.Duration
+	}{
+		{"claude-code", 20 * time.Minute},
+		{"codex", 20 * time.Minute},
+		{"opencode", 20 * time.Minute},
+		{"pi", 20 * time.Minute},
+		{"openai-responses", 5 * time.Minute},
+		{"openai-chat-completions", 5 * time.Minute},
+	}
+	for _, tc := range cases {
+		cfg.Provider = tc.provider
+		if got := cfg.EffectiveTimeout(); got != tc.want {
+			t.Errorf("EffectiveTimeout() for provider %q = %v, want %v", tc.provider, got, tc.want)
+		}
 	}
 }
 

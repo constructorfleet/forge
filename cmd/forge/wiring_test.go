@@ -885,10 +885,14 @@ func TestBuildAgent_SelectsByProvider(t *testing.T) {
 	}
 }
 
-// TestBuildAgent_PlumbsTimeoutToEveryProvider asserts agent.timeout is not
-// silently ignored for the non-default providers (issue #455).
+// TestBuildAgent_PlumbsTimeoutToEveryProvider asserts agent.idle_timeout and
+// agent.request_timeout are not silently ignored for the non-default
+// providers (issue #455), and that each provider receives the field
+// matching its own semantics (issue #668): a CLI provider gets
+// IdleTimeout, an HTTP provider gets RequestTimeout.
 func TestBuildAgent_PlumbsTimeoutToEveryProvider(t *testing.T) {
-	const want = 7 * time.Minute
+	const wantIdle = 7 * time.Minute
+	const wantRequest = 3 * time.Minute
 	// timeoutOf reads the Timeout field every real Adapter now carries.
 	timeoutOf := func(ag agent.Agent) time.Duration {
 		field := reflect.ValueOf(ag).Elem().FieldByName("Timeout")
@@ -897,21 +901,69 @@ func TestBuildAgent_PlumbsTimeoutToEveryProvider(t *testing.T) {
 		}
 		return time.Duration(field.Int())
 	}
-	providers := []string{
-		"claude-code", "", "codex", "opencode", "pi",
-		"openai-responses", "openai-chat-completions",
+	cases := []struct {
+		provider string
+		want     time.Duration
+	}{
+		{"claude-code", wantIdle},
+		{"", wantIdle},
+		{"codex", wantIdle},
+		{"opencode", wantIdle},
+		{"pi", wantIdle},
+		{"openai-responses", wantRequest},
+		{"openai-chat-completions", wantRequest},
 	}
-	for _, provider := range providers {
-		t.Run(provider, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
 			cfg := config.Default()
-			cfg.Agent.Provider = provider
-			cfg.Agent.Timeout = want
+			cfg.Agent.Provider = tc.provider
+			cfg.Agent.IdleTimeout = wantIdle
+			cfg.Agent.RequestTimeout = wantRequest
 			ag, err := buildAgent(cfg)
 			if err != nil {
 				t.Fatalf("buildAgent: %v", err)
 			}
+			if got := timeoutOf(ag); got != tc.want {
+				t.Fatalf("buildAgent(%q).Timeout = %s, want %s", tc.provider, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildAgent_MatchesIsHTTPProvider ties buildAgent's provider switch to
+// config.IsHTTPProvider so the two classifications cannot silently drift
+// apart (issue #668 review feedback): for every provider buildAgent
+// recognizes, the Timeout it plumbs into the Adapter must be RequestTimeout
+// exactly when config.IsHTTPProvider says so, and IdleTimeout otherwise. A
+// provider added to one of buildAgent's cases or config's httpAgentProviders
+// map, but not the other, fails this test.
+func TestBuildAgent_MatchesIsHTTPProvider(t *testing.T) {
+	const wantIdle = 7 * time.Minute
+	const wantRequest = 3 * time.Minute
+	timeoutOf := func(ag agent.Agent) time.Duration {
+		field := reflect.ValueOf(ag).Elem().FieldByName("Timeout")
+		if !field.IsValid() {
+			t.Fatalf("%T has no Timeout field", ag)
+		}
+		return time.Duration(field.Int())
+	}
+	providers := []string{"claude-code", "codex", "opencode", "pi", "openai-responses", "openai-chat-completions"}
+	for _, provider := range providers {
+		t.Run(provider, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Agent.Provider = provider
+			cfg.Agent.IdleTimeout = wantIdle
+			cfg.Agent.RequestTimeout = wantRequest
+			ag, err := buildAgent(cfg)
+			if err != nil {
+				t.Fatalf("buildAgent: %v", err)
+			}
+			want := wantIdle
+			if config.IsHTTPProvider(provider) {
+				want = wantRequest
+			}
 			if got := timeoutOf(ag); got != want {
-				t.Fatalf("buildAgent(%q).Timeout = %s, want %s", provider, got, want)
+				t.Errorf("buildAgent(%q).Timeout = %s, want %s (IsHTTPProvider=%v)", provider, got, want, config.IsHTTPProvider(provider))
 			}
 		})
 	}

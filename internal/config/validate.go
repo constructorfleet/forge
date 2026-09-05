@@ -245,8 +245,12 @@ func validate(cfg Config) error {
 			"unsupported permission mode; supported: default, acceptEdits, bypassPermissions, plan"))
 	}
 
-	if cfg.Agent.Timeout <= 0 {
-		errs = append(errs, fieldErr("agent.timeout", fmt.Sprint(cfg.Agent.Timeout), "must be > 0"))
+	if cfg.Agent.IdleTimeout <= 0 {
+		errs = append(errs, fieldErr("agent.idle_timeout", fmt.Sprint(cfg.Agent.IdleTimeout), "must be > 0"))
+	}
+
+	if cfg.Agent.RequestTimeout <= 0 {
+		errs = append(errs, fieldErr("agent.request_timeout", fmt.Sprint(cfg.Agent.RequestTimeout), "must be > 0"))
 	}
 
 	for _, name := range cfg.Agent.EnvPassthrough {
