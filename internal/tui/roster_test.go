@@ -27,6 +27,9 @@ type fakeRosterStore struct {
 	// runReads counts LatestReviewDiff calls, so a test can prove a poll pass
 	// never reads the diff blobs.
 	runReads int
+	// blockDiff holds LatestReviewDiff until it closes, so a test can prove a
+	// slow diff read never blocks the update goroutine.
+	blockDiff chan struct{}
 
 	// checkpoints holds the replan checkpoint per Issue, for the approve key's
 	// on-request read (see approve_test.go).
@@ -69,6 +72,9 @@ func (f *fakeRosterStore) LatestReviewOutcome(_ context.Context, _, issueID stri
 
 func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string) (string, error) {
 	f.runReads++
+	if f.blockDiff != nil {
+		<-f.blockDiff
+	}
 	runs := f.reviews[issueID]
 	if len(runs) == 0 {
 		return "", nil
