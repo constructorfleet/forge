@@ -155,10 +155,34 @@ func TestRender(t *testing.T) {
 		"      pending  #1         Write tests\n" +
 		"> * • working  #2         Add roster frame\n" +
 		"IMPLEMENTING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict —\n" +
-		"[q] quit [c] cancel [j/k] select\n"
+		"[q] quit [c] cancel [j/k] switch worker\n"
 
 	if got := tui.Render(vm); got != want {
 		t.Fatalf("Render mismatch.\n--- got ---\n%s--- want ---\n%s", got, want)
+	}
+}
+
+// TestRenderAdvertisesSwitchKeyWithSeveralWorkers proves the footer tells the
+// operator j/k switch between Workers once there is more than one row to
+// switch to: the roster key exists but must not clutter a single-row footer.
+func TestRenderAdvertisesSwitchKeyWithSeveralWorkers(t *testing.T) {
+	vm := tui.ViewModel{
+		Selection: 0,
+		Workers: []tui.WorkerRow{
+			{IssueID: "#1", Title: "a", State: domain.StateImplementing},
+			{IssueID: "#2", Title: "b", State: domain.StateImplementing},
+		},
+	}
+	if got := tui.Render(vm); !strings.Contains(got, "[j/k] switch worker") {
+		t.Fatalf("footer omits the switch-worker key with several rows:\n%s", got)
+	}
+
+	solo := tui.ViewModel{
+		Selection: 0,
+		Workers:   []tui.WorkerRow{{IssueID: "#1", Title: "a", State: domain.StateImplementing}},
+	}
+	if got := tui.Render(solo); strings.Contains(got, "switch worker") {
+		t.Fatalf("footer advertises switch-worker with only one row:\n%s", got)
 	}
 }
 

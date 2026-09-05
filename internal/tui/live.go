@@ -155,7 +155,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.winHeight = msg.Height
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
-		m.applyTranscript(msg)
+		return m, m.applyTranscript(msg)
 	case tea.KeyPressMsg:
 		key := uv.Key(msg.Key())
 		// Any key press answers the last action notice, so it clears here.
@@ -182,13 +182,10 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.MatchString("a") && m.vm.Focus == PaneRoster {
 			return m, m.openSelectedAnswer()
 		}
-		if key.MatchString("j", "down") && m.vm.Focus == PaneRoster {
-			m.moveSelection(1)
-			return m, m.readTranscript()
-		}
-		if key.MatchString("k", "up") && m.vm.Focus == PaneRoster {
-			m.moveSelection(-1)
-			return m, m.readTranscript()
+		if m.vm.Focus == PaneRoster {
+			if cmd, moved := m.moveRosterSelection(key); moved {
+				return m, cmd
+			}
 		}
 		m.handleTranscriptKey(key)
 	case diffNoticeMsg:
@@ -280,7 +277,17 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 	vm.ActionNotice = m.vm.ActionNotice
 	vm.TranscriptNotice = m.vm.TranscriptNotice
-	vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
+	// The refresh also keeps the operator's chosen Worker selected, clamped to
+	// the new row count: a fresh ViewModel's Selection is always the zero
+	// value, and copying it over would silently snap the pane back to the
+	// first row on every poll.
+	vm.Selection = m.vm.Selection
+	if last := len(vm.Workers) - 1; vm.Selection > last {
+		vm.Selection = last
+	}
+	if vm.Selection < 0 {
+		vm.Selection = 0
+	}
 	m.vm = vm
 }
 
@@ -373,6 +380,39 @@ func (m *LiveModel) handleTranscriptKey(key uv.Key) {
 	m.transcriptController.handleTranscriptKey(key, m.vm.Transcript, &m.vm.Focus)
 }
 
+// moveRosterSelection applies j/k and up/down against the roster selection,
+// so the operator can switch between the Workers of several Issues running
+// concurrently under one Execution instead of being stuck on the first row.
+// The move clamps at the first and last row rather than wrapping. It returns
+// whether the key was a roster movement key at all, so an unrelated key still
+// falls through to the transcript pane's own handler.
+func (m *LiveModel) moveRosterSelection(key uv.Key) (tea.Cmd, bool) {
+	var delta int
+	switch {
+	case key.MatchString("j", "down"):
+		delta = 1
+	case key.MatchString("k", "up"):
+		delta = -1
+	default:
+		return nil, false
+	}
+	next := m.vm.Selection + delta
+	if next < 0 {
+		next = 0
+	}
+	if last := len(m.vm.Workers) - 1; next > last {
+		next = last
+	}
+	if next == m.vm.Selection {
+		return nil, true
+	}
+	m.vm.Selection = next
+	// The selection just moved to another Issue: the transcript pane must
+	// follow at once rather than waiting up to a full poll interval to show
+	// the newly selected Worker's own context.
+	return m.readTranscript(), true
+}
+
 // readTranscript returns the command that reads the selected Worker's
 // transcript. The read runs in the command, off the update goroutine, so a slow
 // store cannot delay a key press. No selected Worker detaches the pane at once
@@ -401,9 +441,16 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 
 // applyTranscript commits a finished read and attaches the pane it produces. A
 // read failure keeps the pane the feed already holds and reports the failure in
-// TranscriptNotice, so a transient failure never blanks the transcript.
-func (m *LiveModel) applyTranscript(msg transcriptReadMsg) {
-	m.transcriptController.applyTranscript(msg, &m.vm.TranscriptNotice, &m.vm.Transcript)
+// TranscriptNotice, so a transient failure never blanks the transcript. A read
+// for a Worker the operator has since moved away from is dropped instead: it
+// starts a fresh read for the Worker now selected, so a stale read can never
+// paint the wrong Worker's transcript into the pane.
+func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
+	want := ""
+	if row, ok := selectedWorker(m.vm); ok {
+		want = row.IssueID
+	}
+	return m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript row

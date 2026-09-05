@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 
+	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -80,19 +81,29 @@ func (t *transcriptController) handleTranscriptKey(key uv.Key, transcript *Trans
 	}
 }
 
-// applyTranscript commits a finished read into notice and pane. A read
-// failure keeps the pane the feed already holds and reports the failure in
-// notice, so a transient failure never blanks the transcript.
-func (t *transcriptController) applyTranscript(msg transcriptReadMsg, notice *string, pane **TranscriptPane) {
+// applyTranscript commits a finished read into notice and pane, provided it
+// still answers wantIssueID. When the read is stale — the operator moved the
+// selection to another Worker while this read was still in flight — it runs
+// retry instead, so a fresh read starts for the Worker now selected rather
+// than let an older Worker's transcript land in the pane. A read failure
+// keeps the pane the feed already holds and reports the failure in notice, so
+// a transient failure never blanks the transcript. LiveModel and
+// PlanningModel share this one retry-on-stale path so a future change to it
+// cannot drift between the two call sites.
+func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantIssueID string, notice *string, pane **TranscriptPane, retry func() tea.Cmd) tea.Cmd {
 	if t.feed == nil || msg.feed != t.feed {
-		return
+		return nil
 	}
 	t.reading = false
+	if msg.read.IssueID() != wantIssueID {
+		return retry()
+	}
 	p := t.feed.Apply(msg.read)
 	*notice = msg.read.Err()
 	if p != nil {
 		*pane = p
 	}
+	return nil
 }
 
 // sizeFeed sizes the tailer's event window from the transcript row budget.

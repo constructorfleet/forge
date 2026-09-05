@@ -160,7 +160,7 @@ func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.winHeight = msg.Height
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
-		m.applyTranscript(msg)
+		return m, m.applyTranscript(msg)
 	case tea.KeyPressMsg:
 		key := uv.Key(msg.Key())
 		m.vm.ActionNotice = ""
@@ -249,8 +249,11 @@ func (m *PlanningModel) readTranscript() tea.Cmd {
 }
 
 // applyTranscript commits a finished read, mirroring LiveModel.applyTranscript.
-func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) {
-	m.transcriptController.applyTranscript(msg, &m.vm.TranscriptNotice, &m.vm.Transcript)
+// The Feature's transcript is read under its own FeatureID as both the
+// Execution and the Issue, so the read a Feature ever gets back always
+// answers that same FeatureID: it is never stale.
+func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
+	return m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 }
 
 // applyTranscriptHeight sizes the tailer's event window from the transcript

@@ -35,6 +35,11 @@ type fakeRosterStore struct {
 	// needsInfoCheckpoints holds the needs-info checkpoint per Issue, for the
 	// answer key's on-request read (see answer_test.go).
 	needsInfoCheckpoints map[string]storage.NeedsInfoCheckpoint
+
+	// agentRuns holds the AgentRuns per Issue, so the roster's attempt count
+	// can be proven to derive from the same source the transcript pane
+	// numbers its "attempt N" divider from.
+	agentRuns map[string][]storage.AgentRun
 }
 
 func (f *fakeRosterStore) GetReplanCheckpoint(_ context.Context, _, issueID string) (storage.ReplanCheckpoint, error) {
@@ -69,6 +74,10 @@ func (f *fakeRosterStore) LatestReviewDiff(_ context.Context, _, issueID string)
 		return "", nil
 	}
 	return runs[len(runs)-1].Diff, nil
+}
+
+func (f *fakeRosterStore) AgentRunsByIssue(_ context.Context, _, issueID string) ([]storage.AgentRun, error) {
+	return f.agentRuns[issueID], nil
 }
 
 func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
@@ -179,6 +188,42 @@ func TestRosterFetchBuildsVMFromStoreAndClock(t *testing.T) {
 	}
 }
 
+// TestRosterFetchAttemptMatchesAgentRunCount proves the roster's "attempt N"
+// counts the Issue's recorded AgentRuns — the same count the transcript
+// pane's own "── attempt N ──" divider numbers from — rather than a rolled-up
+// retry-budget failure tally that can drift out of step with it (e.g. a
+// lost-execution recovery restarts the Agent, adding an AgentRun, without
+// recording any gate/review/CI failure).
+func TestRosterFetchAttemptMatchesAgentRunCount(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{
+					ID: "#1", Title: "Write tests", State: domain.StateImplementing,
+					// No recorded failure at all, yet a lost-execution recovery
+					// already restarted the Agent twice: three AgentRuns exist.
+					RetryBudget: mustRetryBudget(domain.RetryLimits{Gate: 3}, 0, 0, 0, 0),
+				},
+			},
+		},
+		agentRuns: map[string][]storage.AgentRun{
+			"#1": {{ID: 1, IssueID: "#1"}, {ID: 2, IssueID: "#1"}, {ID: 3, IssueID: "#1"}},
+		},
+	}
+	r := tui.NewRoster(store, func() time.Time { return now })
+
+	vm, err := r.Fetch(context.Background(), "ex-1", now)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got := vm.Workers[0].Attempt; got != 3 {
+		t.Errorf("Attempt = %d, want 3 (three recorded AgentRuns, matching the transcript's own attempt divider), got budget failures alone", got)
+	}
+}
+
 // TestRosterFetchDerivesLiveBadgeFromClock proves DeriveLiveness renders the
 // injected clock's heartbeat age against the 15s stale window.
 func TestRosterFetchDerivesLiveBadgeFromClock(t *testing.T) {
@@ -243,6 +288,10 @@ func TestRosterFetchAwaitsMissingExecution(t *testing.T) {
 
 type missingExecutionRosterStore struct{}
 
+func (missingExecutionRosterStore) AgentRunsByIssue(context.Context, string, string) ([]storage.AgentRun, error) {
+	return nil, nil
+}
+
 func (missingExecutionRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
 	return storage.ExecutionState{}, storage.ErrNotFound
 }
@@ -269,6 +318,10 @@ func (missingExecutionRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, 
 
 type failingLoadRosterStore struct {
 	fake *fakeRosterStore
+}
+
+func (f *failingLoadRosterStore) AgentRunsByIssue(context.Context, string, string) ([]storage.AgentRun, error) {
+	return nil, nil
 }
 
 func (f *failingLoadRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {

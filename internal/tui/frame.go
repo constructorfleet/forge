@@ -348,9 +348,9 @@ func frameKeys(vm ViewModel) []KeyBinding {
 			keys = append(keys, KeyBinding{Key: "d", Label: "diff"})
 		}
 		if len(vm.Workers) > 1 {
-			// The move key has nowhere to go with one row, so it appears
-			// only where a sequential run holds more than one Issue.
-			keys = append(keys, KeyBinding{Key: "j/k", Label: "select"})
+			// The switch key moves between concurrently running Workers, so it
+			// appears only where there is more than one row to switch to.
+			keys = append(keys, KeyBinding{Key: "j/k", Label: "switch worker"})
 		}
 		return keys
 	}
