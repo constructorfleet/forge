@@ -505,6 +505,116 @@ func TestLiveModelFeedDetachesPaneWithoutSelection(t *testing.T) {
 	}
 }
 
+// twoIssueLiveFixture builds a live model over two Issues: the first DONE
+// (a finished sequential run), the second FAILED (an active run awaiting
+// retry). It reproduces the sequential-execute shape where one Execution
+// carries several Issues, so a test can prove the roster selection can
+// reach either one.
+func twoIssueLiveFixture(t *testing.T, now time.Time) (*tui.LiveModel, *fakeRosterStore) {
+	t.Helper()
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues: []domain.Issue{
+				{ID: "#1", Title: "First run", State: domain.StateDone, StateChangedAt: now.Add(-time.Minute)},
+				{ID: "#2", Title: "Second run", State: domain.StateFailed, StateChangedAt: now.Add(-time.Second)},
+			},
+		},
+	}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	m := tui.NewLiveModel(roster, "ex-1", time.Millisecond)
+	nextPollTick(t, m)
+	return m, store
+}
+
+// TestLiveModelDownKeyMovesRosterSelection proves j/down moves the roster
+// selection onto the next row, so the operator is not pinned to the first
+// Issue once it reaches DONE.
+func TestLiveModelDownKeyMovesRosterSelection(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := twoIssueLiveFixture(t, now)
+
+	if got := m.View().Content; !strings.Contains(got, "DONE") {
+		t.Fatalf("selection did not start on the first row:\n%s", got)
+	}
+
+	got := press(t, m, "j")
+	if !strings.Contains(got, "FAILED") {
+		t.Errorf("j did not move the selection to the second row:\n%s", got)
+	}
+	if !strings.Contains(got, "[r] retry") {
+		t.Errorf("footer omits the second row's legal key after the move:\n%s", got)
+	}
+}
+
+// TestLiveModelUpKeyMovesRosterSelectionBack proves k/up moves the selection
+// back toward the first row.
+func TestLiveModelUpKeyMovesRosterSelectionBack(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := twoIssueLiveFixture(t, now)
+	press(t, m, "j")
+
+	got := press(t, m, "k")
+	if !strings.Contains(got, "DONE") {
+		t.Errorf("k did not move the selection back to the first row:\n%s", got)
+	}
+}
+
+// TestLiveModelRosterSelectionClampsAtEnds proves the selection cannot walk
+// past either end of the roster.
+func TestLiveModelRosterSelectionClampsAtEnds(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := twoIssueLiveFixture(t, now)
+
+	if got := press(t, m, "k"); !strings.Contains(got, "DONE") {
+		t.Errorf("k at the first row moved the selection:\n%s", got)
+	}
+
+	press(t, m, "j")
+	if got := press(t, m, "j"); !strings.Contains(got, "FAILED") {
+		t.Errorf("j at the last row moved the selection:\n%s", got)
+	}
+}
+
+// TestLiveModelFooterAdvertisesRosterNavigationWithSeveralRows proves the
+// footer tells the operator j/k moves between runs once more than one row
+// exists, so the key is discoverable and not just an unadvertised binding.
+func TestLiveModelFooterAdvertisesRosterNavigationWithSeveralRows(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := twoIssueLiveFixture(t, now)
+
+	if got := m.View().Content; !strings.Contains(got, "[j/k] select") {
+		t.Errorf("footer omits the roster navigation key with two rows:\n%s", got)
+	}
+}
+
+// TestLiveModelFooterOmitsRosterNavigationWithOneRow proves the hint stays
+// away when there is nothing to switch to.
+func TestLiveModelFooterOmitsRosterNavigationWithOneRow(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	nextPollTick(t, m)
+
+	if got := m.View().Content; strings.Contains(got, "[j/k] select") {
+		t.Errorf("footer offers roster navigation with a single row:\n%s", got)
+	}
+}
+
+// TestLiveModelRosterSelectionSurvivesAPoll proves a poll tick keeps the
+// operator's chosen row selected instead of resetting to the first row, so a
+// sequential run's later Issues stay visible once picked.
+func TestLiveModelRosterSelectionSurvivesAPoll(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := twoIssueLiveFixture(t, now)
+	press(t, m, "j")
+
+	nextPollTick(t, m)
+
+	if got := m.View().Content; !strings.Contains(got, "[r] retry") {
+		t.Errorf("a poll tick reset the roster selection:\n%s", got)
+	}
+}
+
 // assertQuitCmd invokes the quit command and asserts it yields the program
 // exit message.
 func assertQuitCmd(t *testing.T, cmd tea.Cmd) {

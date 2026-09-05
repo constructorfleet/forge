@@ -155,7 +155,7 @@ func TestRender(t *testing.T) {
 		"      pending  #1         Write tests\n" +
 		"> * • working  #2         Add roster frame\n" +
 		"IMPLEMENTING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict —\n" +
-		"[q] quit [c] cancel\n"
+		"[q] quit [c] cancel [j/k] select\n"
 
 	if got := tui.Render(vm); got != want {
 		t.Fatalf("Render mismatch.\n--- got ---\n%s--- want ---\n%s", got, want)
