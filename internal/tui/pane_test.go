@@ -948,3 +948,95 @@ func TestPaneFoldsToolResultWithinItsOwnAttempt(t *testing.T) {
 		t.Errorf("entry 0 folded a result from another attempt: %+v", entries[0].Result)
 	}
 }
+
+// TestRenderTranscriptClampsToHeightFromTheTail proves a pane with a height
+// budget drops the oldest rows first, so the newest activity stays on screen
+// when the window is unpinned (the default, tail-following state).
+func TestRenderTranscriptClampsToHeightFromTheTail(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{1}, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	pane.SetHeight(2)
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 2 {
+		t.Fatalf("RenderTranscript at height 2 has %d lines, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if strings.Contains(lines[0], "first") || strings.Contains(lines[1], "first") {
+		t.Errorf("clamped render kept the oldest row instead of the newest:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, want := range []string{"second", "third"} {
+		found := false
+		for _, l := range lines {
+			if strings.Contains(l, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("clamped render dropped %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// TestRenderTranscriptKeepsPinnedSelectionVisibleWhenClamped proves the height
+// budget clamps around the pinned selection rather than blindly keeping the
+// newest rows, so scrolling back to inspect an old entry never scrolls it back
+// off screen behind a tall window.
+func TestRenderTranscriptKeepsPinnedSelectionVisibleWhenClamped(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{1}, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+		prose(3, "fourth"),
+	}})
+	pane.Select(0)
+	pane.SetHeight(1)
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 1 {
+		t.Fatalf("RenderTranscript at height 1 has %d lines, want 1:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "first") {
+		t.Errorf("clamped render lost the pinned selection:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestRenderTranscriptClampsAnExpandedEntryToTheHeightBudget proves a huge
+// expansion cannot outgrow the height budget: the pane is the seam that
+// bounds it, since the spec defers heavy content to $PAGER rather than
+// growing the pane past the terminal.
+func TestRenderTranscriptClampsAnExpandedEntryToTheHeightBudget(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	bigInput := strings.Repeat("line\n", 50)
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "bash", bigInput),
+	}})
+	pane.ToggleExpand()
+	pane.SetHeight(5)
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 5 {
+		t.Fatalf("RenderTranscript at height 5 has %d lines, want 5:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+// TestRenderTranscriptUnsetHeightRendersEverything proves a pane that never
+// receives a height budget renders unclamped, matching SetWidth's zero-value
+// convention: the runtime has not yet reported a terminal size.
+func TestRenderTranscriptUnsetHeightRendersEverything(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	lines := nonEmptyLines(tui.RenderTranscript(pane))
+	if len(lines) != 3 {
+		t.Fatalf("RenderTranscript with no height set has %d lines, want 3:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}

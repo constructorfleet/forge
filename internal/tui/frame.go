@@ -341,30 +341,24 @@ func transcriptRows(height int, above, below []string) int {
 	return 1
 }
 
-// clipTranscript renders the pane and keeps its last rows alone, so a pane
-// that draws more rows than its event window suggests cannot push the strip and
-// the footer off the screen. One event can draw several rows (a divider, the
+// clipTranscript renders the pane within a row budget, so a pane that draws
+// more rows than its event window suggests cannot push the strip and the
+// footer off the screen. One event can draw several rows (a divider, the
 // eviction marker, a folded result, an expanded block), so the row budget must
-// hold here and not at the event window. A zero budget clips nothing: the
-// runtime sends no size before the first frame.
+// hold here and not at the event window. The pane owns the exact clamp, via
+// SetHeight, so it can keep the selected entry's group visible rather than
+// blindly keeping whichever rows land at the tail. A zero budget clips
+// nothing: the runtime sends no size before the first frame.
 func clipTranscript(transcript *TranscriptPane, rows int) []string {
 	if transcript == nil {
 		return nil
 	}
+	transcript.SetHeight(rows)
 	out := RenderTranscript(transcript)
 	if out == "" {
 		return nil
 	}
-	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if rows > 0 && len(lines) > rows {
-		lines = lines[len(lines)-rows:]
-		// The kept slice can start mid-way through a wrapped, styled line
-		// (see wrapWidth in wrap.go), so an SGR code opened above the cut
-		// has no matching row here to close it. A leading reset guarantees
-		// the kept window never inherits an open style from a dropped row.
-		lines[0] = "\x1b[0m" + lines[0]
-	}
-	return lines
+	return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 }
 
 // stripLine picks the detail strip for the focused pane: the transcript
