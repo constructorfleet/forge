@@ -117,6 +117,11 @@ type TranscriptPane struct {
 	// which every headless render test relies on.
 	width int
 
+	// height is the row budget RenderTranscript clamps its output to. Zero
+	// applies no clamp: the runtime has not yet reported a terminal size,
+	// which every headless render test relies on.
+	height int
+
 	selection int
 	// expanded holds the selection index that is expanded, or noSelection.
 	// It tracks the index rather than a flag so any selection move resets it.
@@ -151,6 +156,12 @@ func (p *TranscriptPane) SetStyle(s Style) { p.style = s }
 // line the terminal would itself wrap renders as the several rows it draws.
 // A width of zero or less applies no wrap.
 func (p *TranscriptPane) SetWidth(w int) { p.width = w }
+
+// SetHeight sets the row budget RenderTranscript clamps its output to, so an
+// expanded entry or a tall window cannot push the detail strip and the footer
+// off screen. A height of zero or less applies no clamp: the runtime has not
+// yet reported a terminal size.
+func (p *TranscriptPane) SetHeight(h int) { p.height = h }
 
 // SetGates replaces the quality-gate rows the pane appends after the event
 // window. Gate runs follow the Agent's own work, so they render last. The call
@@ -467,19 +478,49 @@ func TranscriptKeys(p *TranscriptPane) []KeyBinding {
 // above the first entry of each run, which includes the first entry of the
 // window. A single-attempt history carries no divider. A nil pane renders
 // nothing. The detail strip belongs to the frame, not the pane.
+//
+// A height budget set through SetHeight clamps the output to that many rows,
+// so an expansion or a tall window that would otherwise outgrow the terminal
+// cannot push the detail strip and the footer off screen. The clamp keeps
+// whole groups (a divider, the eviction marker, one entry's lines) together.
+// An unpinned selection follows the live tail, so the clamp anchors on the
+// newest group and matches a plain tail clip; a pinned selection anchors on
+// the selected entry's own group instead, so scrolling back to inspect an old
+// entry never scrolls it back off screen behind a tall window. Either way the
+// window then grows outward towards the tail first and then towards the
+// retained start. A budget of zero or less clamps nothing.
 func RenderTranscript(p *TranscriptPane) string {
 	if p == nil {
 		return ""
 	}
+	groups, selGroup := transcriptGroups(p)
+	if p.height > 0 {
+		anchor := -1
+		if p.pinned {
+			anchor = selGroup
+		}
+		groups = clampTranscriptGroups(groups, anchor, p.height)
+	}
 	var b strings.Builder
-	writeWrapped := func(line string) {
-		for _, row := range wrapWidth(line, p.width) {
+	for _, g := range groups {
+		for _, row := range g {
 			b.WriteString(row)
 			b.WriteByte('\n')
 		}
 	}
+	return b.String()
+}
+
+// transcriptGroups renders p into line groups: one group per atomic unit (the
+// eviction marker, an attempt divider, one entry). selGroup is the index into
+// groups of the selected entry's own group, or -1 when nothing is selected.
+// clampTranscriptGroups anchors its budget on selGroup, so this split is the
+// one place that decides what a "group" is for that purpose.
+func transcriptGroups(p *TranscriptPane) (groups [][]string, selGroup int) {
+	selGroup = -1
+	wrapped := func(line string) []string { return wrapWidth(line, p.width) }
 	if p.view.Evicted {
-		writeWrapped(p.style.Truncation.Render(evictionLine(p.view.Dropped)))
+		groups = append(groups, wrapped(p.style.Truncation.Render(evictionLine(p.view.Dropped))))
 	}
 	attempts := attemptNumbers(p.view.RunOrder)
 	divide := len(p.view.RunOrder) > 1
@@ -489,17 +530,78 @@ func RenderTranscript(p *TranscriptPane) string {
 		// carries no attempt number and draws no divider rather than a wrong one.
 		if divide && !e.IsGate() && (i == 0 || e.Event.AgentRunID != prevRun) {
 			if n, ok := attempts[e.Event.AgentRunID]; ok {
-				writeWrapped(p.style.Truncation.Render(fmt.Sprintf("── attempt %d ──", n)))
+				groups = append(groups, wrapped(p.style.Truncation.Render(fmt.Sprintf("── attempt %d ──", n))))
 			}
 		}
 		if !e.IsGate() {
 			prevRun = e.Event.AgentRunID
 		}
+		var entry []string
 		for _, line := range entryLines(e, i == p.selection, p.Expanded(i), p.style) {
-			writeWrapped(line)
+			entry = append(entry, wrapped(line)...)
+		}
+		if i == p.selection {
+			selGroup = len(groups)
+		}
+		groups = append(groups, entry)
+	}
+	return groups, selGroup
+}
+
+// clampTranscriptGroups keeps groups within budget rows, anchored on the
+// group at anchor (the last group when anchor is -1, so an unselected pane
+// still clamps towards its newest content). It grows the kept window outward
+// from the anchor towards the tail first, then towards the retained start,
+// stopping in a direction once the next group there would not fit, so the
+// window stays contiguous and never leaves a gap. A single group larger than
+// budget clamps to its own last budget rows, the same tail bias as the
+// window as a whole; the row wrapWidth splits a styled line across can carry
+// no opening escape of its own (only the split's first physical row does), so
+// a leading reset guards the kept rows against inheriting an open style from
+// the row dropped above them.
+func clampTranscriptGroups(groups [][]string, anchor, budget int) [][]string {
+	if len(groups) == 0 || budget <= 0 {
+		return groups
+	}
+	if anchor < 0 || anchor >= len(groups) {
+		anchor = len(groups) - 1
+	}
+	if len(groups[anchor]) >= budget {
+		if extra := len(groups[anchor]) - budget; extra > 0 {
+			kept := append([]string(nil), groups[anchor][extra:]...)
+			kept[0] = "\x1b[0m" + kept[0]
+			return [][]string{kept}
+		}
+		return [][]string{groups[anchor]}
+	}
+	lo, hi := anchor, anchor
+	used := len(groups[anchor])
+	canTail, canHead := true, true
+	for canTail || canHead {
+		progressed := false
+		if canTail {
+			if hi+1 < len(groups) && used+len(groups[hi+1]) <= budget {
+				hi++
+				used += len(groups[hi])
+				progressed = true
+			} else {
+				canTail = false
+			}
+		}
+		if canHead && used < budget {
+			if lo-1 >= 0 && used+len(groups[lo-1]) <= budget {
+				lo--
+				used += len(groups[lo])
+				progressed = true
+			} else {
+				canHead = false
+			}
+		}
+		if !progressed {
+			break
 		}
 	}
-	return b.String()
+	return groups[lo : hi+1]
 }
 
 // attemptNumbers maps each AgentRun to its 1-based attempt number. The order
