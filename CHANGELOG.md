@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.0](https://github.com/constructorfleet/forge/compare/forge-v0.42.2...forge-v0.43.0) (2026-09-05)
+
+
+### Features
+
+* TUI: a transcript read slower than the poll interval silently thins the transcript refresh rate ([#635](https://github.com/constructorfleet/forge/issues/635)) ([c6ef63d](https://github.com/constructorfleet/forge/commit/c6ef63dbec6cd581362ff00e47b6764d5dc44d4d)), closes [#567](https://github.com/constructorfleet/forge/issues/567)
+
 ## [0.42.2](https://github.com/constructorfleet/forge/compare/forge-v0.42.1...forge-v0.42.2) (2026-09-05)
 
 
