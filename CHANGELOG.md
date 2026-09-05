@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.46.0](https://github.com/constructorfleet/forge/compare/forge-v0.45.0...forge-v0.46.0) (2026-09-05)
+
+
+### Features
+
+* Transcript pane: anchor a pinned selection that slides off by more than one event ([#655](https://github.com/constructorfleet/forge/issues/655)) ([be51ca4](https://github.com/constructorfleet/forge/commit/be51ca4f89cfb6e77694b3d8d4a40798f416fc8a)), closes [#524](https://github.com/constructorfleet/forge/issues/524)
+* TUI: the transcript pane has no scroll keys, so scrollback is unreachable ([#658](https://github.com/constructorfleet/forge/issues/658)) ([2d5b17d](https://github.com/constructorfleet/forge/commit/2d5b17d78c1f3350ea6d7cef9188754fa72f1b52)), closes [#523](https://github.com/constructorfleet/forge/issues/523)
+* TUI: transcript pane clamps its own height to the viewport ([#659](https://github.com/constructorfleet/forge/issues/659)) ([819938b](https://github.com/constructorfleet/forge/commit/819938be1447903a745eb4379a10528157ace31a)), closes [#519](https://github.com/constructorfleet/forge/issues/519)
+
 ## [0.45.0](https://github.com/constructorfleet/forge/compare/forge-v0.44.2...forge-v0.45.0) (2026-09-05)
 
 
