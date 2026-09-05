@@ -26,11 +26,16 @@ func (s conflictingClaimStore) ClaimRetry(_ context.Context, executionID, issueI
 }
 
 // runToFailed executes issueID once with a failing Agent and returns the
-// Execution ID of the resulting FAILED Issue.
+// Execution ID of the resulting FAILED Issue. It also queues a second,
+// successful outcome for issueID: fake.OutcomeQueue repeats an exhausted
+// key's last queued outcome rather than falling back to a default (see
+// TestOutcomeQueue_ProgramDefaultAppliesOnlyToUnprogrammedKeys), so a caller
+// that goes on to retry this Issue for real needs its own queued success or
+// every retry attempt would fail forever.
 func runToFailed(t *testing.T, te testEngine, issueID string) string {
 	t.Helper()
 	te.fake.ProgramResult(issueID, agent.AgentResult{Status: agent.StatusFailed, Summary: "boom"})
-	te.fake.ProgramDefault(agent.AgentResult{Status: agent.StatusImplemented, Summary: "fixed"})
+	te.fake.ProgramResult(issueID, agent.AgentResult{Status: agent.StatusImplemented, Summary: "fixed"})
 
 	result, err := te.eng.Execute(context.Background(), issueID, te.base)
 	if err != nil {

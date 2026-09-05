@@ -30,6 +30,7 @@ import (
 	execbackend "github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
+	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/statusreflect"
@@ -245,6 +246,16 @@ type Engine struct {
 	// Workspaces are created under.
 	RepoRoot string
 
+	// IssueLock serializes CancelExecution and RetryIssue per Issue (issue
+	// 552). Both commands mutate one Issue's state and Worker claim across
+	// several separate Store calls rather than inside one transaction, so
+	// without a shared lock a cancel can land between RetryIssue's
+	// Store.ClaimRetry and its resumeIssue call, letting a Worker start on
+	// an Issue the operator just cancelled. New wires the production
+	// repolock.Locker, which serializes across processes as well as
+	// goroutines; see withIssueLock.
+	IssueLock IssueLocker
+
 	// Semantic is the SemanticProvider seam (internal/semantic) fulfilling
 	// Semantic Navigation for each Issue's Agent calls. Optional: nil (the
 	// default from New) leaves every AgentRequest.Semantic at its zero
@@ -311,6 +322,13 @@ type Engine struct {
 	ownerTokenDone  bool
 }
 
+// IssueLocker serializes work scoped to one (executionID, issueID) pair
+// across goroutines and, for the production repolock.Locker, processes. See
+// Engine.IssueLock.
+type IssueLocker interface {
+	WithLock(ctx context.Context, resource string, fn func() error) error
+}
+
 // New builds an Engine from its injected dependencies.
 func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag agent.Agent, cfg config.Config, repoRoot string) *Engine {
 	return &Engine{
@@ -320,6 +338,7 @@ func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag 
 		Agent:              ag,
 		Config:             cfg,
 		RepoRoot:           repoRoot,
+		IssueLock:          repolock.New(repoRoot),
 		Now:                time.Now,
 		NewExecutionID:     func() string { return uuid.NewString() },
 		OwnerPID:           os.Getpid,

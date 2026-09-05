@@ -97,6 +97,13 @@ func (e *CancelOwnerError) Unwrap() error { return e.Err }
 // returned ExecutionState is valid. Callers must not read such an error as
 // "nothing was cancelled". Any other non-nil error comes with a zero
 // ExecutionState, even when earlier Issues in the loop already transitioned.
+// withIssueLock runs fn with executionID/issueID's IssueLock held, so
+// CancelExecution's per-Issue transition-and-release and RetryIssue's
+// claim-through-resume cannot interleave for the same Issue (issue 552).
+func (e *Engine) withIssueLock(ctx context.Context, executionID, issueID string, fn func() error) error {
+	return e.IssueLock.WithLock(ctx, fmt.Sprintf("issue:%s/%s", executionID, issueID), fn)
+}
+
 func (e *Engine) CancelExecution(ctx context.Context, executionID string) (storage.ExecutionState, error) {
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
@@ -134,26 +141,50 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 		if issue.State.IsTerminal() {
 			continue
 		}
-		if issue.State != domain.StateCancelled {
-			if _, err := e.transition(ctx, executionID, issue.ID, domain.StateCancelled); err != nil {
-				reloaded, getErr := e.Store.GetIssue(ctx, executionID, issue.ID)
-				if getErr != nil {
-					return storage.ExecutionState{}, fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
-				}
-				if reloaded.State != domain.StateCancelled {
-					return storage.ExecutionState{}, fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
+		// The per-Issue mutation runs under IssueLock, which a concurrent
+		// RetryIssue holds for its whole claim-through-resume span (issue
+		// 552). By the time this side acquires it, that retry has either
+		// finished (the Issue may since have gone terminal, e.g. DONE) or
+		// never started, so the state is re-read fresh rather than trusting
+		// the state.Issues snapshot taken before the wait.
+		var keptEntry string
+		lockErr := e.withIssueLock(ctx, executionID, issue.ID, func() error {
+			current, err := e.Store.GetIssue(ctx, executionID, issue.ID)
+			if err != nil {
+				return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
+			}
+			if current.State.IsTerminal() {
+				return nil
+			}
+			if current.State != domain.StateCancelled {
+				if _, err := e.transition(ctx, executionID, issue.ID, domain.StateCancelled); err != nil {
+					reloaded, getErr := e.Store.GetIssue(ctx, executionID, issue.ID)
+					if getErr != nil {
+						return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
+					}
+					if reloaded.State != domain.StateCancelled {
+						return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
+					}
 				}
 			}
+			// workers.issue_id is globally unique, so releasing the claim
+			// of an owner that still runs would let a second Execution
+			// claim the same Issue while the first owner still writes to
+			// it. Keep the claim.
+			if pid, keep := owners.keeps(issue.ID, stopped); keep {
+				keptEntry = fmt.Sprintf("%s:%d", issue.ID, pid)
+				return nil
+			}
+			if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issue.ID); err != nil {
+				return fmt.Errorf("engine: release worker claim for issue %s: %w", issue.ID, err)
+			}
+			return nil
+		})
+		if lockErr != nil {
+			return storage.ExecutionState{}, lockErr
 		}
-		// workers.issue_id is globally unique, so releasing the claim of an
-		// owner that still runs would let a second Execution claim the same
-		// Issue while the first owner still writes to it. Keep the claim.
-		if pid, keep := owners.keeps(issue.ID, stopped); keep {
-			kept = append(kept, fmt.Sprintf("%s:%d", issue.ID, pid))
-			continue
-		}
-		if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issue.ID); err != nil {
-			return storage.ExecutionState{}, fmt.Errorf("engine: release worker claim for issue %s: %w", issue.ID, err)
+		if keptEntry != "" {
+			kept = append(kept, keptEntry)
 		}
 	}
 
@@ -203,8 +234,10 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 // Claiming first also publishes the Issue as READY with no Worker claim for
 // the duration of the base refresh, and a concurrent `forge resume` reads
 // that shape as resumable. The overlap is safe but not free: both actors
-// then work in one Workspace. Take the repo lock here if a second
-// long-lived actor (a TUI) makes the window routine.
+// then work in one Workspace. This whole method runs under IssueLock, which
+// rules out that same overlap with CancelExecution (issue 552); a
+// concurrent `forge resume` does not take IssueLock and can still see the
+// same window.
 func (e *Engine) RetryIssue(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
@@ -218,27 +251,40 @@ func (e *Engine) RetryIssue(ctx context.Context, executionID, issueID string) (d
 	}
 
 	failedBudget := issue.RetryBudget
-	claim, err := e.Store.ClaimRetry(ctx, executionID, issueID, domain.NewRetryBudget(failedBudget.Limits()))
-	if err != nil {
-		return domain.Issue{}, retryClaimError(issueID, issue.State, err)
-	}
-	if err := e.refreshRetryBase(ctx, state.Execution, issueID); err != nil {
-		if abortErr := e.Store.AbortRetry(ctx, executionID, issueID, failedBudget); abortErr != nil {
-			return domain.Issue{}, errors.Join(err, abortErr)
+	// The claim, base refresh, transition effects, and resumeIssue below run
+	// under IssueLock so a concurrent CancelExecution cannot land between
+	// Store.ClaimRetry (which publishes the Issue as READY with no Worker
+	// claim) and resumeIssue re-claiming it (issue 552): CancelExecution's
+	// per-Issue cancel takes the same lock before it acts.
+	var result domain.Issue
+	err = e.withIssueLock(ctx, executionID, issueID, func() error {
+		claim, err := e.Store.ClaimRetry(ctx, executionID, issueID, domain.NewRetryBudget(failedBudget.Limits()))
+		if err != nil {
+			return retryClaimError(issueID, issue.State, err)
 		}
+		if err := e.refreshRetryBase(ctx, state.Execution, issueID); err != nil {
+			if abortErr := e.Store.AbortRetry(ctx, executionID, issueID, failedBudget); abortErr != nil {
+				return errors.Join(err, abortErr)
+			}
+			return err
+		}
+		if err := e.applyTransitionEffects(ctx, executionID, issueID, claim.From, claim.Issue.State); err != nil {
+			return &RetryStartDeferredError{Err: err}
+		}
+		if err := e.appendEvent(ctx, executionID, issueID, "issue.retry_requested", map[string]string{}); err != nil {
+			return &RetryStartDeferredError{Err: err}
+		}
+		resumed, err := e.resumeIssue(ctx, state.Execution, claim.Issue, nil)
+		if err != nil {
+			return e.deferredOrStuckResumeError(ctx, executionID, issueID, err)
+		}
+		result = resumed
+		return nil
+	})
+	if err != nil {
 		return domain.Issue{}, err
 	}
-	if err := e.applyTransitionEffects(ctx, executionID, issueID, claim.From, claim.Issue.State); err != nil {
-		return domain.Issue{}, &RetryStartDeferredError{Err: err}
-	}
-	if err := e.appendEvent(ctx, executionID, issueID, "issue.retry_requested", map[string]string{}); err != nil {
-		return domain.Issue{}, &RetryStartDeferredError{Err: err}
-	}
-	issue, err = e.resumeIssue(ctx, state.Execution, claim.Issue, nil)
-	if err != nil {
-		return domain.Issue{}, e.deferredOrStuckResumeError(ctx, executionID, issueID, err)
-	}
-	return issue, nil
+	return result, nil
 }
 
 // deferredOrStuckResumeError classifies a resumeIssue failure that surfaces
