@@ -433,6 +433,73 @@ func (s *SQLiteStore) AbortRetry(ctx context.Context, executionID, issueID strin
 	return nil
 }
 
+// CancelClaimConflictError reports that ClaimCancel's compare-and-set did
+// not find executionID/issueID in the `from` state it was asked to cancel
+// off. State is the state the transaction read back after the
+// compare-and-set matched no row: another actor moved the Issue there
+// between the caller's read and this call. It wraps
+// ErrConcurrentModification, so it still satisfies errors.Is for that
+// sentinel.
+type CancelClaimConflictError struct {
+	ExecutionID string
+	IssueID     string
+	State       domain.IssueState
+}
+
+func (e *CancelClaimConflictError) Error() string {
+	return fmt.Sprintf("storage: claim cancel %s/%s: issue is %s, not the expected state", e.ExecutionID, e.IssueID, e.State)
+}
+
+func (e *CancelClaimConflictError) Unwrap() error { return ErrConcurrentModification }
+
+// ClaimCancel performs one cancel of executionID/issueID as a single
+// transaction: it CASes the Issue from `from` to CANCELLED, optionally
+// releases its Worker claim, and appends the transition Event, all inside
+// one commit. This mirrors ClaimRetry's one-transaction claim (issue 456):
+// a cancel that races another writer on the same Issue either wins cleanly
+// or loses cleanly with a *CancelClaimConflictError, instead of applying
+// the transition and the claim release as two separate statements that
+// something else can interleave with (issue 554).
+//
+// releaseClaim is false when the caller keeps a still-live owner's Worker
+// claim (see engine.CancelExecution): the Issue still moves to CANCELLED,
+// but the claim is left in place so a second Execution cannot claim the
+// same Issue while the live owner still writes to it.
+func (s *SQLiteStore) ClaimCancel(ctx context.Context, executionID, issueID string, from domain.IssueState, releaseClaim bool) (domain.Issue, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("storage: claim cancel %s/%s: %w", executionID, issueID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	affected, err := updateIssueStateCAS(ctx, tx, executionID, issueID,
+		string(from), string(domain.StateCancelled), time.Now().UTC())
+	if err != nil {
+		return domain.Issue{}, fmt.Errorf("storage: claim cancel %s/%s: %w", executionID, issueID, err)
+	}
+
+	issue, err := s.getIssue(ctx, tx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	if affected == 0 {
+		return domain.Issue{}, &CancelClaimConflictError{ExecutionID: executionID, IssueID: issueID, State: issue.State}
+	}
+
+	if releaseClaim {
+		if err := releaseWorkerClaim(ctx, tx, executionID, issueID); err != nil {
+			return domain.Issue{}, fmt.Errorf("storage: claim cancel %s/%s: %w", executionID, issueID, err)
+		}
+	}
+	if err := appendTransitionEvent(ctx, tx, executionID, issueID, from, domain.StateCancelled); err != nil {
+		return domain.Issue{}, fmt.Errorf("storage: claim cancel %s/%s: %w", executionID, issueID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.Issue{}, fmt.Errorf("storage: claim cancel %s/%s: %w", executionID, issueID, err)
+	}
+	return issue, nil
+}
+
 // UpdateRetryBudget persists budget's used-counters for issueID within
 // executionID. See Store.UpdateRetryBudget's doc comment for why the
 // repair loop needs this: TransitionIssue always reloads the Issue fresh

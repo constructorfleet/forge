@@ -98,8 +98,9 @@ func (e *CancelOwnerError) Unwrap() error { return e.Err }
 // "nothing was cancelled". Any other non-nil error comes with a zero
 // ExecutionState, even when earlier Issues in the loop already transitioned.
 // withIssueLock runs fn with executionID/issueID's IssueLock held, so
-// CancelExecution's per-Issue transition-and-release and RetryIssue's
-// claim-through-resume cannot interleave for the same Issue (issue 552).
+// CancelExecution's per-Issue cancel (itself one CAS transaction; see
+// Store.ClaimCancel, issue 554) and RetryIssue's claim-through-resume
+// cannot interleave for the same Issue (issue 552).
 func (e *Engine) withIssueLock(ctx context.Context, executionID, issueID string, fn func() error) error {
 	return e.IssueLock.WithLock(ctx, fmt.Sprintf("issue:%s/%s", executionID, issueID), fn)
 }
@@ -156,27 +157,34 @@ func (e *Engine) CancelExecution(ctx context.Context, executionID string) (stora
 			if current.State.IsTerminal() {
 				return nil
 			}
-			if current.State != domain.StateCancelled {
-				if _, err := e.transition(ctx, executionID, issue.ID, domain.StateCancelled); err != nil {
-					reloaded, getErr := e.Store.GetIssue(ctx, executionID, issue.ID)
-					if getErr != nil {
-						return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
-					}
-					if reloaded.State != domain.StateCancelled {
-						return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
-					}
-				}
-			}
 			// workers.issue_id is globally unique, so releasing the claim
 			// of an owner that still runs would let a second Execution
 			// claim the same Issue while the first owner still writes to
 			// it. Keep the claim.
-			if pid, keep := owners.keeps(issue.ID, stopped); keep {
-				keptEntry = fmt.Sprintf("%s:%d", issue.ID, pid)
-				return nil
+			pid, keep := owners.keeps(issue.ID, stopped)
+
+			// ClaimCancel applies the CANCELLED transition and the claim
+			// release (or keep) as one transaction, CASed off current.State
+			// (issue 554): anything that moved the Issue off current.State
+			// between the read above and this call loses this write
+			// instead of silently interleaving with it.
+			if _, err := e.Store.ClaimCancel(ctx, executionID, issue.ID, current.State, !keep); err != nil {
+				var conflict *storage.CancelClaimConflictError
+				if errors.As(err, &conflict) {
+					if conflict.State.IsTerminal() {
+						// Another actor (e.g. a concurrent duplicate cancel)
+						// already finished this Issue; nothing left to do.
+						return nil
+					}
+					return fmt.Errorf("engine: cancel issue %s: another actor moved it to %s: %w", issue.ID, conflict.State, err)
+				}
+				return fmt.Errorf("engine: cancel issue %s: %w", issue.ID, err)
 			}
-			if err := e.Store.ReleaseWorkerClaim(ctx, executionID, issue.ID); err != nil {
-				return fmt.Errorf("engine: release worker claim for issue %s: %w", issue.ID, err)
+			if err := e.applyTransitionEffects(ctx, executionID, issue.ID, current.State, domain.StateCancelled); err != nil {
+				return err
+			}
+			if keep {
+				keptEntry = fmt.Sprintf("%s:%d", issue.ID, pid)
 			}
 			return nil
 		})
