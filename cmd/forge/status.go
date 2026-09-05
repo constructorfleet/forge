@@ -102,9 +102,20 @@ func runStatus(args []string) int {
 
 // printTranscript renders one Issue's captured Agent transcript
 // (ticket 28), ordered chronologically across every attempt (AgentRun).
+// Storage no longer persists a TRUNCATION event when the SQL retention cap
+// evicts old rows (issue 482 / ADR 0030), so a run's first retained Seq
+// greater than 0 is the only sign eviction happened; printTranscript
+// synthesizes a marker for it rather than showing a silent jump in Seq.
 func printTranscript(w io.Writer, events []storage.TranscriptEvent) {
 	fmt.Fprintf(w, "transcript (%d events):\n", len(events))
+	seenRun := map[int64]bool{}
 	for _, event := range events {
+		if !seenRun[event.AgentRunID] {
+			seenRun[event.AgentRunID] = true
+			if event.Seq > 0 {
+				fmt.Fprintf(w, "  run=%d  [%d earlier events evicted]\n", event.AgentRunID, event.Seq)
+			}
+		}
 		ts := event.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
 		switch event.Type {
 		case "TOOL_CALL":

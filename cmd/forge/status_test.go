@@ -204,6 +204,26 @@ func TestPrintTranscript_RendersEachEventKind(t *testing.T) {
 	}
 }
 
+// TestPrintTranscript_MarksEvictionGap covers issue 482's synthesized
+// marker: storage no longer persists a TRUNCATION event when the SQL
+// retention cap evicts old rows (ADR 0030), so printTranscript must detect
+// the resulting seq gap itself — a run whose first retained Seq is greater
+// than 0 had that many earlier events evicted.
+func TestPrintTranscript_MarksEvictionGap(t *testing.T) {
+	events := []storage.TranscriptEvent{
+		{AgentRunID: 1, Seq: 42, Type: "MESSAGE", Role: "assistant", Text: "picking up mid-run", OccurredAt: time.Unix(0, 0).UTC()},
+		{AgentRunID: 1, Seq: 43, Type: "MESSAGE", Role: "assistant", Text: "still going", OccurredAt: time.Unix(0, 0).UTC()},
+	}
+
+	var buf bytes.Buffer
+	printTranscript(&buf, events)
+	out := buf.String()
+
+	if !strings.Contains(out, "42 earlier events evicted") {
+		t.Errorf("printTranscript output missing eviction marker for gap at seq 42:\n%s", out)
+	}
+}
+
 // TestRunStatus_TranscriptReflectsExecuteOutput drives Engine directly, as
 // TestRunStatus_ReflectsExecuteOutput does, then exercises the `--transcript`
 // read surface (ticket 28) end-to-end against the resulting database.
