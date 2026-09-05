@@ -405,6 +405,44 @@ func TestPaneFollowTailUnpinsTheSelection(t *testing.T) {
 	}
 }
 
+// TestTranscriptKeysOfferPagingWhenScrollbackExists proves the footer
+// advertises pgup/pgdown once there is retained scrollback to reach, so an
+// operator learns the window can move and not only the selection.
+func TestTranscriptKeysOfferPagingWhenScrollbackExists(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: false, Retained: 30, Events: []tui.TranscriptEvent{
+		prose(10, "recent"),
+	}})
+
+	var found bool
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "pgup" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("TranscriptKeys omits pgup while older events remain retained: %v", tui.TranscriptKeys(pane))
+	}
+}
+
+// TestTranscriptKeysHidePagingAtBothEdges proves the footer omits pgup/pgdown
+// once the window already spans the whole retained history, so the footer
+// never advertises a key that would move nothing.
+func TestTranscriptKeysHidePagingAtBothEdges(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(&fakeScroller{})
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 1, Events: []tui.TranscriptEvent{
+		prose(0, "only"),
+	}})
+
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "pgup" || k.Key == "pgdown" {
+			t.Errorf("TranscriptKeys advertises %q with no scrollback either way: %v", k.Key, tui.TranscriptKeys(pane))
+		}
+	}
+}
+
 // TestTranscriptKeysHideTailWithoutScroller proves the footer never advertises
 // a follow-tail the pane cannot perform.
 func TestTranscriptKeysHideTailWithoutScroller(t *testing.T) {
@@ -621,6 +659,65 @@ func TestPaneMoveDownAtTailDoesNotPin(t *testing.T) {
 	}})
 	if e, _ := pane.SelectedEntry(); e.Event.Seq != 2 {
 		t.Errorf("selected seq = %d, want 2: an inert down key pinned the selection", e.Event.Seq)
+	}
+}
+
+// TestPanePageUpRequestsAWindowOfScrollback proves PageUp moves the window a
+// whole page towards the retained start, not the single event a plain up key
+// moves, so an operator can reach scrollback in a few key presses.
+func TestPanePageUpRequestsAWindowOfScrollback(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 10, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+		prose(2, "third"),
+	}})
+
+	pane.PageUp()
+	if sc.up != 3 {
+		t.Fatalf("ScrollUp events = %d, want 3: PageUp did not move a whole window", sc.up)
+	}
+}
+
+// TestPanePageDownRequestsAWindowOfScrollback proves PageDown moves the window
+// a whole page towards the tail.
+func TestPanePageDownRequestsAWindowOfScrollback(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 10, Events: []tui.TranscriptEvent{
+		prose(3, "fourth"),
+		prose(4, "fifth"),
+	}})
+
+	pane.PageDown()
+	if sc.down != 2 {
+		t.Fatalf("ScrollDown events = %d, want 2: PageDown did not move a whole window", sc.down)
+	}
+}
+
+// TestPanePageUpAtRetainedStartDoesNotPin proves PageUp at the retained start,
+// with nothing older to reach, leaves the pane following the tail, matching
+// the plain up key's guard against pinning on an inert move.
+func TestPanePageUpAtRetainedStartDoesNotPin(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, AtStart: true, Retained: 2, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+
+	pane.PageUp()
+	if sc.up != 0 {
+		t.Errorf("ScrollUp events = %d, want 0 at the retained start", sc.up)
+	}
+	for _, k := range tui.TranscriptKeys(pane) {
+		if k.Key == "G" {
+			t.Error("footer offers follow tail after an inert PageUp")
+		}
 	}
 }
 

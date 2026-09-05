@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,10 @@ func press(t *testing.T, m *tui.LiveModel, name string) string {
 		key = tea.Key{Code: uv.KeyUp}
 	case "down":
 		key = tea.Key{Code: uv.KeyDown}
+	case "pgup":
+		key = tea.Key{Code: uv.KeyPgUp}
+	case "pgdown":
+		key = tea.Key{Code: uv.KeyPgDown}
 	}
 	m.Update(tea.KeyPressMsg(key))
 	return m.View().Content
@@ -248,6 +253,49 @@ func TestLiveModelFollowTailKeyReachesPane(t *testing.T) {
 	}
 	if strings.Contains(visible(got), "[G] follow tail") {
 		t.Errorf("footer still offers follow tail after the pane followed it:\n%s", got)
+	}
+}
+
+// manyEventsFeedStore builds a store whose one AgentRun carries more prose
+// events than the tailer's default scrollback height (20), so the
+// tail-following window always hides the oldest event.
+func manyEventsFeedStore() *fakeFeedStore {
+	events := make([]storage.TranscriptEvent, 0, 25)
+	for i := 0; i < 25; i++ {
+		events = append(events, storage.TranscriptEvent{
+			AgentRunID: 7, Seq: i, Type: "MESSAGE", Role: "assistant",
+			Text: fmt.Sprintf("event %d", i),
+		})
+	}
+	return &fakeFeedStore{
+		runs:   map[string][]storage.AgentRun{"#1": {{ID: 7, ExecutionID: "ex-1", IssueID: "#1"}}},
+		events: map[int64][]storage.TranscriptEvent{7: events},
+	}
+}
+
+// TestLiveModelPageKeysReachThePane proves pgup and pgdown reach the
+// transcript pane's window-anchor seam: a scrolled-back window reveals an
+// event the tail-following default height hides, and pgdown returns it.
+func TestLiveModelPageKeysReachThePane(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(manyEventsFeedStore()))
+	nextPollTick(t, m)
+	if got := m.View().Content; strings.Contains(got, "event 0\n") || strings.Contains(got, "event 0 ") {
+		t.Fatalf("the tail-following window already shows the oldest event:\n%s", got)
+	}
+	press(t, m, "tab")
+
+	press(t, m, "pgup")
+	nextPollTick(t, m)
+	if got := m.View().Content; !strings.Contains(got, "event 0") {
+		t.Fatalf("pgup did not scroll the window back to the oldest event:\n%s", got)
+	}
+
+	press(t, m, "pgdown")
+	nextPollTick(t, m)
+	if got := m.View().Content; strings.Contains(got, "event 0") {
+		t.Errorf("pgdown did not return the window to the tail:\n%s", got)
 	}
 }
 

@@ -79,6 +79,10 @@ func (t *transcriptController) handleTranscriptKey(key uv.Key, transcript *Trans
 		transcript.MoveSelection(1)
 	case key.MatchString("enter"):
 		transcript.ToggleExpand()
+	case key.MatchString("pgup"):
+		transcript.PageUp()
+	case key.MatchString("pgdown"):
+		transcript.PageDown()
 	case key.MatchString("G"):
 		transcript.FollowTail()
 	}
