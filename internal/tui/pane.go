@@ -185,7 +185,8 @@ func (p *TranscriptPane) SetView(vm TranscriptViewModel) {
 // through here, so the two callers cannot diverge. pending applies a selection
 // move that an earlier window could not satisfy.
 func (p *TranscriptPane) rebuild(pending int) {
-	prevKey, hadSelection := p.selectedKey()
+	prevEntry, hadSelection := p.SelectedEntry()
+	prevKey := prevEntry.key()
 	wasExpanded := p.expanded != noSelection
 
 	events := buildEntries(p.view.Events)
@@ -196,7 +197,7 @@ func (p *TranscriptPane) rebuild(pending int) {
 	if hadSelection && (p.pinned || !p.view.AtTail) {
 		idx = indexOfKey(p.entries, prevKey)
 		if idx == noSelection {
-			idx = p.anchorLostSelection()
+			idx = p.anchorLostSelection(prevEntry)
 		}
 	}
 	if pending != 0 && idx != noSelection {
@@ -213,14 +214,31 @@ func (p *TranscriptPane) rebuild(pending int) {
 }
 
 // anchorLostSelection handles a pinned entry that the advancing tail pushed out
-// of the window. It asks for one event of scrollback, which stops the window
-// from sliding further, and holds the oldest retained entry meanwhile.
-func (p *TranscriptPane) anchorLostSelection() int {
+// of the window. A poll can append several events at once, so the entry can
+// fall behind by more than one: this asks for exactly the shortfall between
+// the entry's Seq and the window's new leading Seq, which recovers the entry
+// in this one pass instead of one event per poll. Where the shortfall cannot
+// be measured — lost carries no event, or it belongs to a different run than
+// the window's leading entry — it falls back to one event of scrollback.
+func (p *TranscriptPane) anchorLostSelection(lost TranscriptEntry) int {
 	if p.scroller == nil || len(p.entries) == 0 || p.view.AtStart {
 		return p.defaultSelection()
 	}
-	p.scroller.ScrollUp(1)
+	p.scroller.ScrollUp(lostSelectionShortfall(lost, p.view))
 	return 0
+}
+
+// lostSelectionShortfall returns how many events behind the window's leading
+// entry the lost entry fell. It falls back to one event where lost carries no
+// event (a gate row) or the window holds no event of the same run.
+func lostSelectionShortfall(lost TranscriptEntry, vm TranscriptViewModel) int {
+	if lost.IsGate() || len(vm.Events) == 0 || vm.FirstRunID != lost.Event.AgentRunID {
+		return 1
+	}
+	if shortfall := vm.FirstSeq - lost.Event.Seq; shortfall > 0 {
+		return shortfall
+	}
+	return 1
 }
 
 // FollowTail returns the window to the live tail, collapses, and hands the
@@ -342,15 +360,6 @@ func (p *TranscriptPane) SelectedEntry() (TranscriptEntry, bool) {
 		return TranscriptEntry{}, false
 	}
 	return p.entries[p.selection], true
-}
-
-// selectedKey returns the selected entry's cross-poll identity.
-func (p *TranscriptPane) selectedKey() (string, bool) {
-	e, ok := p.SelectedEntry()
-	if !ok {
-		return "", false
-	}
-	return e.key(), true
 }
 
 // eventEdge returns the index of the last event entry, or noSelection where the

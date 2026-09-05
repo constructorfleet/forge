@@ -674,6 +674,39 @@ func TestPanePinnedSelectionAnchorsTheWindow(t *testing.T) {
 	}
 }
 
+// TestPanePinnedSelectionAnchorsPastMultipleEvents proves a pinned entry that
+// one poll pushes several events out of the window recovers in that same
+// pass: the pane sizes its scrollback request from the shortfall between the
+// pinned entry's Seq and the window's new leading Seq, not a fixed one event.
+func TestPanePinnedSelectionAnchorsPastMultipleEvents(t *testing.T) {
+	sc := &fakeScroller{}
+	pane := tui.NewTranscriptPane()
+	pane.SetScroller(sc)
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 2, FirstSeq: 0, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	pane.Select(0)
+
+	// One poll appends several events at once: seq 0 falls three events behind.
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, Retained: 5, FirstSeq: 3, Events: []tui.TranscriptEvent{
+		prose(3, "fourth"),
+		prose(4, "fifth"),
+	}})
+	if sc.up != 3 {
+		t.Errorf("ScrollUp events = %d, want 3: the shortfall did not size the request", sc.up)
+	}
+
+	// The anchored window brings the pinned entry back in this one recovery.
+	pane.SetView(tui.TranscriptViewModel{AtTail: false, Retained: 5, FirstSeq: 0, Events: []tui.TranscriptEvent{
+		prose(0, "first"),
+		prose(1, "second"),
+	}})
+	if e, _ := pane.SelectedEntry(); e.Event.Seq != 0 {
+		t.Errorf("selected seq = %d, want 0: the pane lost its pinned entry", e.Event.Seq)
+	}
+}
+
 // TestPaneEmptyToolOutputHasNoBlankLine proves a tool that returns nothing
 // renders one line, not a line plus whitespace.
 func TestPaneEmptyToolOutputHasNoBlankLine(t *testing.T) {
