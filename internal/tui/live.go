@@ -98,14 +98,24 @@ type LiveModel struct {
 	// approve key then explains itself instead of silently doing nothing.
 	Approver Approver
 
-	// approving records an approve flow in flight — from the pager opening
+	// approveFlow tracks an approve flow in flight — from the pager opening
 	// through ResumeAfterReplan returning — so a second approve key press on
 	// the same row cannot double-issue it.
-	approving bool
-	// approvingIssueID is the Issue the in-flight approve flow names, read
-	// back once the pager closes so the write fires against the row the
-	// artifact was actually read for.
-	approvingIssueID string
+	approveFlow actionFlow
+
+	// OpenAnswer defers a needs-info question artifact to $EDITOR, writing it
+	// under the given directory. Injected so a test drives the whole key path
+	// without spawning a process; nil uses OpenAnswerArtifactInEditor.
+	OpenAnswer func(dir, artifact string) tea.Cmd
+
+	// Answerer issues AddComment. Nil disables the control: the answer key
+	// then explains itself instead of silently doing nothing.
+	Answerer Answerer
+
+	// answerFlow tracks an answer flow in flight — from the editor opening
+	// through AddComment returning — so a second answer key press on the
+	// same row cannot double-post it.
+	answerFlow actionFlow
 
 	// winHeight is the last terminal height the runtime reported. Zero means the
 	// runtime has sent no size yet: the frame then clips nothing and the tailer
@@ -185,6 +195,9 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.MatchString("p") && m.vm.Focus == PaneRoster {
 			return m, m.openSelectedApprove()
 		}
+		if key.MatchString("a") && m.vm.Focus == PaneRoster {
+			return m, m.openSelectedAnswer()
+		}
 		m.handleTranscriptKey(key)
 	case diffNoticeMsg:
 		m.vm.ActionNotice = msg.text
@@ -201,20 +214,39 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case approveNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case approveReadyMsg:
-		m.approving = true
-		m.approvingIssueID = msg.issueID
+		m.approveFlow.open(msg.issueID)
 		m.vm.ActionNotice = fmt.Sprintf("opening replan artifact for %s in $PAGER…", msg.issueID)
 		return m, m.openApprove(msg.dir, msg.artifact)
 	case ApproveClosedMsg:
 		if msg.Err != nil {
-			m.approving = false
-			m.approvingIssueID = ""
+			m.approveFlow.close()
 			m.vm.ActionNotice = msg.Err.Error()
 			return m, nil
 		}
 		return m, m.startApprove()
 	case approveResultMsg:
 		m.applyApproveResult(msg)
+	case answerNoticeMsg:
+		m.vm.ActionNotice = msg.text
+	case answerReadyMsg:
+		m.answerFlow.open(msg.issueID)
+		m.vm.ActionNotice = fmt.Sprintf("opening needs-info question for %s in $EDITOR…", msg.issueID)
+		return m, m.openAnswer(msg.dir, msg.artifact)
+	case AnswerClosedMsg:
+		if msg.Err != nil {
+			m.answerFlow.close()
+			m.vm.ActionNotice = msg.Err.Error()
+			return m, nil
+		}
+		answer := extractAnswer(msg.Text)
+		if answer == "" {
+			m.answerFlow.close()
+			m.vm.ActionNotice = "answer is empty, not posted"
+			return m, nil
+		}
+		return m, m.startAnswer(answer)
+	case answerResultMsg:
+		m.applyAnswerResult(msg)
 	case tea.InterruptMsg:
 		// The TUI's own suspend signal binds to q too.
 		m.removeDiffArtifacts()

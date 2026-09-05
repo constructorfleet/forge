@@ -341,6 +341,25 @@ func resolveRetrier(configPath, dbPath string) tui.Retrier {
 	return buildRetrier(repoRoot, absoluteAgainst(cwd, configPath), absoluteAgainst(cwd, dbPath))
 }
 
+// resolveAnswerer wires buildTracker for `forge execute`/`forge watch`,
+// leaving the answer control present but inert (a nil Answerer) when
+// verifyTrackerAuth's preflight fails or the tracker cannot be constructed,
+// rather than aborting a whole watch or execute run over a control a
+// NEEDS_INFO Issue may never need. This is the up-front disablement
+// docs/specs/live-agent-tui.md's "Answering NEEDS_INFO and Decisions"
+// section requires: no offline answer mode, and no fatal error from a
+// missing or bad credential.
+func resolveAnswerer(ctx context.Context, cfg config.Config, repoRoot string) tui.Answerer {
+	if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
+		return nil
+	}
+	trk, err := buildTracker(cfg, repoRoot)
+	if err != nil {
+		return nil
+	}
+	return trk
+}
+
 type executeRuntime struct {
 	Scheduler               *scheduler.Scheduler
 	LostExecutionController *engine.LostExecutionController

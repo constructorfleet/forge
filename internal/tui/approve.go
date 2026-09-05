@@ -110,8 +110,7 @@ type approveResultMsg struct {
 // approve, and reports that on the notice rather than opening a pager for
 // nothing.
 func (m *LiveModel) openSelectedApprove() tea.Cmd {
-	if m.approving {
-		m.vm.ActionNotice = "approve already in flight"
+	if m.approveFlow.guard(&m.vm.ActionNotice, "approve") {
 		return nil
 	}
 	row, ok := selectedWorker(m.vm)
@@ -153,11 +152,11 @@ func (m *LiveModel) openApprove(dir, artifact string) tea.Cmd {
 // goroutine, so a slow write cannot delay a key press.
 func (m *LiveModel) startApprove() tea.Cmd {
 	if m.Approver == nil {
-		m.approving = false
+		m.approveFlow.close()
 		m.vm.ActionNotice = "approve is not available"
 		return nil
 	}
-	issueID := m.approvingIssueID
+	issueID := m.approveFlow.issueID
 	m.vm.ActionNotice = fmt.Sprintf("approving issue %s…", issueID)
 	approver, ctx, executionID := m.Approver, m.ctx, m.ExecutionID
 	return func() tea.Msg {
@@ -170,11 +169,5 @@ func (m *LiveModel) startApprove() tea.Cmd {
 // failure is swallowed: the operator sees exactly which Issue was approved,
 // or exactly why the approve did not go through (a FeatureFrozenError included).
 func (m *LiveModel) applyApproveResult(msg approveResultMsg) {
-	m.approving = false
-	m.approvingIssueID = ""
-	if msg.err == nil {
-		m.vm.ActionNotice = fmt.Sprintf("approve requested for %s", msg.issueID)
-		return
-	}
-	m.vm.ActionNotice = "approve: " + msg.err.Error()
+	m.approveFlow.applyResult(&m.vm.ActionNotice, msg.issueID, msg.err, "approve", "approve requested for %s")
 }

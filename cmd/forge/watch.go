@@ -168,7 +168,8 @@ func runWatch(args []string) int {
 	// separate detached forge child.
 	operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 	retrier := resolveRetrier(*configPath, *dbPath)
-	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, operationalEngine); err != nil {
+	answerer := resolveAnswerer(ctx, cfg, repoRoot)
+	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, operationalEngine, answerer); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}

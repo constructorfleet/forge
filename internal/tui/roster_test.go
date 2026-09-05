@@ -31,12 +31,24 @@ type fakeRosterStore struct {
 	// checkpoints holds the replan checkpoint per Issue, for the approve key's
 	// on-request read (see approve_test.go).
 	checkpoints map[string]storage.ReplanCheckpoint
+
+	// needsInfoCheckpoints holds the needs-info checkpoint per Issue, for the
+	// answer key's on-request read (see answer_test.go).
+	needsInfoCheckpoints map[string]storage.NeedsInfoCheckpoint
 }
 
 func (f *fakeRosterStore) GetReplanCheckpoint(_ context.Context, _, issueID string) (storage.ReplanCheckpoint, error) {
 	checkpoint, ok := f.checkpoints[issueID]
 	if !ok {
 		return storage.ReplanCheckpoint{}, storage.ErrNotFound
+	}
+	return checkpoint, nil
+}
+
+func (f *fakeRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, issueID string) (storage.NeedsInfoCheckpoint, error) {
+	checkpoint, ok := f.needsInfoCheckpoints[issueID]
+	if !ok {
+		return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
 	}
 	return checkpoint, nil
 }
@@ -251,6 +263,10 @@ func (missingExecutionRosterStore) GetReplanCheckpoint(_ context.Context, _, _ s
 	return storage.ReplanCheckpoint{}, storage.ErrNotFound
 }
 
+func (missingExecutionRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, _ string) (storage.NeedsInfoCheckpoint, error) {
+	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
+}
+
 type failingLoadRosterStore struct {
 	fake *fakeRosterStore
 }
@@ -273,4 +289,8 @@ func (f *failingLoadRosterStore) LatestReviewOutcome(_ context.Context, _, _ str
 
 func (f *failingLoadRosterStore) GetReplanCheckpoint(_ context.Context, _, _ string) (storage.ReplanCheckpoint, error) {
 	return storage.ReplanCheckpoint{}, storage.ErrNotFound
+}
+
+func (f *failingLoadRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, _ string) (storage.NeedsInfoCheckpoint, error) {
+	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
 }

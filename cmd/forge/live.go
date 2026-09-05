@@ -27,8 +27,11 @@ type liveStore interface {
 // nil canceller or approver leaves the control present but inert, and the key
 // explains itself instead of quietly doing nothing. retrier wires the retry
 // key to a detached forge child (ADR 0031, issue #503); a nil retrier leaves
-// that control present but inert too.
-func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver) error {
+// that control present but inert too. answerer wires the answer key to a
+// Tracker's AddComment (issue #505); a nil answerer — from
+// resolveAnswerer's up-front auth preflight failing — leaves the answer
+// control present but inert, with no offline fallback.
+func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver, answerer tui.Answerer) error {
 	roster := tui.NewRoster(store, time.Now)
 	model := tui.NewLiveModel(roster, executionID, 0)
 	model.SetContext(ctx)
@@ -36,6 +39,7 @@ func runLiveRoster(ctx context.Context, store liveStore, executionID string, can
 	model.Canceller = canceller
 	model.Retrier = retrier
 	model.Approver = approver
+	model.Answerer = answerer
 
 	// A quit key removes the diff artifacts itself; this covers every other
 	// exit path (cancellation, signal, panic).
