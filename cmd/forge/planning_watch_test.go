@@ -50,6 +50,27 @@ func TestBuildPlanningModelWiresApproverAndFeatureID(t *testing.T) {
 	}
 }
 
+// TestBuildPlanningModelForFeatureWiresApproverAndFeatureID pins the
+// `forge watch` Feature path (issue #485's third id-space probe): it needs
+// no planning_executions row, only a Feature id.
+func TestBuildPlanningModelForFeatureWiresApproverAndFeatureID(t *testing.T) {
+	store := newWatchTestStore(t)
+	repoRoot := t.TempDir()
+
+	model := buildPlanningModelForFeature(store, "feat-1", nil, repoRoot)
+	if model.FeatureID != "feat-1" {
+		t.Fatalf("FeatureID = %q, want feat-1", model.FeatureID)
+	}
+
+	approver, ok := model.Approver.(*planningapprove.Approver)
+	if !ok {
+		t.Fatalf("Approver = %T, want *planningapprove.Approver", model.Approver)
+	}
+	if approver.Store == nil {
+		t.Fatal("approver.Store is nil")
+	}
+}
+
 func TestBuildPlanningModelUnknownExecutionErrors(t *testing.T) {
 	store := newWatchTestStore(t)
 

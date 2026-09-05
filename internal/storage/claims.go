@@ -185,6 +185,38 @@ func (s *SQLiteStore) HeartbeatWorker(ctx context.Context, executionID, issueID 
 	return nil
 }
 
+// LiveWorkerExecutionIDs returns the distinct execution_id of every Worker
+// claim whose last_heartbeat is at or after cutoff. Bare `forge watch`
+// (issue #485) uses this, not ActiveIssues, to decide which coding
+// Executions are actually live: an Issue can sit non-terminal with no
+// Worker still beating (e.g. a wedged or exited process), and that is
+// exactly the case bare-watch must not silently attach to.
+func (s *SQLiteStore) LiveWorkerExecutionIDs(ctx context.Context, cutoff time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT execution_id
+		FROM workers
+		WHERE last_heartbeat >= ?`,
+		cutoff.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: live worker execution ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("storage: live worker execution ids: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: live worker execution ids: %w", err)
+	}
+	return ids, nil
+}
+
 func isForeignKeyConstraintErr(err error) bool {
 	return strings.Contains(err.Error(), "FOREIGN KEY constraint failed")
 }

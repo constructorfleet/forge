@@ -34,7 +34,15 @@ import (
 // never starts or owns a Planning Execution. Only `forge watch <id>` reaches
 // PlanningModel, by probing planning_executions (see planning_watch.go and
 // docs/specs/live-agent-tui.md section 6).
+// runExecute is the `forge execute` command boundary. The first recover()
+// sits here, not in main. A call to os.Exit skips every deferred function
+// above it. This way a panic anywhere in the run becomes a clean exit code
+// 1, not a crash.
 func runExecute(args []string) int {
+	return withPanicGuard("forge execute", func() int { return doRunExecute(args) })
+}
+
+func doRunExecute(args []string) int {
 	fs := flag.NewFlagSet("forge execute", flag.ContinueOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")

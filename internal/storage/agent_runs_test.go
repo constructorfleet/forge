@@ -294,3 +294,72 @@ func TestStartAgentRunWithoutFinalize_LeavesRunningResult(t *testing.T) {
 		t.Fatalf("events = %d, want 0 (interrupted run never finalized)", len(events))
 	}
 }
+
+// TestFeatureHasPlanningRunsTrueAfterRecordAgentRun pins `forge watch`'s
+// third id-space probe (issue #485): a Feature carries no store-backed row
+// of its own, so its existence is inferred from a planning-backend
+// agent_runs row keyed by execution_id = featureID (see
+// planningagent.NewPersistingAgentBackend).
+func TestFeatureHasPlanningRunsTrueAfterRecordAgentRun(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	run := storage.AgentRun{
+		ExecutionID: "feat-1",
+		IssueID:     "feat-1",
+		Backend:     "planning",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Result:      "COMPLETE",
+	}
+	if _, err := store.RecordAgentRun(ctx, run); err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	ok, err := store.FeatureHasPlanningRuns(ctx, "feat-1")
+	if err != nil {
+		t.Fatalf("FeatureHasPlanningRuns: %v", err)
+	}
+	if !ok {
+		t.Fatal("FeatureHasPlanningRuns = false, want true")
+	}
+}
+
+func TestFeatureHasPlanningRunsFalseForUnknownID(t *testing.T) {
+	store := openTestStore(t)
+
+	ok, err := store.FeatureHasPlanningRuns(context.Background(), "missing")
+	if err != nil {
+		t.Fatalf("FeatureHasPlanningRuns: %v", err)
+	}
+	if ok {
+		t.Fatal("FeatureHasPlanningRuns = true, want false")
+	}
+}
+
+// TestFeatureHasPlanningRunsFalseForCodingBackend proves a coding Execution
+// ID never satisfies the Feature probe, even though it shares the same
+// table: only backend = 'planning' rows count.
+func TestFeatureHasPlanningRunsFalseForCodingBackend(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-agent", "issue-agent")
+	run := storage.AgentRun{
+		ExecutionID: "exec-agent",
+		IssueID:     "issue-agent",
+		Backend:     "claude-code",
+		StartedAt:   time.Now(),
+		FinishedAt:  time.Now(),
+		Result:      "IMPLEMENTED",
+	}
+	if _, err := store.RecordAgentRun(ctx, run); err != nil {
+		t.Fatalf("RecordAgentRun: %v", err)
+	}
+
+	ok, err := store.FeatureHasPlanningRuns(ctx, "exec-agent")
+	if err != nil {
+		t.Fatalf("FeatureHasPlanningRuns: %v", err)
+	}
+	if ok {
+		t.Fatal("FeatureHasPlanningRuns = true for coding backend, want false")
+	}
+}

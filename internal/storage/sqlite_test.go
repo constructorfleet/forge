@@ -499,6 +499,52 @@ func TestHeartbeatWorkerAdvancesLastHeartbeat(t *testing.T) {
 	}
 }
 
+// TestLiveWorkerExecutionIDsFiltersStale pins the query bare `forge watch`
+// needs (issue #485): it reports only Executions whose Worker's
+// last_heartbeat is at or after cutoff, not merely Executions with an
+// active Issue.
+func TestLiveWorkerExecutionIDsFiltersStale(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedExecutionAndIssue(t, store, "exec-live", "issue-live", domain.StateReady)
+	seedExecutionAndIssue(t, store, "exec-stale", "issue-stale", domain.StateReady)
+	if err := store.ClaimIssue(ctx, "exec-live", "issue-live", "worker-a"); err != nil {
+		t.Fatalf("ClaimIssue live: %v", err)
+	}
+	if err := store.ClaimIssue(ctx, "exec-stale", "issue-stale", "worker-b"); err != nil {
+		t.Fatalf("ClaimIssue stale: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.HeartbeatWorker(ctx, "exec-live", "issue-live", now); err != nil {
+		t.Fatalf("HeartbeatWorker live: %v", err)
+	}
+	if err := store.HeartbeatWorker(ctx, "exec-stale", "issue-stale", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("HeartbeatWorker stale: %v", err)
+	}
+
+	ids, err := store.LiveWorkerExecutionIDs(ctx, now.Add(-15*time.Second))
+	if err != nil {
+		t.Fatalf("LiveWorkerExecutionIDs: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "exec-live" {
+		t.Fatalf("LiveWorkerExecutionIDs = %v, want [exec-live]", ids)
+	}
+}
+
+// TestLiveWorkerExecutionIDsEmptyWhenNoWorkers proves the query returns no
+// rows (not an error) when no Worker has ever claimed anything.
+func TestLiveWorkerExecutionIDsEmptyWhenNoWorkers(t *testing.T) {
+	store := openTestStore(t)
+
+	ids, err := store.LiveWorkerExecutionIDs(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("LiveWorkerExecutionIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("LiveWorkerExecutionIDs = %v, want empty", ids)
+	}
+}
+
 // TestTransitionIssueRecordsStateChangedAt pins that the transition
 // transaction stamps execution_issues.state_changed_at, so a reloaded Issue
 // carries a non-zero StateChangedAt. Verifies both the returned Issue and
