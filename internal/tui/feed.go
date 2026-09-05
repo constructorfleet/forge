@@ -31,9 +31,12 @@ type TranscriptFeedStore interface {
 // Execution, keyed by Issue ID. Each Issue is its own context: switching the
 // operator's selection to another Issue and back holds the first Issue's
 // selection, expansion, and scrollback exactly as the operator left them,
-// rather than rebuilding it from scratch. A poll against a different
-// Execution starts fresh, because an Issue ID is an Execution-scoped label
-// and the same label under another Execution names another Worker.
+// rather than rebuilding it from scratch. This guarantee holds only for the
+// MaxTranscriptPanes most recently viewed Issues; past that cap, the least
+// recently viewed Issue's pane is evicted and rebuilds from scratch on
+// return. A poll against a different Execution starts fresh, because an
+// Issue ID is an Execution-scoped label and the same label under another
+// Execution names another Worker.
 type TranscriptFeed struct {
 	store TranscriptFeedStore
 
@@ -42,17 +45,31 @@ type TranscriptFeed struct {
 	// meaningless across Executions.
 	executionID string
 	// issues holds one pane and tailer per Issue ID, so a poll for a
-	// different Issue never discards another Issue's context.
+	// different Issue never discards another Issue's context. It never grows
+	// past MaxTranscriptPanes: an Apply that would add one more first evicts
+	// the Issue with the oldest view.
 	issues map[string]*issuePane
+	// view counts Applies, so each issuePane can record the Apply it was last
+	// viewed at. The lowest count among held panes names the eviction target.
+	view int
 
 	// height is the viewport height a newly built tailer inherits.
 	height int
 }
 
+// MaxTranscriptPanes bounds the feed's per-Issue pane cache. A roster past
+// this many Workers still polls every Issue; only the pane cache is bounded,
+// so the operator's scrollback for the least recently viewed Issue is the one
+// an Apply past the cap discards.
+const MaxTranscriptPanes = 8
+
 // issuePane is one Issue's transcript pane plus the tailer that drives it.
 type issuePane struct {
 	pane   *TranscriptPane
 	tailer *TranscriptTailer
+	// lastViewed holds the feed's view count as of this Issue's most recent
+	// Apply, so eviction can find the pane the operator left longest ago.
+	lastViewed int
 }
 
 // NewTranscriptFeed builds a feed over store. The first Apply builds the pane.
@@ -169,17 +186,37 @@ func (f *TranscriptFeed) Poll(ctx context.Context, executionID, issueID string) 
 
 // ensureIssue returns the Issue's held pane, building a fresh one on first
 // use. The tailer waits for the first AgentRun, because a tailer needs a run
-// to attach to.
+// to attach to. Building a pane past MaxTranscriptPanes first evicts the
+// Issue viewed longest ago, so the cache never grows without limit.
 func (f *TranscriptFeed) ensureIssue(issueID string) *issuePane {
 	if f.issues == nil {
 		f.issues = make(map[string]*issuePane)
 	}
+	f.view++
 	ip, ok := f.issues[issueID]
 	if !ok {
+		if len(f.issues) >= MaxTranscriptPanes {
+			f.evictLeastRecentlyViewed()
+		}
 		ip = &issuePane{pane: NewTranscriptPane()}
 		f.issues[issueID] = ip
 	}
+	ip.lastViewed = f.view
 	return ip
+}
+
+// evictLeastRecentlyViewed drops the held pane with the oldest lastViewed, so
+// a new Issue can enter the cache without it growing past MaxTranscriptPanes.
+func (f *TranscriptFeed) evictLeastRecentlyViewed() {
+	var oldestID string
+	oldestView := f.view + 1
+	for id, ip := range f.issues {
+		if ip.lastViewed < oldestView {
+			oldestView = ip.lastViewed
+			oldestID = id
+		}
+	}
+	delete(f.issues, oldestID)
 }
 
 // tailerFor returns the tailer Fetch reads through, or nil where the Issue holds
