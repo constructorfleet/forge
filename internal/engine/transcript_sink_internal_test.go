@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/storage"
@@ -14,9 +15,11 @@ import (
 // RecordTranscriptEvents append, optionally failing to prove best-effort
 // capture drops events instead of advancing the flush watermark.
 type recordingTranscriptStore struct {
-	mu    sync.Mutex
-	calls [][]storage.TranscriptEvent
-	fail  bool
+	mu          sync.Mutex
+	calls       [][]storage.TranscriptEvent
+	fail        bool
+	deadlineSet bool
+	deadline    time.Time
 }
 
 // RecordTranscriptEvents rejects a cancelled context first, the way
@@ -27,6 +30,10 @@ func (s *recordingTranscriptStore) RecordTranscriptEvents(ctx context.Context, _
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if deadline, ok := ctx.Deadline(); ok {
+		s.deadlineSet = true
+		s.deadline = deadline
+	}
 	if s.fail {
 		return errors.New("store down")
 	}
@@ -126,6 +133,27 @@ func TestSinkFlush_PersistsAfterContextCancellation(t *testing.T) {
 
 	if len(store.calls) != 1 || len(store.calls[0]) != 1 || store.calls[0][0].Text != "cancelled before output" {
 		t.Fatalf("flush after cancellation = %+v, want the fallback event appended", store.calls)
+	}
+}
+
+// TestSinkFlush_UsesBoundedCancelImmuneContext asserts a stuck store gets a
+// flush-specific deadline. The context must outlive caller cancellation, but
+// it must not live forever.
+func TestSinkFlush_UsesBoundedCancelImmuneContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &recordingTranscriptStore{}
+	sink := newPersistingTranscriptSink(ctx, store, "exec", "issue", 7, "phase", "sub", nil)
+
+	cancel()
+	before := time.Now()
+	sink.recorder.Emit(agent.TranscriptEvent{Type: agent.TranscriptEventMessage, Role: "assistant", Text: "a"})
+	sink.flush()
+
+	if !store.deadlineSet {
+		t.Fatalf("flush context has no deadline")
+	}
+	if until := store.deadline.Sub(before); until <= 0 || until > 5*time.Second+100*time.Millisecond {
+		t.Fatalf("flush context deadline is %s from start, want about 5s", until)
 	}
 }
 
