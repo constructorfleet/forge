@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.37.0](https://github.com/constructorfleet/forge/compare/forge-v0.36.3...forge-v0.37.0) (2026-09-05)
+
+
+### Features
+
+* planning_executions covers only the wayfinding stage; the row reads COMPLETE while four stages still run ([#582](https://github.com/constructorfleet/forge/issues/582)) ([6aca8b2](https://github.com/constructorfleet/forge/commit/6aca8b2eee0cc67e83500bf67911a5dffde665c7)), closes [#470](https://github.com/constructorfleet/forge/issues/470)
+* refreshRetryBase failures other than rebase conflict leave no trace in the store ([#577](https://github.com/constructorfleet/forge/issues/577)) ([9ab3286](https://github.com/constructorfleet/forge/commit/9ab32862d8ee01b34d8f8df4d0c6d056ca823534)), closes [#458](https://github.com/constructorfleet/forge/issues/458)
+* TUI approve control (PAGER); fix stacked PR creation after prerequisite merge ([#504](https://github.com/constructorfleet/forge/issues/504)) ([#587](https://github.com/constructorfleet/forge/issues/587)) ([5e0ad56](https://github.com/constructorfleet/forge/commit/5e0ad56256956821cd9bb90a9c845292ea7cbd64))
+* TUI: cancel control ([#584](https://github.com/constructorfleet/forge/issues/584)) ([dbc777a](https://github.com/constructorfleet/forge/commit/dbc777ab0d689f84337b889f9fb300859dda80ca)), closes [#502](https://github.com/constructorfleet/forge/issues/502)
+* TUI: retry control (detached child) ([#586](https://github.com/constructorfleet/forge/issues/586)) ([3c77a56](https://github.com/constructorfleet/forge/commit/3c77a56da51a2d67ee0460faa8adc257343e6db4)), closes [#503](https://github.com/constructorfleet/forge/issues/503)
+
+
+### Bug Fixes
+
+* forge retry silently creates an empty DB and defaults its config when run outside the repo root ([#578](https://github.com/constructorfleet/forge/issues/578)) ([5116094](https://github.com/constructorfleet/forge/commit/5116094871b9c37e5b2b2d65bf1cbe8dbb9838e3)), closes [#459](https://github.com/constructorfleet/forge/issues/459)
+
 ## [0.36.3](https://github.com/constructorfleet/forge/compare/forge-v0.36.2...forge-v0.36.3) (2026-09-04)
 
 
