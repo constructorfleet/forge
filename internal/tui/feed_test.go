@@ -3,6 +3,7 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -466,5 +467,105 @@ func TestFeedSetHeightAfterPollWindowsTheTailer(t *testing.T) {
 	}
 	if got := tui.RenderTranscript(pane); strings.Contains(got, "starting work") {
 		t.Errorf("a height of 2 kept the oldest event:\n%s", got)
+	}
+}
+
+// manyIssuesFeedStore builds a store with n Issues, each with one AgentRun and
+// two prose events, so a test can poll past the feed's pane cap and pin a
+// non-default selection to tell a preserved pane from a rebuilt one.
+func manyIssuesFeedStore(n int) *fakeFeedStore {
+	store := &fakeFeedStore{
+		runs:   map[string][]storage.AgentRun{},
+		events: map[int64][]storage.TranscriptEvent{},
+	}
+	for i := 1; i <= n; i++ {
+		issueID := fmt.Sprintf("#%d", i)
+		runID := int64(100 + i)
+		store.runs[issueID] = []storage.AgentRun{{ID: runID, ExecutionID: "ex-1", IssueID: issueID}}
+		store.events[runID] = []storage.TranscriptEvent{
+			{AgentRunID: runID, Seq: 0, Type: "MESSAGE", Role: "assistant", Text: fmt.Sprintf("issue %d first", i)},
+			{AgentRunID: runID, Seq: 1, Type: "MESSAGE", Role: "assistant", Text: fmt.Sprintf("issue %d second", i)},
+		}
+	}
+	return store
+}
+
+// TestFeedPollEvictsLeastRecentlyViewedPaneOverCapacity proves the feed's pane
+// cache is bounded: polling more Issues than the cap evicts the Issue the
+// operator viewed longest ago, so the cache cannot grow without limit while a
+// recently viewed Issue still keeps its place.
+func TestFeedPollEvictsLeastRecentlyViewedPaneOverCapacity(t *testing.T) {
+	const cap = tui.MaxTranscriptPanes
+	store := manyIssuesFeedStore(cap + 1)
+	feed := tui.NewTranscriptFeed(store)
+	ctx := context.Background()
+
+	first, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1: %v", err)
+	}
+	// Pin the older event: the pane's default selection is the newest one, so
+	// this pin survives only if the pane itself survives.
+	first.Select(0)
+
+	// Visit every other Issue once, which keeps #1 the least recently viewed.
+	for i := 2; i <= cap+1; i++ {
+		issueID := fmt.Sprintf("#%d", i)
+		if _, err := feed.Poll(ctx, "ex-1", issueID); err != nil {
+			t.Fatalf("Poll %s: %v", issueID, err)
+		}
+	}
+
+	backTo1, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1 again: %v", err)
+	}
+	if backTo1 == first {
+		t.Fatal("the cache held #1's pane past its capacity instead of evicting it")
+	}
+	e, ok := backTo1.SelectedEntry()
+	if !ok {
+		t.Fatal("the rebuilt pane holds no selection")
+	}
+	if e.Event.Seq != 1 {
+		t.Errorf("selection seq = %d, want 1: the evicted Issue's rebuilt pane still carries the old pinned selection", e.Event.Seq)
+	}
+}
+
+// TestFeedPollKeepsPanesWithinCapacity proves an Issue viewed within the
+// cap's most recent window keeps its pane, so ordinary roster navigation
+// among a few Workers never rebuilds a pane the operator just left.
+func TestFeedPollKeepsPanesWithinCapacity(t *testing.T) {
+	const cap = tui.MaxTranscriptPanes
+	store := manyIssuesFeedStore(cap)
+	feed := tui.NewTranscriptFeed(store)
+	ctx := context.Background()
+
+	first, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1: %v", err)
+	}
+	first.Select(0)
+
+	for i := 2; i <= cap; i++ {
+		issueID := fmt.Sprintf("#%d", i)
+		if _, err := feed.Poll(ctx, "ex-1", issueID); err != nil {
+			t.Fatalf("Poll %s: %v", issueID, err)
+		}
+	}
+
+	backTo1, err := feed.Poll(ctx, "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll #1 again: %v", err)
+	}
+	if backTo1 != first {
+		t.Fatal("polling within the cap rebuilt #1's pane instead of keeping it")
+	}
+	e, ok := backTo1.SelectedEntry()
+	if !ok {
+		t.Fatal("polling within the cap lost #1's selection")
+	}
+	if e.Event.Seq != 0 {
+		t.Errorf("selection seq = %d, want 0: polling within the cap lost #1's pinned selection", e.Event.Seq)
 	}
 }
