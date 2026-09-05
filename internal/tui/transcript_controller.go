@@ -34,6 +34,9 @@ type transcriptController struct {
 	// the runtime has sent no size yet: the frame then clips nothing and the
 	// tailer keeps its own default.
 	winHeight int
+	// winWidth is the last terminal width the runtime reported. Zero means the
+	// runtime has sent no size yet: the pane then wraps no line.
+	winWidth int
 
 	// artifactDirPath holds this session's pager/editor artifacts. A pager or
 	// editor killed before its own cleanup callback runs leaves a file, so
@@ -106,16 +109,21 @@ func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantIssueI
 	return nil
 }
 
-// sizeFeed sizes the tailer's event window from the transcript row budget.
-// The two units differ: the tailer counts events and the budget counts
-// rows, and one event can draw several rows. So this is an upper bound on
-// how much history to read, and Render (or RenderPlanning) owns the exact
-// clip to the terminal.
-func (t *transcriptController) sizeFeed(rows int) {
-	if t.feed == nil || rows <= 0 {
+// sizeFeed sizes the tailer's event window from the transcript row budget and
+// the pane's wrap width from the terminal width. The event window and the row
+// budget differ in unit: the tailer counts events and the budget counts rows,
+// and one event can draw several rows. So the event window is an upper bound
+// on how much history to read, and Render (or RenderPlanning) owns the exact
+// clip to the terminal; the wrap width is exact, so a long line renders as the
+// rows it actually draws and the clip counts them correctly.
+func (t *transcriptController) sizeFeed(rows, width int) {
+	if t.feed == nil {
 		return
 	}
-	t.feed.SetHeight(rows)
+	if rows > 0 {
+		t.feed.SetHeight(rows)
+	}
+	t.feed.SetWidth(width)
 }
 
 // artifactDir returns this session's pager/editor artifact directory,

@@ -810,6 +810,31 @@ func TestLiveModelWindowSizeSetsTranscriptHeight(t *testing.T) {
 	}
 }
 
+// TestLiveModelWindowSizeSetsTranscriptWidth proves the terminal width reaches
+// the feed's pane: a narrow terminal wraps the transcript's lines to more rows
+// than a wide one, so a line longer than the terminal no longer overflows the
+// terminal below the footer. The height is large enough that neither render
+// clips, so the row-count difference comes from wrapping alone.
+func TestLiveModelWindowSizeSetsTranscriptWidth(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	m, _ := liveFixture(t, now)
+	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 100})
+	nextPollTick(t, m)
+	wide := len(splitLines(m.View().Content))
+
+	m2, _ := liveFixture(t, now)
+	m2.SetFeed(tui.NewTranscriptFeed(feedFixture()))
+	m2.Update(tea.WindowSizeMsg{Width: 5, Height: 100})
+	nextPollTick(t, m2)
+	narrow := len(splitLines(m2.View().Content))
+
+	if narrow <= wide {
+		t.Errorf("a width of 5 produced %d rows, want more than the width-200 render's %d", narrow, wide)
+	}
+}
+
 // TestLiveModelWindowSizeAfterPollResizesTranscript proves a resize after the
 // first poll reaches the pane the feed already holds.
 func TestLiveModelWindowSizeAfterPollResizesTranscript(t *testing.T) {

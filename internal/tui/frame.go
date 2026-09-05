@@ -315,6 +315,11 @@ func clipTranscript(transcript *TranscriptPane, rows int) []string {
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if rows > 0 && len(lines) > rows {
 		lines = lines[len(lines)-rows:]
+		// The kept slice can start mid-way through a wrapped, styled line
+		// (see wrapWidth in wrap.go), so an SGR code opened above the cut
+		// has no matching row here to close it. A leading reset guarantees
+		// the kept window never inherits an open style from a dropped row.
+		lines[0] = "\x1b[0m" + lines[0]
 	}
 	return lines
 }

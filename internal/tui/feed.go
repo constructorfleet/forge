@@ -55,6 +55,9 @@ type TranscriptFeed struct {
 
 	// height is the viewport height a newly built tailer inherits.
 	height int
+	// width is the terminal width a newly built pane inherits, so a pane
+	// wraps a line to the rows the terminal actually draws.
+	width int
 }
 
 // MaxTranscriptPanes bounds the feed's per-Issue pane cache. A roster past
@@ -91,6 +94,17 @@ func (f *TranscriptFeed) SetHeight(h int) {
 		if ip.tailer != nil {
 			ip.tailer.SetHeight(h)
 		}
+	}
+}
+
+// SetWidth sets the terminal width every held pane wraps a line to, and the
+// width a pane ensureIssue builds later inherits. A width of zero or less
+// applies no wrap. The live view calls it from the terminal size, so a line
+// longer than the terminal renders as the rows it actually draws.
+func (f *TranscriptFeed) SetWidth(w int) {
+	f.width = w
+	for _, ip := range f.issues {
+		ip.pane.SetWidth(w)
 	}
 }
 
@@ -199,6 +213,7 @@ func (f *TranscriptFeed) ensureIssue(issueID string) *issuePane {
 			f.evictLeastRecentlyViewed()
 		}
 		ip = &issuePane{pane: NewTranscriptPane()}
+		ip.pane.SetWidth(f.width)
 		f.issues[issueID] = ip
 	}
 	ip.lastViewed = f.view
