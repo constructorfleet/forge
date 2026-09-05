@@ -593,3 +593,52 @@ func TestTailerOrdersLateEventByRunInsertion(t *testing.T) {
 		}
 	}
 }
+
+// TestTailerPageScroll proves the viewport scrolls by a page (the visible
+// height) when requested.
+func TestTailerPageScroll(t *testing.T) {
+	store := &fakeTranscriptStore{}
+	for i := range 20 {
+		store.events = append(store.events, msg(i, "e"))
+	}
+	tailer := tui.NewTranscriptTailer(store, 7, 100)
+	tailer.SetHeight(5)
+
+	vm, err := tailer.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(vm.Events) != 5 || vm.Events[0].Seq != 15 || !vm.AtTail {
+		t.Fatalf("tail window = %v (AtTail %v), want seqs [15..19]", vm.Events, vm.AtTail)
+	}
+
+	// Scroll up one page (5 events).
+	tailer.ScrollUp(5)
+	vm, _ = tailer.Poll(context.Background())
+	if vm.Events[0].Seq != 10 || vm.Events[4].Seq != 14 {
+		t.Fatalf("scrolled window = %v, want seqs [10..14]", vm.Events)
+	}
+	if vm.AtTail {
+		t.Fatalf("AtTail = true, want false while scrolled back")
+	}
+
+	// Scroll down one page (5 events).
+	tailer.ScrollDown(5)
+	vm, _ = tailer.Poll(context.Background())
+	if vm.Events[0].Seq != 15 || vm.Events[4].Seq != 19 {
+		t.Fatalf("scrolled window = %v, want seqs [15..19]", vm.Events)
+	}
+	if !vm.AtTail {
+		t.Fatalf("AtTail = false, want true after scrolling down a page")
+	}
+
+	// Scroll up past the retained start clamps.
+	tailer.ScrollUp(100)
+	vm, _ = tailer.Poll(context.Background())
+	if vm.Events[0].Seq != 0 {
+		t.Fatalf("clamped window = %v, want the retained start", vm.Events)
+	}
+	if !vm.AtStart {
+		t.Fatalf("AtStart = false, want true at retained start")
+	}
+}
