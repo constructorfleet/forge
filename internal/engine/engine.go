@@ -1019,6 +1019,19 @@ func (e *Engine) continueAgent(ctx context.Context, executionID, issueID string,
 	return e.executeAgent(ctx, executionID, issueID, env, repoCtx, issue, feedback, false)
 }
 
+// agentDeadlineMultiplier sets the engine's own belt-and-braces deadline for
+// one Agent invocation as a multiple of Config.Agent.Timeout
+// (constructorfleet/forge#467). #455 bounds a wedged, output-free run inside
+// each Adapter's own Execute loop, but a hang outside that loop — in a
+// future Adapter that forgets to plumb Timeout through, or any other path
+// that reaches env.Agent().Execute without its own internal bound — stays
+// unbounded. This deadline catches that gap. It does not cover Workspace
+// setup or the quality-gate phase, which run before or after this call and
+// stay unbounded by this change. It stays a strict multiple, not equal to
+// Timeout, so it never pre-empts an Adapter's own idle timeout on a run
+// that is still making progress.
+const agentDeadlineMultiplier = 3
+
 // executeAgent invokes the Agent through env.Agent() — in the Workspace
 // env wraps (constructorfleet/forge#302) — rather than through Engine's
 // own Agent field, so the Agent that runs is always the one bound to the
@@ -1068,7 +1081,9 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	}
 	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now)
 
-	result, err := env.Agent().Execute(ctx, req)
+	agentCtx, cancel := context.WithTimeout(ctx, agentDeadlineMultiplier*e.Config.Agent.Timeout)
+	defer cancel()
+	result, err := env.Agent().Execute(agentCtx, req)
 	req.Transcript.(*persistingTranscriptSink).Close()
 	finished := e.Now()
 	run := storage.AgentRun{
