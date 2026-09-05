@@ -228,7 +228,7 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 	return e.transition(ctx, executionID, issueID, domain.StateCIPending)
 }
 
-// prBase resolves the base branch for issue's pull request (ticket 331,
+// prBase resolves the base branch for issue's new pull request (ticket 331,
 // constructorfleet/forge#288 "stacked-branch maintenance 2/4"). A
 // single-parent stacked child targets its prerequisite's branch, so review
 // shows only the child's own diff, not the prerequisite's commits mixed in.
@@ -242,8 +242,14 @@ func (e *Engine) runCommitAndPR(ctx context.Context, executionID, issueID, worke
 // Worker prepared its Workspace; if no such Workspace was recorded (for
 // example, an External Dependency, which has no Forge-managed branch), it
 // falls back to e.BaseBranch too.
+//
+// A prerequisite that has already merged (its Issue is DONE) also falls back
+// to e.BaseBranch: the host deletes the prerequisite branch on merge, so a
+// new pull request that targets the deleted branch fails to open. This uses
+// ResolveForNewPullRequest, not Resolve, because this base is for a pull
+// request that does not exist yet.
 func (e *Engine) prBase(ctx context.Context, executionID string, issue domain.Issue) (string, error) {
-	base, err := prbase.Resolve(ctx, e.Store, executionID, issue, e.BaseBranch)
+	base, err := prbase.ResolveForNewPullRequest(ctx, e.Store, executionID, issue, e.BaseBranch)
 	if err != nil {
 		return "", fmt.Errorf("engine: %w", err)
 	}

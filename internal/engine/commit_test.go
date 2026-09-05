@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
@@ -505,9 +506,11 @@ func TestExecute_CommitError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 }
 
 // TestExecute_PRCreationError_FailsOutAndCleansUpWorkspace mirrors the
-// Commit-error test for a PRTracker.CreatePullRequest failure — the Issue
-// has already advanced to PR_CREATING (a state with no FAILED edge) by the
-// time this can fail, so this also exercises failOut's CANCELLED fallback.
+// Commit-error test for a PRTracker.CreatePullRequest failure — the Issue has
+// already advanced to PR_CREATING by the time this can fail. PR_CREATING has a
+// FAILED edge, so failOut routes the Issue to FAILED, a visible and retryable
+// terminal state, rather than to the generic CANCELLED edge that would hide
+// the error and leave no retry path.
 func TestExecute_PRCreationError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 	te := approvedTestEngine(t, "44", domain.Issue{ID: "44", Title: "PR creation fails"})
 	pub := &fakePublisher{commitSHA: "sha-44"}
@@ -517,11 +520,24 @@ func TestExecute_PRCreationError_FailsOutAndCleansUpWorkspace(t *testing.T) {
 	te.eng.PRTracker = prTracker
 	te.eng.BaseBranch = "main"
 
-	if _, err := te.eng.Execute(context.Background(), "44", te.base); err == nil {
-		t.Fatal("Execute: want error when PRTracker.CreatePullRequest fails")
+	ctx := context.Background()
+	execution := domain.Execution{ID: "exec-pr-fail", BaseRevision: te.base, StartedAt: time.Unix(1710000000, 0).UTC()}
+	if err := te.store.CreateExecution(ctx, execution); err != nil {
+		t.Fatalf("CreateExecution: %v", err)
+	}
+
+	if _, err := te.eng.ExecuteInExecution(ctx, execution, "44", te.base); err == nil {
+		t.Fatal("ExecuteInExecution: want error when PRTracker.CreatePullRequest fails")
 	}
 	if !te.ws.CleanupCalled() {
 		t.Error("Cleanup was not called after a PR creation error, want the orphaned Workspace removed")
+	}
+	issue, getErr := te.store.GetIssue(ctx, execution.ID, "44")
+	if getErr != nil {
+		t.Fatalf("GetIssue: %v", getErr)
+	}
+	if issue.State != domain.StateFailed {
+		t.Fatalf("final state = %s, want FAILED (retryable), not a silent CANCELLED", issue.State)
 	}
 }
 

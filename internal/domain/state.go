@@ -159,7 +159,14 @@ var transitions = map[IssueState][]IssueState{
 	// engine.escalateReviewToNeedsInfo.
 	StateReviewing:  {StateImplementing, StateCommitting, StateNeedsInfo, StateProviderLimit, StateFailed},
 	StateCommitting: {StatePRCreating, StateNeedsReplan, StateNeedsInfo, StateFailed},
-	StatePRCreating: {StateCIPending},
+	// PR_CREATING -> FAILED: a pull-request creation error (for example, the
+	// host rejects the request, or the base branch no longer exists) must
+	// land the Issue in FAILED, a visible and retryable terminal state.
+	// Without this edge, engine.failOut cannot route a PR_CREATING error to
+	// FAILED and falls back to the generic CANCELLED edge, which hides the
+	// error and leaves the pushed branch with no pull request and no retry
+	// path.
+	StatePRCreating: {StateCIPending, StateFailed},
 	// CIPending -> NeedsInfo (issue 109, "PR supervision"): the CI
 	// Supervisor's poll loop (internal/ci.Supervisor.Wait) also inspects
 	// pull-request mergeability and review feedback alongside required
