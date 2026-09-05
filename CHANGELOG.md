@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.48.1](https://github.com/constructorfleet/forge/compare/forge-v0.48.0...forge-v0.48.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* Engine applies no timeout of its own, so a non-adapter hang is still unbounded ([#672](https://github.com/constructorfleet/forge/issues/672)) ([3e6601e](https://github.com/constructorfleet/forge/commit/3e6601e7341539d4448baae6ab9a4b061f6747b4)), closes [#467](https://github.com/constructorfleet/forge/issues/467)
+* NEEDS_INFO resume discards the human's answer: ResumedContext has no reader and the Agent is invoked with nil feedback ([#673](https://github.com/constructorfleet/forge/issues/673)) ([a624263](https://github.com/constructorfleet/forge/commit/a6242634392b6876faec290119d3e29a9fd3b513)), closes [#475](https://github.com/constructorfleet/forge/issues/475)
+
 ## [0.48.0](https://github.com/constructorfleet/forge/compare/forge-v0.47.0...forge-v0.48.0) (2026-09-05)
 
 
