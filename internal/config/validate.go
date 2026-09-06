@@ -41,6 +41,7 @@ func validate(cfg Config) error {
 	}
 
 	usesGitLab := false
+	usesGitea := false
 	switch cfg.Tracker.Type {
 	case "github":
 		// no further constraints
@@ -49,6 +50,11 @@ func validate(cfg Config) error {
 		// Forge does not infer a GitLab project from the "origin" remote,
 		// because a self-managed instance can use any host name. The
 		// project must therefore be named in the file.
+	case "gitea":
+		usesGitea = true
+		// Forge does not infer a Gitea repository from the "origin" remote,
+		// because a self-managed instance can use any host name. The project
+		// and the base URL must therefore be named in the file.
 	case "linear":
 		// Linear is tracker-only (CONTEXT.md): it supplies no SCM or CI
 		// capability, so a composition naming it there, or omitting an
@@ -61,7 +67,7 @@ func validate(cfg Config) error {
 				"must not be empty when tracker.type is linear; give the Linear team key (for example \"FOR\")"))
 		}
 	default:
-		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github, gitlab, linear"))
+		errs = append(errs, fieldErr("tracker.type", cfg.Tracker.Type, "unsupported tracker type; supported: github, gitlab, gitea, linear"))
 	}
 	if strings.TrimSpace(cfg.Tracker.Provider) == "" {
 		errs = append(errs, fieldErr("tracker.provider", cfg.Tracker.Provider, "must not be empty"))
@@ -72,8 +78,10 @@ func validate(cfg Config) error {
 		// no further constraints
 	case "gitlab":
 		usesGitLab = true
+	case "gitea":
+		usesGitea = true
 	default:
-		errs = append(errs, fieldErr("scm.type", cfg.SCM.Type, "unsupported scm type; supported: github, gitlab"))
+		errs = append(errs, fieldErr("scm.type", cfg.SCM.Type, "unsupported scm type; supported: github, gitlab, gitea"))
 	}
 
 	switch cfg.CI.Type {
@@ -81,8 +89,10 @@ func validate(cfg Config) error {
 		// no further constraints
 	case "gitlab":
 		usesGitLab = true
+	case "gitea":
+		usesGitea = true
 	default:
-		errs = append(errs, fieldErr("ci.type", cfg.CI.Type, "unsupported ci type; supported: github, gitlab"))
+		errs = append(errs, fieldErr("ci.type", cfg.CI.Type, "unsupported ci type; supported: github, gitlab, gitea"))
 	}
 
 	// Frozen composition rule: CI checks attach to the change request,
@@ -99,6 +109,16 @@ func validate(cfg Config) error {
 	if usesGitLab && strings.TrimSpace(cfg.Tracker.GitLab.Project) == "" {
 		errs = append(errs, fieldErr("tracker.gitlab.project", cfg.Tracker.GitLab.Project,
 			"must not be empty when a gitlab capability is selected; give the path with namespace (group/project) or the numeric project ID"))
+	}
+	if usesGitea {
+		if strings.TrimSpace(cfg.Tracker.Gitea.Project) == "" {
+			errs = append(errs, fieldErr("tracker.gitea.project", cfg.Tracker.Gitea.Project,
+				"must not be empty when a gitea capability is selected; give the repository as owner/repo"))
+		}
+		if strings.TrimSpace(cfg.Tracker.Gitea.BaseURL) == "" {
+			errs = append(errs, fieldErr("tracker.gitea.base_url", cfg.Tracker.Gitea.BaseURL,
+				"must not be empty when a gitea capability is selected; give the instance root, for example https://gitea.example.com"))
+		}
 	}
 
 	if strings.TrimSpace(cfg.Git.Base) == "" {

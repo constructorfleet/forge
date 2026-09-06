@@ -543,6 +543,65 @@ func TestLoad_GitLabSCMAndCICompositionIsAccepted(t *testing.T) {
 	}
 }
 
+func TestLoad_GiteaTrackerTypeIsAccepted(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitea\n  gitea:\n    project: acme/widgets\n    base_url: https://gitea.example.com\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Tracker.Type != "gitea" {
+		t.Errorf("Tracker.Type = %q, want gitea", cfg.Tracker.Type)
+	}
+	if cfg.Tracker.Gitea.Project != "acme/widgets" {
+		t.Errorf("Tracker.Gitea.Project = %q, want acme/widgets", cfg.Tracker.Gitea.Project)
+	}
+	if cfg.Tracker.Gitea.BaseURL != "https://gitea.example.com" {
+		t.Errorf("Tracker.Gitea.BaseURL = %q, want the configured instance root", cfg.Tracker.Gitea.BaseURL)
+	}
+	// An explicit tracker block does not cascade to SCM or CI.
+	if cfg.SCM.Type != "github" || cfg.CI.Type != "github" {
+		t.Errorf("SCM.Type = %q, CI.Type = %q, want github for both", cfg.SCM.Type, cfg.CI.Type)
+	}
+}
+
+func TestLoad_GiteaTrackerRequiresAProject(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitea\n  gitea:\n    base_url: https://gitea.example.com\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.gitea.project") {
+		t.Errorf("Load() error = %v, want it to identify tracker.gitea.project", err)
+	}
+}
+
+func TestLoad_GiteaTrackerRequiresABaseURL(t *testing.T) {
+	path := writeTemp(t, "tracker:\n  type: gitea\n  gitea:\n    project: acme/widgets\n")
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "tracker.gitea.base_url") {
+		t.Errorf("Load() error = %v, want it to identify tracker.gitea.base_url", err)
+	}
+}
+
+func TestLoad_GiteaSCMAndCICompositionIsAccepted(t *testing.T) {
+	path := writeTemp(t, "provider: gitea\ntracker:\n  gitea:\n    project: acme/widgets\n    base_url: https://gitea.example.com\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v, want coherent all-gitea composition to validate", err)
+	}
+	if cfg.Tracker.Type != "gitea" || cfg.SCM.Type != "gitea" || cfg.CI.Type != "gitea" {
+		t.Fatalf("Tracker/SCM/CI = %q/%q/%q, want gitea/gitea/gitea",
+			cfg.Tracker.Type, cfg.SCM.Type, cfg.CI.Type)
+	}
+}
+
 func TestLoad_LinearCannotBeNamedAsSCM(t *testing.T) {
 	// Linear is tracker-only (CONTEXT.md): naming it as the SCM provider is
 	// rejected the same way any other non-SCM provider is.

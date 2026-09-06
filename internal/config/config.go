@@ -23,8 +23,8 @@ import (
 // selects which provider implements the Tracker capability (see Config.
 // Provider's doc comment on capability composition); Provider is the
 // unrelated sidecar tag stamped onto every fetched domain.Issue (see
-// tracker/github.Client.Provider). Type accepts "github", "gitlab", and
-// "linear".
+// tracker/github.Client.Provider). Type accepts "github", "gitlab", "gitea",
+// and "linear".
 type TrackerConfig struct {
 	Type     string `yaml:"type"`
 	Provider string `yaml:"provider"`
@@ -40,6 +40,10 @@ type TrackerConfig struct {
 	// GitLab configures the GitLab Tracker. Forge reads it only when Type
 	// is "gitlab" and ignores it otherwise.
 	GitLab GitLabConfig `yaml:"gitlab"`
+
+	// Gitea configures the Gitea Tracker. Forge reads it only when Type is
+	// "gitea" and ignores it otherwise.
+	Gitea GiteaConfig `yaml:"gitea"`
 
 	// Linear configures the Linear Tracker. Forge reads it only when Type
 	// is "linear" and ignores it otherwise.
@@ -76,6 +80,23 @@ type GitLabConfig struct {
 	// BaseURL is the root URL of the GitLab instance, for example
 	// "https://gitlab.example.com". Leave it empty for gitlab.com. Give the
 	// instance root, not the API root: Forge appends the API path itself.
+	BaseURL string `yaml:"base_url"`
+}
+
+// GiteaConfig configures the Gitea Tracker capability. It holds no secrets:
+// the Gitea token comes from the GITEA_TOKEN environment variable at the point
+// of use (see the package doc comment and internal/tracker/gitea).
+type GiteaConfig struct {
+	// Project names the Gitea repository the Tracker reads and writes. Give
+	// the owner and the repository name as "owner/repo". It is required when
+	// tracker.type is "gitea": a self-managed Gitea instance can use any host
+	// name, so Forge does not infer the repository from a remote URL.
+	Project string `yaml:"project"`
+
+	// BaseURL is the root URL of the Gitea instance, for example
+	// "https://gitea.example.com". It is required when tracker.type is
+	// "gitea": Gitea has no fixed host. Give the instance root, not the API
+	// root: Forge appends the API path itself.
 	BaseURL string `yaml:"base_url"`
 }
 
