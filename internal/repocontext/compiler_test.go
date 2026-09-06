@@ -247,6 +247,41 @@ func TestCompile_DedupesLanguageAcrossMultipleManifests(t *testing.T) {
 	}
 }
 
+func TestCompile_DetectsCAndCppFromCMakeLists(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "CMakeLists.txt", "cmake_minimum_required(VERSION 3.10)\n")
+	cfg := config.Default()
+
+	rc, err := repocontext.Compile(cfg, dir, "rev")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	if !slices.Contains(rc.Languages, "C/C++") {
+		t.Errorf("Languages = %v, want to contain C/C++", rc.Languages)
+	}
+}
+
+func TestCompile_BuildGradleKtsDetectsJavaNotKotlin(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "build.gradle.kts", "")
+	cfg := config.Default()
+
+	rc, err := repocontext.Compile(cfg, dir, "rev")
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	wantLangs := []string{"Java"}
+	if !slices.Equal(rc.Languages, wantLangs) {
+		t.Errorf("Languages = %v, want %v (build.gradle.kts is a Java signal, matching lsp.Languages)", rc.Languages, wantLangs)
+	}
+	wantPMs := []string{"Gradle"}
+	if !slices.Equal(rc.PackageManagers, wantPMs) {
+		t.Errorf("PackageManagers = %v, want %v", rc.PackageManagers, wantPMs)
+	}
+}
+
 func TestCompile_NoManifests_EmptyLanguagesAndPackageManagers(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
