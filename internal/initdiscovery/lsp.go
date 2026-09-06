@@ -2,11 +2,9 @@ package initdiscovery
 
 import (
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 
-	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/lsp"
 )
 
@@ -48,55 +46,40 @@ func detectLanguages(dir string) []string {
 	return languages
 }
 
-// detectLSPCoverage checks which of the detected languages Forge can serve
-// via its Language Server Registry (internal/lsp) and returns Notes
-// advertising that coverage — never config values. lsp.servers stays empty;
-// the registry, not .forge.yaml, is the source of server commands (see
-// lsp.NewRegistry).
-func detectLSPCoverage(languages []string, cfg config.LSPConfig) []Note {
+// detectLSPCoverage turns probe — the outcome of probing languages' ordered
+// candidate Language Server binaries against PATH (see probeLanguageServers)
+// — into Notes advertising that coverage: which languages have a binary
+// ready now, and which have none on PATH yet. Every language in
+// lsp.Languages has a Language Server Registry entry (see lsp.NewRegistry),
+// so probe fully determines coverage; detectLSPCoverage never needs its own
+// registry lookup or PATH probe.
+func detectLSPCoverage(languages []string, probe LSPProbeResult) []Note {
 	if len(languages) == 0 {
 		return nil
 	}
 
-	registryLanguages := make([]string, len(languages))
-	for i, language := range languages {
-		registryLanguages[i] = lsp.LanguageID(language)
-	}
-
-	registry := lsp.NewRegistry(cfg)
-	servers := lsp.Detect(registryLanguages, registry)
-
-	servable := make(map[string]bool, len(servers))
-	var missingOnPATH []string
-	for _, server := range servers {
-		servable[server.Language] = true
-		if _, err := exec.LookPath(server.Command[0]); err != nil {
-			missingOnPATH = append(missingOnPATH, server.Command[0])
-		}
-	}
-
-	var servableLanguages, unservableLanguages []string
+	var enabled []string
 	for _, language := range languages {
-		if servable[lsp.LanguageID(language)] {
-			servableLanguages = append(servableLanguages, language)
-		} else {
-			unservableLanguages = append(unservableLanguages, language)
+		if _, ok := probe.Enabled[language]; ok {
+			enabled = append(enabled, language)
 		}
 	}
-	sort.Strings(missingOnPATH)
 
 	var notes []Note
-	if len(servableLanguages) > 0 {
-		msg := fmt.Sprintf("Semantic navigation available for %s — set enabled: true.", strings.Join(servableLanguages, ", "))
-		if len(missingOnPATH) > 0 {
-			msg += fmt.Sprintf(" Not found on PATH: %s.", strings.Join(missingOnPATH, ", "))
-		}
-		notes = append(notes, Note{Field: "lsp.enabled", Message: msg})
+	if len(enabled) > 0 {
+		notes = append(notes, Note{
+			Field:   "lsp.enabled",
+			Message: fmt.Sprintf("Semantic navigation available for %s — set enabled: true.", strings.Join(enabled, ", ")),
+		})
 	}
-	if len(unservableLanguages) > 0 {
+	if len(probe.MissingBinaries) > 0 {
+		var missing []string
+		for _, m := range probe.MissingBinaries {
+			missing = append(missing, fmt.Sprintf("%s (%s)", m.Language, m.Binary))
+		}
 		notes = append(notes, Note{
 			Field:   "lsp_no_server",
-			Message: fmt.Sprintf("no Language Server available yet for: %s.", strings.Join(unservableLanguages, ", ")),
+			Message: fmt.Sprintf("Language Server binary not found on PATH for: %s.", strings.Join(missing, ", ")),
 		})
 	}
 

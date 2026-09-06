@@ -10,6 +10,8 @@ import (
 )
 
 func TestNewRegistry_BuiltinGo(t *testing.T) {
+	withFakePATH(t)
+
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
 	spec, ok := registry["go"]
@@ -22,6 +24,8 @@ func TestNewRegistry_BuiltinGo(t *testing.T) {
 }
 
 func TestNewRegistry_ConfigOverridesBuiltin(t *testing.T) {
+	withFakePATH(t)
+
 	registry := lsp.NewRegistry(config.LSPConfig{
 		Servers: map[string]config.LSPServerConfig{
 			"go": {Command: []string{"custom-gopls", "--flag"}},
@@ -35,6 +39,8 @@ func TestNewRegistry_ConfigOverridesBuiltin(t *testing.T) {
 }
 
 func TestNewRegistry_ConfigOverridePreservesBuiltinProfile(t *testing.T) {
+	withFakePATH(t) // neither pyright nor pylsp present: falls back to pyright's profile
+
 	registry := lsp.NewRegistry(config.LSPConfig{
 		Servers: map[string]config.LSPServerConfig{
 			"python": {Command: []string{"custom-pyright", "--stdio"}},
@@ -54,6 +60,8 @@ func TestNewRegistry_ConfigOverridePreservesBuiltinProfile(t *testing.T) {
 }
 
 func TestNewRegistry_ConfigOnlyLanguageGetsZeroProfile(t *testing.T) {
+	withFakePATH(t)
+
 	registry := lsp.NewRegistry(config.LSPConfig{
 		Servers: map[string]config.LSPServerConfig{
 			"kotlin": {Command: []string{"kotlin-language-server"}},
@@ -69,7 +77,12 @@ func TestNewRegistry_ConfigOnlyLanguageGetsZeroProfile(t *testing.T) {
 	}
 }
 
+// TestNewRegistry_BuiltinProfiles checks that with none of the candidate
+// binaries on PATH, NewRegistry falls back to each language's first
+// candidate — reproducing Forge's original v1 defaults exactly.
 func TestNewRegistry_BuiltinProfiles(t *testing.T) {
+	withFakePATH(t)
+
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
 	cases := []struct {
@@ -106,7 +119,59 @@ func TestNewRegistry_BuiltinProfiles(t *testing.T) {
 	}
 }
 
+// TestNewRegistry_SelectsSecondCandidateWhenFirstAbsentFromPATH is the core
+// reconciliation regression: when only Python's fallback candidate (pylsp)
+// is on PATH, NewRegistry's python entry must launch pylsp, not silently
+// keep pointing at pyright-langserver.
+func TestNewRegistry_SelectsSecondCandidateWhenFirstAbsentFromPATH(t *testing.T) {
+	withFakePATH(t, "pylsp")
+
+	registry := lsp.NewRegistry(config.LSPConfig{})
+
+	spec, ok := registry["python"]
+	if !ok {
+		t.Fatal(`registry["python"] missing`)
+	}
+	if !reflect.DeepEqual(spec.Command, []string{"pylsp"}) {
+		t.Errorf(`registry["python"].Command = %v, want ["pylsp"] (only candidate on PATH)`, spec.Command)
+	}
+	if !reflect.DeepEqual(spec.Profile, lspdriver.ServerProfile{}) {
+		t.Errorf("registry[\"python\"].Profile = %+v, want zero value (pylsp has no known hover quirk)", spec.Profile)
+	}
+}
+
+// TestNewRegistry_CoversLanguagesWithoutV1BuiltinEntries checks that the
+// three languages lsp.Languages added beyond Forge's original v1 registry
+// (C/C++, Java, Ruby) now get a registry entry too, reconciling the two
+// tables per the deferral in lsp/languages.go.
+func TestNewRegistry_CoversLanguagesWithoutV1BuiltinEntries(t *testing.T) {
+	withFakePATH(t)
+
+	registry := lsp.NewRegistry(config.LSPConfig{})
+
+	cases := []struct {
+		key     string
+		command []string
+	}{
+		{"cpp", []string{"clangd"}},
+		{"java", []string{"jdtls"}},
+		{"ruby", []string{"solargraph"}},
+	}
+	for _, tc := range cases {
+		spec, ok := registry[tc.key]
+		if !ok {
+			t.Errorf("registry[%q] missing, want an entry reconciled from lsp.Languages", tc.key)
+			continue
+		}
+		if !reflect.DeepEqual(spec.Command, tc.command) {
+			t.Errorf("registry[%q].Command = %v, want %v", tc.key, spec.Command, tc.command)
+		}
+	}
+}
+
 func TestNewRegistry_ConfigExtendsWithNewLanguage(t *testing.T) {
+	withFakePATH(t)
+
 	registry := lsp.NewRegistry(config.LSPConfig{
 		Servers: map[string]config.LSPServerConfig{
 			"rust": {Command: []string{"rust-analyzer"}},
@@ -164,30 +229,37 @@ func TestExtensions_ConfigOverridesAndExtends(t *testing.T) {
 }
 
 func TestDetect_GoRepoYieldsGopls(t *testing.T) {
+	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
 	got := lsp.Detect([]string{"Go"}, registry)
 
-	want := []lsp.DetectedServer{{Language: "go", Command: []string{"gopls"}}}
+	want := []lsp.DetectedServer{{
+		Language: "go",
+		Command:  []string{"gopls"},
+		Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Detect() = %+v, want %+v", got, want)
 	}
 }
 
 func TestDetect_UnregisteredLanguageYieldsNone(t *testing.T) {
+	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
-	got := lsp.Detect([]string{"Ruby", "Java", "Kotlin"}, registry)
+	got := lsp.Detect([]string{"Kotlin"}, registry)
 
 	if len(got) != 0 {
 		t.Errorf("Detect() = %+v, want empty", got)
 	}
 }
 
-func TestDetect_FourLanguagesYieldFourServers(t *testing.T) {
+func TestDetect_SevenLanguagesYieldSevenServers(t *testing.T) {
+	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
-	got := lsp.Detect([]string{"Go", "Python", "Rust", "JavaScript"}, registry)
+	got := lsp.Detect([]string{"Go", "Python", "Rust", "JavaScript", "Cpp", "Java", "Ruby"}, registry)
 
 	want := []lsp.DetectedServer{
 		{
@@ -213,6 +285,9 @@ func TestDetect_FourLanguagesYieldFourServers(t *testing.T) {
 			Command:  []string{"typescript-language-server", "--stdio"},
 			Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
 		},
+		{Language: "cpp", Command: []string{"clangd"}},
+		{Language: "java", Command: []string{"jdtls"}},
+		{Language: "ruby", Command: []string{"solargraph"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Detect() = %+v, want %+v", got, want)
@@ -220,21 +295,27 @@ func TestDetect_FourLanguagesYieldFourServers(t *testing.T) {
 }
 
 func TestDetect_ConfigForUndetectedLanguageProducesNoServer(t *testing.T) {
+	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{
 		Servers: map[string]config.LSPServerConfig{
-			"rust": {Command: []string{"rust-analyzer"}},
+			"kotlin": {Command: []string{"kotlin-language-server"}},
 		},
 	})
 
 	got := lsp.Detect([]string{"Go"}, registry)
 
-	want := []lsp.DetectedServer{{Language: "go", Command: []string{"gopls"}}}
+	want := []lsp.DetectedServer{{
+		Language: "go",
+		Command:  []string{"gopls"},
+		Profile:  lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+	}}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Detect() = %+v, want %+v (rust configured but not detected must not appear)", got, want)
+		t.Errorf("Detect() = %+v, want %+v (kotlin configured but not detected must not appear)", got, want)
 	}
 }
 
 func TestDetect_NoLanguages(t *testing.T) {
+	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
 	got := lsp.Detect(nil, registry)

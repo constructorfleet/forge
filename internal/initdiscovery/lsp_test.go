@@ -65,18 +65,24 @@ func TestDetect_LSPCoverage_MissingServerBinary_ProducesPathProbeNote(t *testing
 
 	found := false
 	for _, n := range result.Notes {
-		if n.Field == "lsp.enabled" && strings.Contains(n.Message, "gopls") && strings.Contains(n.Message, "Not found on PATH") {
+		if n.Field == "lsp_no_server" && strings.Contains(n.Message, "Go") && strings.Contains(n.Message, "gopls") {
 			found = true
+		}
+		if n.Field == "lsp.enabled" && strings.Contains(n.Message, "Go") {
+			t.Errorf("Go's binary is missing from PATH, should not be reported as enabled: %q", n.Message)
 		}
 	}
 	if !found {
-		t.Errorf("expected an lsp.enabled Note about gopls missing from PATH, got %+v", result.Notes)
+		t.Errorf("expected an lsp_no_server Note about gopls missing from PATH, got %+v", result.Notes)
 	}
 
 	mustLoadable(t, result)
 }
 
-func TestDetect_LSPCoverage_NonServableLanguage_ProducesHeaderNote(t *testing.T) {
+// TestDetect_LSPCoverage_MissingBinaryLanguage_ProducesHeaderNote checks
+// Java's lsp_no_server Note: Java has a registry entry (jdtls), but with an
+// empty PATH the note still surfaces as a header comment naming Java.
+func TestDetect_LSPCoverage_MissingBinaryLanguage_ProducesHeaderNote(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
 	withFakePATH(t)

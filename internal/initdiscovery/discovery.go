@@ -41,11 +41,10 @@ type Note struct {
 type Result struct {
 	Config config.Config
 	Notes  []Note
-	// LSPProbe is derived from lsp.Languages' ordered candidate binaries
-	// (see LSPProbeResult). Notes' LSP entries come from the separate,
-	// unreconciled lsp.Registry table (see detectLSPCoverage). The two can
-	// disagree about whether a language is servable until the tables are
-	// reconciled; do not assume LSPProbe and Notes agree for a language.
+	// LSPProbe is the outcome of probing each detected language's ordered
+	// candidate Language Server binaries (see LSPProbeResult). Notes' LSP
+	// entries (see detectLSPCoverage) are derived from this same probe, so
+	// the two always agree about whether a language is servable.
 	LSPProbe LSPProbeResult
 }
 
@@ -115,9 +114,9 @@ func Detect(dir string) Result {
 
 	languages := detectLanguages(dir)
 	notes = append(notes, detectAgentDocs(dir)...)
-	notes = append(notes, detectLSPCoverage(languages, cfg.LSP)...)
 
 	probe := probeLanguageServers(languages)
+	notes = append(notes, detectLSPCoverage(languages, probe)...)
 
 	return Result{Config: cfg, Notes: notes, LSPProbe: probe}
 }
