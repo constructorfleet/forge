@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/decisiongraph"
@@ -40,7 +43,39 @@ artifact that already exists. It stops cleanly at each human gate:
             wayfinding  - resolve Decisions only
             spec        - also generate/await approval of the Specification
             tickets     - also generate/await approval of the Ticket Plan (default)
+
+  --tui     Force the interactive planning TUI on. It renders the live
+            planning transcript and grills / awaits approval inline, driving
+            the whole pipeline to completion in one command. Default on a TTY.
+  --no-tui  Force the headless path: print each stage's status and stop at
+            each human gate (for scripts and AFK runs).
 `
+
+// planStopReason names why runPlanPipeline stopped, so a caller can react
+// without parsing printed text. The interactive driver (runPlanTUI) uses it
+// to tell a human gate (NeedsHuman, NeedsApproval) apart from a real end
+// (Complete, UntilReached).
+type planStopReason int
+
+const (
+	// reasonComplete: the pipeline reached the end and marked the Planning
+	// Execution COMPLETE.
+	reasonComplete planStopReason = iota
+	// reasonNeedsHuman: wayfinding paused on a Decision that needs human input.
+	reasonNeedsHuman
+	// reasonNeedsApproval: an artifact (spec.md or ticket-plan.md) awaits
+	// approval.
+	reasonNeedsApproval
+	// reasonUntilReached: the --until bound stopped the pipeline before a gate.
+	reasonUntilReached
+)
+
+// planStop is runPlanPipeline's resting point: the process exit code for the
+// headless path, plus the Reason the interactive driver switches on.
+type planStop struct {
+	Code   int
+	Reason planStopReason
+}
 
 // runPlan implements `forge plan <feature-id> [--until stage]`, ticket 21's
 // unified planning CLI entrypoint. It walks the pipeline stage by stage
@@ -48,10 +83,12 @@ artifact that already exists. It stops cleanly at each human gate:
 // --until bound, an artifact that still needs approval, or a Decision that
 // needs human input.
 func runPlan(args []string) int {
-	featureID, untilStage, code, done := parsePlanArgs(args)
+	featureID, untilStage, tuiFlag, code, done := parsePlanArgs(args)
 	if done {
 		return code
 	}
+	tuiVal, tuiSet := tuiFlag.wasSet()
+	useTUI := shouldUseTUI(tuiVal, tuiSet, isTerminalSession())
 
 	repoRoot, err := discoverRepoRoot()
 	if err != nil {
@@ -147,12 +184,31 @@ func runPlan(args []string) int {
 		return 1
 	}
 
+	if useTUI {
+		// The interactive driver renders the planning TUI and drives every
+		// gate (needs-human, approval) to completion in one command. It never
+		// takes the "run `forge resume`" shortcut below: a NEEDS_HUMAN resting
+		// state from a prior run is resumed inline by the driver's own loop.
+		return runPlanTUI(ctx, planTUIRequest{
+			Store:        store,
+			PlanRuntime:  planRuntime,
+			Config:       cfg,
+			Backend:      backend,
+			RepoRoot:     repoRoot,
+			FeatureID:    featureID,
+			UntilStage:   untilStage,
+			BaseRevision: baseRevision,
+			ExecutionID:  exec.ID,
+			Loader:       loader,
+		})
+	}
+
 	if exec.Status == domain.PlanningStatusNeedsHuman {
 		fmt.Fprintf(os.Stdout, "feature %s is paused on a needs-human Decision; answer it, then run `forge resume %s`\n", featureID, exec.ID)
 		return 0
 	}
 
-	code, err = runPlanPipeline(ctx, planPipelineRequest{
+	pstop, err := runPlanPipeline(ctx, planPipelineRequest{
 		Store:        store,
 		PlanRuntime:  planRuntime,
 		Config:       cfg,
@@ -175,7 +231,7 @@ func runPlan(args []string) int {
 		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
 		return 1
 	}
-	return code
+	return pstop.Code
 }
 
 // planPipelineRequest bundles the per-run values runPlanPipeline needs, so
@@ -203,17 +259,28 @@ type planPipelineRequest struct {
 	// "planning:<feature-id>" resource name (internal/planningapprove).
 	// Without this, the two processes' writes race with no serialization.
 	Locks *repolock.Locker
+
+	// Out receives the per-stage status lines. A nil Out defaults to
+	// os.Stdout (the headless path). The interactive driver passes io.Discard
+	// so the lines never corrupt the TUI's alternate screen.
+	Out io.Writer
+
+	// GrillLoadBearing makes wayfinding defer load-bearing Decisions to the
+	// human instead of resolving them autonomously. The interactive driver
+	// sets it; the headless path leaves it false.
+	GrillLoadBearing bool
 }
 
 // runPlanPipeline runs the stages of `forge plan` under the Planning
 // Execution req.ExecutionID that runPlan already started: wayfinding (unless
 // spec.md already exists), spec generation/approval, then ticket-plan
 // generation/approval, honoring the --until bound at each stage boundary.
-// It returns the process exit code for every non-error stopping point
-// (a human gate, an approval gate, --until, or full completion); the caller
-// is responsible for marking req.ExecutionID FAILED when it returns an
-// error.
-func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) {
+// It returns a planStop for every non-error stopping point (a human gate, an
+// approval gate, --until, or full completion): planStop.Code is the process
+// exit code for the headless path, and planStop.Reason lets the interactive
+// driver tell a human gate apart from a real end. The caller is responsible
+// for marking req.ExecutionID FAILED when it returns an error.
+func runPlanPipeline(ctx context.Context, req planPipelineRequest) (planStop, error) {
 	store := req.Store
 	planRuntime := req.PlanRuntime
 	cfg := req.Config
@@ -227,6 +294,10 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 	decisions := req.Decisions
 	specArtifact := req.Spec
 	loader := req.Loader
+	out := req.Out
+	if out == nil {
+		out = os.Stdout
+	}
 
 	// Wayfinding: only needed while no spec exists yet -- once a spec has
 	// been generated, the Decisions it was derived from are done being
@@ -234,33 +305,33 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 	// idempotency: an existing artifact is never regenerated).
 	if specArtifact == nil {
 		if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
-			return 0, err
+			return planStop{}, err
 		}
 		trk, err := buildTracker(cfg, repoRoot)
 		if err != nil {
-			return 0, err
+			return planStop{}, err
 		}
 
-		paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, featureID, baseRevision, executionID, goalArtifact, decisions, loader)
+		paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, featureID, baseRevision, executionID, goalArtifact, decisions, loader, req.GrillLoadBearing)
 		if err != nil {
-			return 0, err
+			return planStop{}, err
 		}
 		if paused {
-			fmt.Fprintf(os.Stdout, "feature %s is paused on a needs-human Decision; answer it, then run `forge resume %s`\n", featureID, executionID)
-			return 0, nil
+			fmt.Fprintf(out, "feature %s is paused on a needs-human Decision; answer it, then run `forge resume %s`\n", featureID, executionID)
+			return planStop{Code: 0, Reason: reasonNeedsHuman}, nil
 		}
-		fmt.Fprintf(os.Stdout, "wayfinding complete for feature %s\n", featureID)
+		fmt.Fprintf(out, "wayfinding complete for feature %s\n", featureID)
 	} else {
-		fmt.Fprintf(os.Stdout, "decisions already resolved for feature %s (spec.md exists); skipping wayfinding\n", featureID)
+		fmt.Fprintf(out, "decisions already resolved for feature %s (spec.md exists); skipping wayfinding\n", featureID)
 	}
 
 	if untilStage == "wayfinding" {
-		return 0, nil
+		return planStop{Code: 0, Reason: reasonUntilReached}, nil
 	}
 
 	facts, err := replan.GatherImplementedFacts(ctx, store, featureID)
 	if err != nil {
-		return 0, fmt.Errorf("gather implemented facts: %w", err)
+		return planStop{}, fmt.Errorf("gather implemented facts: %w", err)
 	}
 
 	// specEngine is only built (and only then compiles the Repository
@@ -283,63 +354,63 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 	if specArtifact == nil {
 		specEngine, err := ensureSpecEngine()
 		if err != nil {
-			return 0, err
+			return planStop{}, err
 		}
 		if err := req.Locks.WithLock(ctx, "planning:"+featureID, func() error {
 			return specEngine.GenerateSpec(ctx, featureID, loader)
 		}); err != nil {
-			return 0, err
+			return planStop{}, err
 		}
-		fmt.Fprintf(os.Stdout, "spec.md generated for feature %s\n", featureID)
+		fmt.Fprintf(out, "spec.md generated for feature %s\n", featureID)
 		specArtifact, err = loader.LoadSpec(ctx, featureID)
 		if err != nil {
-			return 0, fmt.Errorf("reload spec: %w", err)
+			return planStop{}, fmt.Errorf("reload spec: %w", err)
 		}
 	} else {
-		fmt.Fprintf(os.Stdout, "spec.md already exists for feature %s; skipping generation\n", featureID)
+		fmt.Fprintf(out, "spec.md already exists for feature %s; skipping generation\n", featureID)
 	}
 
 	if !planning.Approved(specArtifact) {
-		return markAwaitingApproval(ctx, store, executionID, featureID, "spec", "spec.md")
+		return markAwaitingApproval(ctx, out, store, executionID, featureID, "spec", "spec.md")
 	}
 
 	if untilStage == "spec" {
-		return 0, nil
+		return planStop{Code: 0, Reason: reasonUntilReached}, nil
 	}
 
 	ticketPlanArtifact, err := loader.LoadTicketPlan(ctx, featureID)
 	if err != nil {
-		return 0, fmt.Errorf("load ticket plan: %w", err)
+		return planStop{}, fmt.Errorf("load ticket plan: %w", err)
 	}
 
 	if ticketPlanArtifact == nil {
 		specEngine, err := ensureSpecEngine()
 		if err != nil {
-			return 0, err
+			return planStop{}, err
 		}
 		if err := req.Locks.WithLock(ctx, "planning:"+featureID, func() error {
 			return specEngine.GenerateTicketPlan(ctx, featureID, loader)
 		}); err != nil {
-			return 0, err
+			return planStop{}, err
 		}
-		fmt.Fprintf(os.Stdout, "ticket-plan.md generated for feature %s\n", featureID)
+		fmt.Fprintf(out, "ticket-plan.md generated for feature %s\n", featureID)
 		ticketPlanArtifact, err = loader.LoadTicketPlan(ctx, featureID)
 		if err != nil {
-			return 0, fmt.Errorf("reload ticket plan: %w", err)
+			return planStop{}, fmt.Errorf("reload ticket plan: %w", err)
 		}
 	} else {
-		fmt.Fprintf(os.Stdout, "ticket-plan.md already exists for feature %s; skipping generation\n", featureID)
+		fmt.Fprintf(out, "ticket-plan.md already exists for feature %s; skipping generation\n", featureID)
 	}
 
 	if !planning.Approved(ticketPlanArtifact) {
-		return markAwaitingApproval(ctx, store, executionID, featureID, "tickets", "ticket-plan.md")
+		return markAwaitingApproval(ctx, out, store, executionID, featureID, "tickets", "ticket-plan.md")
 	}
 
 	if err := planRuntime.Finish(ctx, featureID, executionID, domain.PlanningStatusComplete); err != nil {
-		return 0, fmt.Errorf("finish planning execution: %w", err)
+		return planStop{}, fmt.Errorf("finish planning execution: %w", err)
 	}
-	fmt.Fprintf(os.Stdout, "planning complete for feature %s; run `forge materialize %s`\n", featureID, featureID)
-	return 0, nil
+	fmt.Fprintf(out, "planning complete for feature %s; run `forge materialize %s`\n", featureID, featureID)
+	return planStop{Code: 0, Reason: reasonComplete}, nil
 }
 
 // markAwaitingApproval records executionID's Planning Execution as
@@ -347,12 +418,12 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (int, error) 
 // approveArg is the `forge approve <feature-id> <approveArg>` stage name
 // (e.g. "spec" or "tickets"); artifactName is the file the message names
 // (e.g. "spec.md" or "ticket-plan.md").
-func markAwaitingApproval(ctx context.Context, store storage.Store, executionID, featureID, approveArg, artifactName string) (int, error) {
+func markAwaitingApproval(ctx context.Context, out io.Writer, store storage.Store, executionID, featureID, approveArg, artifactName string) (planStop, error) {
 	if err := store.UpdatePlanningStatus(ctx, executionID, domain.PlanningStatusNeedsApproval); err != nil {
-		return 0, fmt.Errorf("mark planning execution awaiting %s approval: %w", approveArg, err)
+		return planStop{}, fmt.Errorf("mark planning execution awaiting %s approval: %w", approveArg, err)
 	}
-	fmt.Fprintf(os.Stdout, "%s for feature %s awaits approval; run `forge approve %s %s`\n", artifactName, featureID, featureID, approveArg)
-	return 0, nil
+	fmt.Fprintf(out, "%s for feature %s awaits approval; run `forge approve %s %s`\n", artifactName, featureID, featureID, approveArg)
+	return planStop{Code: 0, Reason: reasonNeedsApproval}, nil
 }
 
 // buildSpecEngine compiles the full Repository Context for repoRoot via the
@@ -376,44 +447,51 @@ func buildSpecEngine(cfg config.Config, backend planningagent.Backend, repoRoot,
 // <feature-id> and an optional --until flag that may appear on either side
 // of it. done is true when runPlan should return immediately with code
 // (help text, or a parse error).
-func parsePlanArgs(args []string) (featureID, untilStage string, code int, done bool) {
+func parsePlanArgs(args []string) (featureID, untilStage string, tui triState, code int, done bool) {
 	untilStage = "tickets"
 	if len(args) == 0 {
 		fmt.Fprint(os.Stdout, planUsage)
-		return "", "", 0, true
+		return "", "", triState{}, 0, true
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a {
 		case "--help", "-h":
 			fmt.Fprint(os.Stdout, planUsage)
-			return "", "", 0, true
+			return "", "", triState{}, 0, true
 		case "--until":
 			if i+1 >= len(args) {
 				fmt.Fprintf(os.Stderr, "--until requires a stage argument\n\n%s", planUsage)
-				return "", "", 1, true
+				return "", "", triState{}, 1, true
 			}
 			i++
 			untilStage = args[i]
+		case "--tui":
+			// Bare flag: force the planning TUI on. Mirrors forge execute's
+			// --tui, but forge plan parses arguments by hand, so the flag is
+			// matched here rather than via flag.BoolFunc.
+			tui.set, tui.val = true, true
+		case "--no-tui":
+			tui.set, tui.val = true, false
 		default:
 			if featureID != "" {
 				fmt.Fprintf(os.Stderr, "too many arguments: %v\n\n%s", args, planUsage)
-				return "", "", 1, true
+				return "", "", triState{}, 1, true
 			}
 			featureID = a
 		}
 	}
 	if featureID == "" {
 		fmt.Fprintf(os.Stderr, "feature-id is required\n\n%s", planUsage)
-		return "", "", 1, true
+		return "", "", triState{}, 1, true
 	}
 	switch untilStage {
 	case "wayfinding", "spec", "tickets":
 	default:
 		fmt.Fprintf(os.Stderr, "forge plan: invalid --until value %q (want wayfinding, spec, or tickets)\n\n%s", untilStage, planUsage)
-		return "", "", 1, true
+		return "", "", triState{}, 1, true
 	}
-	return featureID, untilStage, 0, false
+	return featureID, untilStage, tui, 0, false
 }
 
 // runWayfindingStage runs wayfinding.Loop for featureID under the Planning
@@ -435,6 +513,7 @@ func runWayfindingStage(
 	goalArtifact *planning.Artifact,
 	decisions map[string]*planning.Artifact,
 	loader *fileArtifactLoader,
+	grillLoadBearing bool,
 ) (paused bool, err error) {
 	goalRef := decisiongraph.GoalRef{ID: "goal"}
 	if goalArtifact != nil {
@@ -459,7 +538,23 @@ func runWayfindingStage(
 		return false, fmt.Errorf("compile repository context: %w", err)
 	}
 
-	if err := wayfinding.Loop(ctx, backend, repo, goalArtifact, goalRef, decisions, persist, pause.Handle); err != nil {
+	// A Decision the human already answered (resume path) is re-opened and
+	// re-resolved from their words: gather the answers, then clear the paused
+	// State on each still-paused answered Decision so Frontier puts it back on
+	// the frontier. The resolver reads the answer from HumanInputs and records
+	// a real Outcome instead of deferring again.
+	humanInputs, err := gatherResumedAnswers(ctx, store, executionID)
+	if err != nil {
+		return false, err
+	}
+	for id, d := range decisions {
+		if humanInputs[id] != "" && d.State == decisiongraph.StateNeedsHuman {
+			d.State = ""
+		}
+	}
+
+	if err := wayfinding.Loop(ctx, backend, repo, goalArtifact, goalRef, decisions, persist, pause.Handle,
+		wayfinding.WithHumanInputs(humanInputs), wayfinding.WithGrillLoadBearing(grillLoadBearing)); err != nil {
 		return false, fmt.Errorf("wayfinding: %w", err)
 	}
 
@@ -468,4 +563,37 @@ func runWayfindingStage(
 		return false, fmt.Errorf("reload planning execution: %w", err)
 	}
 	return finished.Status == domain.PlanningStatusNeedsHuman, nil
+}
+
+// gatherResumedAnswers reads every resumed Decision checkpoint for executionID
+// and returns each Decision's human answer, keyed by Decision ID. A resumed
+// checkpoint carries the human comments ResumeDecision detected; the answer is
+// those comment bodies joined. The wayfinding Loop feeds these back into
+// re-resolution so an answered Decision resolves from the human's words rather
+// than deferring again.
+func gatherResumedAnswers(ctx context.Context, store storage.Store, executionID string) (map[string]string, error) {
+	checkpoints, err := store.GetDecisionCheckpointsByExecution(ctx, executionID)
+	if err != nil {
+		return nil, fmt.Errorf("load decision checkpoints: %w", err)
+	}
+	answers := map[string]string{}
+	for _, cp := range checkpoints {
+		if cp.ResumedAt == nil || cp.ResumedContext == "" {
+			continue
+		}
+		var rc wayfinding.ResumedDecisionContext
+		if err := json.Unmarshal([]byte(cp.ResumedContext), &rc); err != nil {
+			return nil, fmt.Errorf("parse resumed context for decision %s: %w", cp.DecisionID, err)
+		}
+		var parts []string
+		for _, c := range rc.NewComments {
+			if body := strings.TrimSpace(c.Body); body != "" {
+				parts = append(parts, body)
+			}
+		}
+		if len(parts) > 0 {
+			answers[cp.DecisionID] = strings.Join(parts, "\n\n")
+		}
+	}
+	return answers, nil
 }

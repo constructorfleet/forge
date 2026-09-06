@@ -62,7 +62,7 @@ func TestRunWayfindingStage_ResolvesDecisionAndLeavesExecutionActive(t *testing.
 	backend.ProgramResult("decision-resolution", `{"outcome":"SQLite"}`)
 	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
-	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader)
+	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader, false)
 	if err != nil {
 		t.Fatalf("runWayfindingStage: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunWayfindingStage_PausesOnNeedsHuman(t *testing.T) {
 	backend.ProgramResult("decision-resolution", `{"needs_human":{"question":"Which vendor?","context":"Both meet requirements."}}`)
 	backend.ProgramResult("planning-readiness-review", `{"status":"READY_FOR_SPEC","decisions":[]}`)
 
-	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader)
+	paused, err := runWayfindingStage(ctx, store, trk, cfg, backend, repoRoot, "widget", base, exec.ID, goal, decisions, loader, false)
 	if err != nil {
 		t.Fatalf("runWayfindingStage: %v", err)
 	}

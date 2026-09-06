@@ -59,6 +59,17 @@ type NeedsHumanDetail struct {
 type Request struct {
 	Context  planningagent.PlanningContext
 	TargetID string
+
+	// GrillLoadBearing raises the bar for auto-resolving. When true, the
+	// agent must defer a load-bearing Decision to the human (needs_human)
+	// rather than choose for them -- a Decision is load-bearing when more
+	// than one reasonable answer would materially change the specification
+	// or the implementation and the goal does not determine which to pick.
+	// Interactive `forge plan` sets this so a human at the TUI is grilled on
+	// the choices that matter; a headless run leaves it false and stays
+	// autonomous. A Decision that already carries human guidance (see
+	// PlanningContext.HumanInputs) is never deferred, whatever this flag is.
+	GrillLoadBearing bool
 }
 
 // Resolve runs the DecisionResolution contract against backend for req,
@@ -105,6 +116,29 @@ func buildPrompt(req Request) string {
 		"consequences, assumptions, and new_unknowns.\n\n")
 
 	pc := req.Context
+
+	// Human guidance takes precedence over the grill policy: a Decision the
+	// human already answered must be resolved from that answer, never deferred
+	// again. This is the resume path -- the human was grilled, answered, and
+	// the loop re-resolves the Decision using their words.
+	guidance := ""
+	if pc.HumanInputs != nil {
+		guidance = pc.HumanInputs[req.TargetID]
+	}
+	if guidance != "" {
+		b.WriteString("A human has already answered this Decision. Resolve it from their " +
+			"answer below: adopt their choice as the outcome, and record the rest " +
+			"(rationale, consequences, assumptions) around it. Do NOT respond with " +
+			"needs_human -- the human already decided.\n\n")
+	} else if req.GrillLoadBearing {
+		b.WriteString("This run is interactive: a human is watching and can answer. Defer " +
+			"load-bearing Decisions to them. A Decision is load-bearing when more than one " +
+			"reasonable answer would materially change the specification or the implementation " +
+			"and the goal does not determine which to pick -- for those, respond with " +
+			"needs_human rather than choosing yourself. Still resolve a Decision that is " +
+			"mechanical, or that the goal and prior Decisions clearly determine.\n\n")
+	}
+
 	if pc.Goal != nil {
 		b.WriteString("## Goal\n\n")
 		for _, heading := range []string{"Goal", "Summary", "Context"} {
@@ -116,6 +150,10 @@ func buildPrompt(req Request) string {
 
 	target := targetDecision(req)
 	fmt.Fprintf(&b, "## Decision to resolve (%s)\n\n%s\n\n", req.TargetID, target.Sections["Question"])
+
+	if guidance != "" {
+		fmt.Fprintf(&b, "## Human's answer\n\n%s\n\n", guidance)
+	}
 
 	var resolved []planningagent.ArtifactView
 	for _, d := range pc.Decisions {
