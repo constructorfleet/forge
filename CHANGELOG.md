@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.50.0](https://github.com/constructorfleet/forge/compare/forge-v0.49.0...forge-v0.50.0) (2026-09-06)
+
+
+### Features
+
+* Interactive one-command forge plan with inline grilling ([#720](https://github.com/constructorfleet/forge/issues/720)) ([50d7fc5](https://github.com/constructorfleet/forge/commit/50d7fc5cd8b623c8e51efa947807027dee57a255))
+* internal/repocontext/compiler.go hand-rolls its own manifest→language table, duplicating lsp.Languages ([#719](https://github.com/constructorfleet/forge/issues/719)) ([1dd6675](https://github.com/constructorfleet/forge/commit/1dd6675c1fb7634ec483b77f6750464e69b5d0cd)), closes [#716](https://github.com/constructorfleet/forge/issues/716)
+* TKT-004: For each detected language, probe its ordered candidate LSP binaries against PATH and enable the first one found, without prompting the user or auto-installing anything. ([#711](https://github.com/constructorfleet/forge/issues/711)) ([b30aaa1](https://github.com/constructorfleet/forge/commit/b30aaa130ae30d66e2476ca7bbafacf20c8f4cf5)), closes [#697](https://github.com/constructorfleet/forge/issues/697)
+* Wire Languages table into Scan and/or initdiscovery to eliminate duplicate hand-written language tables ([#717](https://github.com/constructorfleet/forge/issues/717)) ([43b790d](https://github.com/constructorfleet/forge/commit/43b790d4d67e7e9591176e4125d7077c12468060)), closes [#705](https://github.com/constructorfleet/forge/issues/705)
+* Wire LanguageSpec into Scan() and the install-hint UX ([#718](https://github.com/constructorfleet/forge/issues/718)) ([c317a0d](https://github.com/constructorfleet/forge/commit/c317a0d53b6858165959ffe2df69ad6529c3d1ac)), closes [#703](https://github.com/constructorfleet/forge/issues/703)
+
+
+### Bug Fixes
+
+* TKT-002: Implement a recursive, pruning directory walker that scans the repo tree for manifest files and, as a fallback, counts source file extensions, aggregating matches as a union across the whole tree. ([#701](https://github.com/constructorfleet/forge/issues/701)) ([467131a](https://github.com/constructorfleet/forge/commit/467131aecdd5fd3c7fe18764e7328d2c1dd0753c)), closes [#695](https://github.com/constructorfleet/forge/issues/695)
+* TKT-003: Replace the existing hardcoded Go-only detection check in forge init with logic that walks the full mapping table and independently evaluates every language, returning the full set of detected languages. ([#709](https://github.com/constructorfleet/forge/issues/709)) ([aa914c2](https://github.com/constructorfleet/forge/commit/aa914c2667fce8ca02e1c93e3f4c354b9259c90f)), closes [#696](https://github.com/constructorfleet/forge/issues/696)
+* TKT-005: Collect every detected language whose LSP binary candidates are all missing from PATH and print a single batch report at the end of forge init listing each missing binary with its static install hint. ([#712](https://github.com/constructorfleet/forge/issues/712)) ([1246dfd](https://github.com/constructorfleet/forge/commit/1246dfdcc296b6cf11b8d4e98c759bd700fa74cb)), closes [#698](https://github.com/constructorfleet/forge/issues/698)
+* TKT-006: Update forge init's end-of-run summary output to list every LSP that was actually enabled across all detected languages, alongside the missing-binary batch report. ([#713](https://github.com/constructorfleet/forge/issues/713)) ([a69b13c](https://github.com/constructorfleet/forge/commit/a69b13c7df118ead1f9db756e37f1b5e50da1d8a)), closes [#699](https://github.com/constructorfleet/forge/issues/699)
+
 ## [0.49.0](https://github.com/constructorfleet/forge/compare/forge-v0.48.2...forge-v0.49.0) (2026-09-06)
 
 
