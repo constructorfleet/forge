@@ -63,13 +63,15 @@ func lastPathElem(s string) string {
 }
 
 // detectTracker resolves the issue tracker from the "origin" remote URL and
-// composes it onto cfg. It recognizes github and gitlab hosts. A github
+// composes it onto cfg. It recognizes github, gitlab, and gitea hosts. A github
 // remote keeps cfg at its config.Default() github composition. A gitlab
 // remote (gitlab.com, or a host whose name contains "gitlab") switches the
 // whole capability composition to gitlab and fills the project path -- and,
-// for a self-managed instance, the base URL -- from the remote. An
-// unrecognized host leaves the github default in place and returns a Note,
-// because forge cannot confirm the tracker from an unknown host name.
+// for a self-managed instance, the base URL -- from the remote. A gitea remote
+// (codeberg.org, or a host whose name contains "gitea") switches the whole
+// composition to gitea and fills the project path and the base URL from the
+// remote. An unrecognized host leaves the github default in place and returns a
+// Note, because forge cannot confirm the tracker from an unknown host name.
 func detectTracker(dir string, cfg *config.Config) *Note {
 	remote, err := runGit(dir, "remote", "get-url", "origin")
 	if err != nil || remote == "" {
@@ -101,12 +103,36 @@ func detectTracker(dir string, cfg *config.Config) *Note {
 			Field:   "tracker.gitlab.project",
 			Message: fmt.Sprintf("inferred %q from git remote \"origin\" (%s); verify the path with namespace is correct", path, remote),
 		}
+	case host == "codeberg.org" || strings.Contains(host, "gitea"):
+		applyGiteaComposition(cfg, host, path)
+		// The project path is inferred from the remote, so the human must
+		// confirm it. A self-managed Gitea instance can use any host name, so
+		// forge cannot detect gitea there (see config.GiteaConfig); only a
+		// recognizable "gitea" host, or codeberg.org, reaches this branch.
+		return &Note{
+			Field:   "tracker.gitea.project",
+			Message: fmt.Sprintf("inferred %q from git remote \"origin\" (%s); verify the owner/repo is correct", path, remote),
+		}
 	default:
 		return &Note{
 			Field:   "tracker.type",
-			Message: fmt.Sprintf("git remote \"origin\" (%s) is not a recognized github or gitlab host; defaulting to github, verify manually", remote),
+			Message: fmt.Sprintf("git remote \"origin\" (%s) is not a recognized github, gitlab, or gitea host; defaulting to github, verify manually", remote),
 		}
 	}
+}
+
+// applyGiteaComposition switches every capability on cfg to gitea and sets the
+// project the tracker reads and writes plus the base URL. Gitea has no fixed
+// host, so it always sets the base URL from the remote host, including for
+// codeberg.org (see config.GiteaConfig.BaseURL).
+func applyGiteaComposition(cfg *config.Config, host, path string) {
+	cfg.Provider = "gitea"
+	cfg.Tracker.Type = "gitea"
+	cfg.Tracker.Provider = "gitea"
+	cfg.SCM.Type = "gitea"
+	cfg.CI.Type = "gitea"
+	cfg.Tracker.Gitea.Project = path
+	cfg.Tracker.Gitea.BaseURL = "https://" + host
 }
 
 // applyGitLabComposition switches every capability on cfg to gitlab and sets
