@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.50.1](https://github.com/constructorfleet/forge/compare/forge-v0.50.0...forge-v0.50.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **init:** detect gitlab tracker from origin remote ([#722](https://github.com/constructorfleet/forge/issues/722)) ([951c7f3](https://github.com/constructorfleet/forge/commit/951c7f36fed16f8cc17b02f25154b6cbb60d737d))
+
 ## [0.50.0](https://github.com/constructorfleet/forge/compare/forge-v0.49.0...forge-v0.50.0) (2026-09-06)
 
 
