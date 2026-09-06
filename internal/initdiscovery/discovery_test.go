@@ -400,10 +400,58 @@ func TestDetect_BaseBranch_Unresolved_LeavesNoteAndValidDefault(t *testing.T) {
 	mustLoadable(t, result)
 }
 
-func TestDetect_TrackerType_NonGithubRemote_LeavesNote(t *testing.T) {
+func TestDetect_TrackerType_GitLabDotComRemote_ComposesGitLab(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
 	runGitT(t, dir, "remote", "set-url", "origin", "https://gitlab.com/example/repo.git")
+
+	result := Detect(dir)
+	if result.Config.Tracker.Type != "gitlab" {
+		t.Errorf("Tracker.Type = %q, want gitlab detected from the remote", result.Config.Tracker.Type)
+	}
+	if result.Config.SCM.Type != "gitlab" || result.Config.CI.Type != "gitlab" {
+		t.Errorf("SCM.Type = %q, CI.Type = %q, want both gitlab", result.Config.SCM.Type, result.Config.CI.Type)
+	}
+	if result.Config.Tracker.GitLab.Project != "example/repo" {
+		t.Errorf("GitLab.Project = %q, want example/repo", result.Config.Tracker.GitLab.Project)
+	}
+	if result.Config.Tracker.GitLab.BaseURL != "" {
+		t.Errorf("GitLab.BaseURL = %q, want empty for gitlab.com", result.Config.Tracker.GitLab.BaseURL)
+	}
+	found := false
+	for _, n := range result.Notes {
+		if n.Field == "tracker.gitlab.project" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a tracker.gitlab.project Note for the inferred project, got %+v", result.Notes)
+	}
+	mustLoadable(t, result)
+}
+
+func TestDetect_TrackerType_SelfManagedGitLab_SetsBaseURLFromSSH(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	runGitT(t, dir, "remote", "set-url", "origin", "git@gitlab.example.com:group/sub/widget.git")
+
+	result := Detect(dir)
+	if result.Config.Tracker.Type != "gitlab" {
+		t.Errorf("Tracker.Type = %q, want gitlab detected from the remote", result.Config.Tracker.Type)
+	}
+	if result.Config.Tracker.GitLab.Project != "group/sub/widget" {
+		t.Errorf("GitLab.Project = %q, want group/sub/widget", result.Config.Tracker.GitLab.Project)
+	}
+	if result.Config.Tracker.GitLab.BaseURL != "https://gitlab.example.com" {
+		t.Errorf("GitLab.BaseURL = %q, want https://gitlab.example.com", result.Config.Tracker.GitLab.BaseURL)
+	}
+	mustLoadable(t, result)
+}
+
+func TestDetect_TrackerType_UnknownHost_LeavesNote(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	runGitT(t, dir, "remote", "set-url", "origin", "https://bitbucket.org/example/repo.git")
 
 	result := Detect(dir)
 	if result.Config.Tracker.Type != "github" {
@@ -416,7 +464,7 @@ func TestDetect_TrackerType_NonGithubRemote_LeavesNote(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected a tracker.type Note for a non-github remote, got %+v", result.Notes)
+		t.Errorf("expected a tracker.type Note for an unrecognized host, got %+v", result.Notes)
 	}
 	mustLoadable(t, result)
 }
