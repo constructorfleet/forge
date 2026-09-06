@@ -31,3 +31,33 @@ func TestFormatMissingBinariesReport_EmptyInputProducesNoLines(t *testing.T) {
 		t.Errorf("FormatMissingBinariesReport(nil) = %v, want empty", lines)
 	}
 }
+
+func TestFormatEnabledLSPsReport_ListsEachEnabledLanguageSortedByName(t *testing.T) {
+	enabled := map[string]string{
+		"TypeScript/JavaScript": "typescript-language-server",
+		"Go":                    "gopls",
+	}
+
+	lines := FormatEnabledLSPsReport(enabled)
+
+	want := []string{
+		"Go: gopls",
+		"TypeScript/JavaScript: typescript-language-server",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("FormatEnabledLSPsReport lines = %v, want %v", lines, want)
+	}
+	for i, line := range lines {
+		if line != want[i] {
+			t.Errorf("line %d = %q, want %q", i, line, want[i])
+		}
+	}
+}
+
+func TestFormatEnabledLSPsReport_EmptyInputProducesNoLines(t *testing.T) {
+	lines := FormatEnabledLSPsReport(nil)
+
+	if len(lines) != 0 {
+		t.Errorf("FormatEnabledLSPsReport(nil) = %v, want empty", lines)
+	}
+}
