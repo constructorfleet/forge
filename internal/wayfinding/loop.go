@@ -32,6 +32,33 @@ import (
 // resolved is re-resolved.
 type Persist func(id string, artifact *planning.Artifact) error
 
+// loopConfig holds Loop's optional knobs, set through LoopOption values so
+// existing callers that pass none keep the autonomous, no-human-input
+// behavior unchanged.
+type loopConfig struct {
+	// humanInputs maps a Decision ID to a human's answer, passed into the
+	// compiled PlanningContext so a resumed Decision is re-resolved from the
+	// human's words instead of being deferred again.
+	humanInputs map[string]string
+	// grillLoadBearing tells the resolver to defer load-bearing Decisions to
+	// the human (see decisionresolution.Request.GrillLoadBearing).
+	grillLoadBearing bool
+}
+
+// LoopOption configures an optional Loop behavior.
+type LoopOption func(*loopConfig)
+
+// WithHumanInputs supplies per-Decision human answers for this Loop pass. A
+// Decision whose ID is a key resolves from the answer rather than deferring.
+func WithHumanInputs(inputs map[string]string) LoopOption {
+	return func(c *loopConfig) { c.humanInputs = inputs }
+}
+
+// WithGrillLoadBearing turns on deferring load-bearing Decisions to the human.
+func WithGrillLoadBearing(grill bool) LoopOption {
+	return func(c *loopConfig) { c.grillLoadBearing = grill }
+}
+
 // Loop resolves every currently-ready Decision in decisions, one at a time
 // in dependency order, each a fresh decisionresolution.Resolve invocation
 // built from a freshly compiled PlanningContext -- no reliance on prior
@@ -67,7 +94,12 @@ func Loop(
 	decisions map[string]*planning.Artifact,
 	persist Persist,
 	onNeedsHuman NeedsHumanHandler,
+	opts ...LoopOption,
 ) error {
+	cfg := loopConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	for {
 		frontier := decisiongraph.Frontier(decisions)
 		if len(frontier) == 0 {
@@ -82,14 +114,15 @@ func Loop(
 		}
 		targetID := frontier[0]
 
-		pc, err := compilePlanningContext(repo, goalArtifact, decisions)
+		pc, err := compilePlanningContext(repo, goalArtifact, decisions, cfg.humanInputs)
 		if err != nil {
 			return fmt.Errorf("wayfinding: compile planning context for %s: %w", targetID, err)
 		}
 
 		res, err := decisionresolution.Resolve(ctx, backend, decisionresolution.Request{
-			Context:  pc,
-			TargetID: targetID,
+			Context:          pc,
+			TargetID:         targetID,
+			GrillLoadBearing: cfg.grillLoadBearing,
 		})
 		if err != nil {
 			return fmt.Errorf("wayfinding: resolve %s: %w", targetID, err)
@@ -137,7 +170,7 @@ func Loop(
 // (if any), and every currently known Decision, so each Resolve invocation
 // sees the full, current Decision set -- including ones not yet resolved,
 // mirroring how PlanningSurvey's own prompt lists existing Decisions.
-func compilePlanningContext(repo agent.RepositoryContext, goalArtifact *planning.Artifact, decisions map[string]*planning.Artifact) (planningagent.PlanningContext, error) {
+func compilePlanningContext(repo agent.RepositoryContext, goalArtifact *planning.Artifact, decisions map[string]*planning.Artifact, humanInputs map[string]string) (planningagent.PlanningContext, error) {
 	artifacts := make([]planningagent.NamedArtifact, 0, len(decisions)+1)
 	if goalArtifact != nil {
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: "goal", Artifact: goalArtifact})
@@ -145,7 +178,7 @@ func compilePlanningContext(repo agent.RepositoryContext, goalArtifact *planning
 	for id, d := range decisions {
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: d})
 	}
-	return planningagent.Compile(repo, artifacts, nil)
+	return planningagent.Compile(repo, artifacts, humanInputs)
 }
 
 // existingIDs returns decisions' keys, sorted, for decisiongraph.Materialize's
@@ -182,7 +215,7 @@ func runReadinessReview(
 	decisions map[string]*planning.Artifact,
 	persist Persist,
 ) (ready bool, err error) {
-	pc, err := compilePlanningContext(repo, goalArtifact, decisions)
+	pc, err := compilePlanningContext(repo, goalArtifact, decisions, nil)
 	if err != nil {
 		return false, fmt.Errorf("wayfinding: compile planning context for readiness review: %w", err)
 	}
