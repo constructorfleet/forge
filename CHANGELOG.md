@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.0](https://github.com/constructorfleet/forge/compare/forge-v0.50.1...forge-v0.51.0) (2026-09-06)
+
+
+### Features
+
+* add Gitea/Forgejo provider (tracker + SCM + CI) ([#724](https://github.com/constructorfleet/forge/issues/724)) ([ceca436](https://github.com/constructorfleet/forge/commit/ceca436bde69c6b88cd12d9eec1ce2e281a7f9fd)), closes [#721](https://github.com/constructorfleet/forge/issues/721)
+
 ## [0.50.1](https://github.com/constructorfleet/forge/compare/forge-v0.50.0...forge-v0.50.1) (2026-09-06)
 
 
