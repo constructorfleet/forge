@@ -3,7 +3,6 @@ package initdiscovery
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -11,37 +10,34 @@ import (
 	"github.com/Teagan42/forge/internal/lsp"
 )
 
-// languageManifest associates a project manifest file with the language it
-// indicates, mirroring repocontext's manifest table so forge init's LSP
-// coverage notes name languages consistently with the Repository Context
-// Workers see. Detection here is only ever used to check registry
-// coverage — it never populates lsp.servers (see NewRegistry: the registry,
-// not config, is the source of server commands).
-var languageManifests = []struct {
-	file     string
-	language string
-}{
-	{"go.mod", "Go"},
-	{"Cargo.toml", "Rust"},
-	{"Gemfile", "Ruby"},
-	{"pom.xml", "Java"},
-	{"build.gradle", "Java"},
-	{"build.gradle.kts", "Kotlin"},
-	{"requirements.txt", "Python"},
-	{"pyproject.toml", "Python"},
-}
-
-// detectLanguages returns the sorted, deduplicated set of languages whose
-// manifest files are present at dir.
+// detectLanguages returns the sorted, deduplicated set of languages detected
+// at dir: walking the tree for every language in the Language-to-LSP Table
+// (lsp.Languages), independently, so a repository with manifests for more
+// than one language (a monorepo) reports every one of them rather than
+// stopping at the first match.
 func detectLanguages(dir string) []string {
+	manifests := make([]lsp.ManifestPattern, 0, len(lsp.Languages))
+	extensions := make([]lsp.ExtensionSpec, 0, len(lsp.Languages))
+	for _, spec := range lsp.Languages {
+		manifests = append(manifests, lsp.ManifestPattern{Language: spec.Language, Filenames: spec.ManifestFilenames})
+		extensions = append(extensions, lsp.ExtensionSpec{Language: spec.Language, Extensions: spec.FallbackExtensions})
+	}
+
+	result, err := lsp.Scan(dir, manifests, extensions)
+	if err != nil {
+		return nil
+	}
+
 	seen := map[string]bool{}
-	for _, m := range languageManifests {
-		if fileExists(filepath.Join(dir, m.file)) {
-			seen[m.language] = true
+	for language, present := range result.Manifests {
+		if present {
+			seen[language] = true
 		}
 	}
-	if fileExists(filepath.Join(dir, "package.json")) {
-		seen["JavaScript"] = true
+	for language, count := range result.ExtensionCounts {
+		if count > 0 {
+			seen[language] = true
+		}
 	}
 
 	languages := make([]string, 0, len(seen))
@@ -50,6 +46,30 @@ func detectLanguages(dir string) []string {
 	}
 	sort.Strings(languages)
 	return languages
+}
+
+// registryKeys maps a Language-to-LSP Table display name (lsp.Languages,
+// e.g. "TypeScript/JavaScript") to the Language Server Registry's
+// single-word, lowercase identifier (lsp.Registry, e.g. "javascript"). The
+// two tables are not yet reconciled (see the caveat on lsp.Languages), so
+// this table is how detectLSPCoverage bridges a display name to the key
+// lsp.Detect and the registry actually use.
+var registryKeys = map[string]string{
+	"Go":                    "go",
+	"TypeScript/JavaScript": "javascript",
+	"Python":                "python",
+	"Rust":                  "rust",
+}
+
+// registryKey returns the Language Server Registry key for a Language-to-LSP
+// Table display name, falling back to a plain lowercase of the name for a
+// language the registry table above does not list (no registry entry can
+// match it either way).
+func registryKey(language string) string {
+	if key, ok := registryKeys[language]; ok {
+		return key
+	}
+	return strings.ToLower(language)
 }
 
 // detectLSPCoverage checks which of the detected languages Forge can serve
@@ -63,8 +83,13 @@ func detectLSPCoverage(dir string, cfg config.LSPConfig) []Note {
 		return nil
 	}
 
+	registryLanguages := make([]string, len(languages))
+	for i, language := range languages {
+		registryLanguages[i] = registryKey(language)
+	}
+
 	registry := lsp.NewRegistry(cfg)
-	servers := lsp.Detect(languages, registry)
+	servers := lsp.Detect(registryLanguages, registry)
 
 	servable := make(map[string]bool, len(servers))
 	var missingOnPATH []string
@@ -77,7 +102,7 @@ func detectLSPCoverage(dir string, cfg config.LSPConfig) []Note {
 
 	var servableLanguages, unservableLanguages []string
 	for _, language := range languages {
-		if servable[strings.ToLower(language)] {
+		if servable[registryKey(language)] {
 			servableLanguages = append(servableLanguages, language)
 		} else {
 			unservableLanguages = append(unservableLanguages, language)
