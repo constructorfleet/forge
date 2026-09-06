@@ -138,6 +138,54 @@ func TestInit_PrintsBatchReportForLanguagesMissingAllCandidateBinaries(t *testin
 	}
 }
 
+// TestInit_SummaryListsEnabledLSPsAlongsideMissingBinariesReport builds a
+// monorepo fixture with Go and TypeScript (both LSP binaries present) and
+// Rust (its binary missing), and confirms forge init's end-of-run summary
+// lists gopls and typescript-language-server as enabled and rust-analyzer
+// in the missing-binaries report, in the same run, per ticket 699's
+// acceptance criteria.
+func TestInit_SummaryListsEnabledLSPsAlongsideMissingBinariesReport(t *testing.T) {
+	bin := buildBinary(t)
+	dir := initGitFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name": "foo"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"foo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git not found on test PATH: %v", err)
+	}
+	fakePath := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(fakePath, "git")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gopls", "typescript-language-server"} {
+		if err := os.WriteFile(filepath.Join(fakePath, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command(bin, "init", dir)
+	cmd.Env = append(os.Environ(), "PATH="+fakePath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("forge init exited with error: %v\noutput: %s", err, out)
+	}
+
+	for _, want := range []string{
+		"Go: gopls",
+		"TypeScript/JavaScript: typescript-language-server",
+		"Rust: rust-analyzer not found on PATH. Install it: rustup component add rust-analyzer",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("forge init output missing %q, got: %s", want, out)
+		}
+	}
+}
+
 // initGitFixture creates a minimal git+Go repo fixture and returns its
 // directory.
 func initGitFixture(t *testing.T) string {
