@@ -120,17 +120,23 @@ func restackConflictQuestion(baseBranch string) string {
 const restackPushQuestion = "Forge restacked this pull request after its prerequisite merged, " +
 	"but it cannot publish the restacked branch."
 
-// routeRestackFailure ends one dependent's restack attempt at NEEDS_INFO,
-// the human-escalation resting state this codebase uses for a conflict, or
-// for any other outcome where automated repair would guess at intent (see
-// pollConflict and pollStale, which route their own conflicts the same way).
+// routeRestackFailure ends one dependent's restack attempt at NEEDS_INFO —
+// the human-escalation resting state reserved for outcomes where automated
+// repair would guess at intent. This deliberately differs from a plain
+// merge conflict (pollConflict/pollStale), which ADR 0017 (amended) routes
+// into the CI repair loop as a repairable CI failure: a restack failure
+// means the dependent's PR already incorporated a merged prerequisite's
+// branch, and re-running the Worker cannot safely reconstruct what that
+// integration was supposed to look like once Git refuses to replay it. ADR
+// 0018 keeps the dependent owner-judgment call at NEEDS_INFO.
 //
-// Unlike those two paths, a restack failure also consumes one unit of the
-// dependent's CI retry budget. ADR 0018 and issue 288 make restack repair an
-// exception to ADR 0017's rule that a conflict detour is free: the budget is
-// what stops a stack of dependents from being restacked without limit.
-// RecordCIFailure counts nothing more once the ceiling is reached, and
-// reports the exhaustion instead, so the human sees why no retry is left.
+// Unlike the plain-conflict paths, a restack failure also consumes one unit
+// of the dependent's CI retry budget. ADR 0018 and issue 288 make restack
+// repair an exception to ADR 0017's rule that a conflict detour is free:
+// the budget is what stops a stack of dependents from being restacked
+// without limit. RecordCIFailure counts nothing more once the ceiling is
+// reached, and reports the exhaustion instead, so the human sees why no
+// retry is left.
 func (s *Supervisor) routeRestackFailure(ctx context.Context, executionID string, dependent domain.Issue, question, details string) error {
 	budgetDetail, err := s.consumeRestackRetryBudget(ctx, executionID, &dependent)
 	if err != nil {

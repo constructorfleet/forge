@@ -155,7 +155,7 @@ func TestWait_StalePR_RebasesAndForcePushesThenContinuesToChecks(t *testing.T) {
 	}
 }
 
-func TestWait_StalePR_RebaseConflict_RoutesToNeedsInfoWithoutPushing(t *testing.T) {
+func TestWait_StalePR_RebaseConflict_RoutesToCIFailedWithoutPushing(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-stale-conflict", "41")
 	seedWorkspace(t, store, "exec-stale-conflict", "41", "/tmp/ws-41", "forge/exec-stale-conflict/41")
@@ -165,24 +165,23 @@ func TestWait_StalePR_RebaseConflict_RoutesToNeedsInfoWithoutPushing(t *testing.
 		behindUntil: 100,
 	}
 
-	cfg := config.Default()
-	cfg.Blocked.Label = "forge-blocked"
-
-	supervisor := ci.New(store, trk, cfg, "main")
+	supervisor := ci.New(store, trk, config.Default(), "main")
 	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 11, 0, 0, time.UTC) }
 	rebaser := &stubRebaser{conflicts: []string{"main.go"}}
 	pusher := &stubBranchPusher{}
 	supervisor.Rebaser = rebaser
 	supervisor.Pusher = pusher
-	needsInfo := newStubNeedsInfoTracker()
-	supervisor.NeedsInfoTracker = needsInfo
 
 	state, err := supervisor.Wait(context.Background(), "exec-stale-conflict", "41")
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if state != domain.StateNeedsInfo {
-		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	// A conflicted stale rebase routes into the same CI repair loop as a
+	// conflicted dirty PR (pollConflict): CI_FAILED, so the repairer Agent
+	// reconciles the branch against the target instead of a human unblocking
+	// it by hand.
+	if state != domain.StateCIFailed {
+		t.Fatalf("state = %s, want CI_FAILED", state)
 	}
 	if pusher.calls != 0 {
 		t.Fatalf("ForcePush calls = %d, want 0 (conflicted rebase must not push)", pusher.calls)

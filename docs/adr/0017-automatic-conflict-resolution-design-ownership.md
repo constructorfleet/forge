@@ -1,8 +1,16 @@
 # Automatic PR conflict resolution is limited to Git-clean replay with rollback
 
-Forge may automatically repair a merge-conflicted pull request only by asking Git to replay the pull request branch onto the current target branch in an isolated candidate Workspace. Forge must never synthesize conflict resolutions, choose "ours" or "theirs", edit conflict markers, run an Agent to interpret hunks, enable rerere-based reuse, or apply semantic guesses. If Git cannot produce a complete candidate tree without unresolved conflicts, the conflict remains a human decision and the Issue routes to `NEEDS_INFO` exactly as it does today.
+Forge may automatically repair a merge-conflicted pull request only by asking Git to replay the pull request branch onto the current target branch in an isolated candidate Workspace. Forge must never synthesize conflict resolutions, choose "ours" or "theirs", edit conflict markers, run an Agent to interpret hunks, enable rerere-based reuse, or apply semantic guesses. If Git cannot produce a complete candidate tree without unresolved conflicts, the conflict is handled by the CI repair loop described in the Amendment below — not, as originally written here, parked forever at `NEEDS_INFO`.
 
 This supersedes this ADR's original placeholder. The original problem statement was correct that `internal/ci/conflict.go` routed every conflict to `NEEDS_INFO`; the decision here is the narrow exception future implementation may build against.
+
+## Amendment (2026-09-05): an unresolved conflict is a repairable CI failure, not a terminal `NEEDS_INFO`
+
+The original text routed every unresolved conflict to `NEEDS_INFO` ("the conflict remains a human decision"). That finality was wrong for the common case: a PR branch that cannot replay onto a moved target is the same class of failure as a failed required check or an actionable review — and issue 109 already routes both of those into the CI repair loop (`CI_FAILED`, bounded by the CI retry budget). The Git replay defined below remains the preferred, cheapest repair and runs first; when it refuses, `internal/ci` now transitions the Issue to `CI_FAILED` instead of `NEEDS_INFO`, and the scheduler's ordinary CI repairer (`engine.RepairCIFailure`) re-runs the Worker with the conflict diagnostic as Agent feedback.
+
+For a conflict-repair iteration only, the Worker's captured base is re-pointed at the target's current tip (`engine.refreshRepairBase`) — without a mechanical rebase of the live Workspace, since that rebase is exactly the replay that stops — and the Agent is instructed to fetch and merge the target branch into the PR branch, reconciling its intended change against what already landed, then recommit. Quality Gates, review, and lease-guarded publication run exactly as for any other repair. The CI retry budget caps iterations; exhaustion lands in `FAILED` like any unrepaired CI failure.
+
+`NEEDS_INFO` remains the resting state for the genuinely ambiguous or ownership-lost cases: a refused precondition, a published candidate that failed a subsequent required check and was rolled back (see Validation), a push or restore lease failure, or a lost remote head.
 
 ## Decision
 
@@ -18,9 +26,9 @@ The only safe conflict shape is "Git can construct the whole candidate without s
 - Create a disposable conflict-resolution branch and Workspace from the recorded pull request head, not from the live Issue Workspace.
 - Rebase that candidate onto the current target tip, or use the repository's chosen equivalent replay primitive, with rerere disabled and no custom hunk-resolution strategy supplied by Forge.
 - Treat a zero-conflict Git exit as a candidate, even when Git had to perform ordinary non-overlapping three-way application internally.
-- Treat any unresolved path as unsafe: overlapping textual hunks, add/add, delete/modify, rename/rename, rename/delete, mode conflicts, submodule conflicts, binary conflicts, generated-file conflicts, custom-driver failures, or any other Git stop condition all route to `NEEDS_INFO` with the path list.
+- Treat any unresolved path as unsafe: overlapping textual hunks, add/add, delete/modify, rename/rename, rename/delete, mode conflicts, submodule conflicts, binary conflicts, generated-file conflicts, custom-driver failures, or any other Git stop condition all refuse the replay and enter the CI repair loop with the path list as the repair diagnostic (see the Amendment below; supersedes the original "route to `NEEDS_INFO`" ending).
 
-Forge's definition of "trivial" is therefore operational rather than heuristic: Git completed a replay in isolation and produced a concrete tree; Forge did not choose any content. Forge does not attempt a second strategy after one strategy conflicts, because choosing between rebase, merge, squash, or hunk-level repair is itself a policy decision that can alter branch history and review context.
+Forge's definition of "trivial" is therefore operational rather than heuristic: Git completed a replay in isolation and produced a concrete tree; Forge did not choose any content. Forge does not attempt a second mechanical strategy after one strategy conflicts, because choosing between rebase, merge, squash, or hunk-level replay is itself a policy decision that can alter branch history and review context — the repair loop's Agent-mediated reconciliation (Amendment) is a re-run of the Worker, not a second replay strategy.
 
 ## Validation
 

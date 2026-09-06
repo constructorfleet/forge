@@ -10,7 +10,6 @@ import (
 	"github.com/Teagan42/forge/internal/ci"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
-	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -121,7 +120,7 @@ func (s *stubConflictRestorer) Reset(_ context.Context, path, commitSHA string) 
 	return nil
 }
 
-func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
+func TestWait_MergeConflict_RoutesToCIFailedRepairLoop(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict", "30")
 
@@ -130,21 +129,19 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 		conflicted:  true,
 	}
 
-	cfg := config.Default()
-	cfg.Blocked.Label = "forge-blocked"
-	cfg.Blocked.Comment = true
-
-	supervisor := ci.New(store, trk, cfg, "main")
-	needsInfo := newStubNeedsInfoTracker()
-	supervisor.NeedsInfoTracker = needsInfo
+	supervisor := ci.New(store, trk, config.Default(), "main")
 	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 6, 0, 0, time.UTC) }
 
 	state, err := supervisor.Wait(context.Background(), "exec-conflict", "30")
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if state != domain.StateNeedsInfo {
-		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	// With no resolver configured a conflict was historically a terminal
+	// NEEDS_INFO; it is now a repairable CI failure (CI_FAILED) that re-enters
+	// the scheduler's repair loop and re-runs the Worker against the current
+	// base, bounded by the CI retry budget.
+	if state != domain.StateCIFailed {
+		t.Fatalf("state = %s, want CI_FAILED", state)
 	}
 	if trk.checkCalls != 0 {
 		t.Fatalf("GetPullRequestChecks calls = %d, want 0 (conflict short-circuits checks)", trk.checkCalls)
@@ -154,8 +151,8 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue: %v", err)
 	}
-	if issue.State != domain.StateNeedsInfo {
-		t.Fatalf("persisted state = %s, want NEEDS_INFO", issue.State)
+	if issue.State != domain.StateCIFailed {
+		t.Fatalf("persisted state = %s, want CI_FAILED", issue.State)
 	}
 
 	runs, err := store.CIRunsByIssue(context.Background(), "exec-conflict", "30")
@@ -164,24 +161,6 @@ func TestWait_MergeConflict_RoutesToNeedsInfo(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Kind != storage.CIRunKindConflict || runs[0].Status != storage.CIRunStatusFailed {
 		t.Fatalf("runs = %+v, want one FAILED conflict run", runs)
-	}
-
-	if len(needsInfo.labels["30"]) != 1 || needsInfo.labels["30"][0] != "forge-blocked" {
-		t.Fatalf("labels = %v, want [forge-blocked]", needsInfo.labels["30"])
-	}
-	if len(needsInfo.comments) != 1 {
-		t.Fatalf("comments = %d, want 1", len(needsInfo.comments))
-	}
-	if !strings.Contains(needsInfo.comments[0], needsinfo.CommentMarker(needsinfo.KindNeedsInfo, "exec-conflict", "30")) {
-		t.Fatalf("comment body missing needs-info marker: %s", needsInfo.comments[0])
-	}
-
-	checkpoint, err := store.GetNeedsInfoCheckpoint(context.Background(), "exec-conflict", "30")
-	if err != nil {
-		t.Fatalf("GetNeedsInfoCheckpoint: %v", err)
-	}
-	if !checkpoint.CommentPosted || checkpoint.CommentAuthor != "forge-bot" {
-		t.Fatalf("checkpoint = %+v, want CommentPosted with forge-bot author", checkpoint)
 	}
 }
 
@@ -488,7 +467,7 @@ func TestWait_MergeConflict_ResolverDerivesMigratedStackedPullRequestBaseBranch(
 	}
 }
 
-func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testing.T) {
+func TestWait_MergeConflict_ResolverRefusalRoutesToCIFailedRepairLoopWithDetails(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict-refused", "33")
 
@@ -497,13 +476,8 @@ func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testi
 		conflicted:  true,
 	}
 
-	cfg := config.Default()
-	cfg.Blocked.Label = "forge-blocked"
-	cfg.Blocked.Comment = true
-
-	supervisor := ci.New(store, trk, cfg, "main")
+	supervisor := ci.New(store, trk, config.Default(), "main")
 	supervisor.Now = func() time.Time { return time.Date(2026, 8, 28, 12, 8, 0, 0, time.UTC) }
-	supervisor.NeedsInfoTracker = newStubNeedsInfoTracker()
 	supervisor.ConflictResolver = &stubConflictResolver{
 		result: ci.ConflictResolutionResult{Resolved: false, Details: "automatic conflict replay refused: README.md still has unresolved hunks"},
 	}
@@ -512,8 +486,12 @@ func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testi
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if state != domain.StateNeedsInfo {
-		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	// A refused conflict no longer parks the Issue in terminal NEEDS_INFO;
+	// it routes into the CI repair loop (CI_FAILED) so the scheduler re-runs
+	// the Worker against the refreshed base and the Agent reconciles the
+	// conflict, bounded by the CI retry budget.
+	if state != domain.StateCIFailed {
+		t.Fatalf("state = %s, want CI_FAILED (repair loop entry)", state)
 	}
 	if trk.checkCalls != 0 {
 		t.Fatalf("GetPullRequestChecks calls = %d, want 0 after resolver refusal", trk.checkCalls)
@@ -529,9 +507,16 @@ func TestWait_MergeConflict_ResolverRefusalRoutesToNeedsInfoWithDetails(t *testi
 	if runs[0].Details != "automatic conflict replay refused: README.md still has unresolved hunks" {
 		t.Fatalf("run details = %q, want resolver refusal details", runs[0].Details)
 	}
+	issue, err := store.GetIssue(context.Background(), "exec-conflict-refused", "33")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.State != domain.StateCIFailed {
+		t.Fatalf("Issue state = %s, want CI_FAILED", issue.State)
+	}
 }
 
-func TestWait_MergeConflict_MissingRecordedHeadRoutesToNeedsInfoWithoutResolver(t *testing.T) {
+func TestWait_MergeConflict_MissingRecordedHeadRoutesToCIFailedWithoutResolver(t *testing.T) {
 	store := openTestStore(t)
 	seedIssueWithPR(t, store, "exec-conflict-no-head", "38")
 	prs, err := store.PullRequestsByIssue(context.Background(), "exec-conflict-no-head", "38")
@@ -550,15 +535,14 @@ func TestWait_MergeConflict_MissingRecordedHeadRoutesToNeedsInfoWithoutResolver(
 	supervisor := ci.New(store, trk, config.Default(), "main")
 	resolver := &stubConflictResolver{result: ci.ConflictResolutionResult{Resolved: true}}
 	supervisor.ConflictResolver = resolver
-	supervisor.NeedsInfoTracker = newStubNeedsInfoTracker()
 	supervisor.Now = func() time.Time { return time.Date(2026, 8, 31, 11, 20, 0, 0, time.UTC) }
 
 	state, err := supervisor.Wait(context.Background(), "exec-conflict-no-head", "38")
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if state != domain.StateNeedsInfo {
-		t.Fatalf("state = %s, want NEEDS_INFO", state)
+	if state != domain.StateCIFailed {
+		t.Fatalf("state = %s, want CI_FAILED", state)
 	}
 	if resolver.calls != 0 {
 		t.Fatalf("ResolveMergeConflict calls = %d, want 0 without recorded PR head", resolver.calls)

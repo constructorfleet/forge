@@ -10,8 +10,10 @@ import (
 )
 
 // routeToNeedsInfo transitions an Issue already in CI_PENDING to
-// NEEDS_INFO (issue 109: an unresolvable merge conflict, or review
-// feedback too ambiguous for automated repair to act on safely). It mirrors
+// NEEDS_INFO (issue 109: feedback too ambiguous for automated repair to act
+// on safely — e.g. multiple conflicting review change requests, or an
+// automatic conflict-resolution detour whose push lease or rollback lost
+// ownership). It mirrors
 // engine.Engine.handleNeedsInfo's label/comment/checkpoint sequencing —
 // AddLabel first (idempotent, safe to repeat), then a checkpoint saved
 // before AddComment narrows the crash window, then the comment itself —
