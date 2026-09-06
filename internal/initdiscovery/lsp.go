@@ -48,30 +48,6 @@ func detectLanguages(dir string) []string {
 	return languages
 }
 
-// registryKeys maps a Language-to-LSP Table display name (lsp.Languages,
-// e.g. "TypeScript/JavaScript") to the Language Server Registry's
-// single-word, lowercase identifier (lsp.Registry, e.g. "javascript"). The
-// two tables are not yet reconciled (see the caveat on lsp.Languages), so
-// this table is how detectLSPCoverage bridges a display name to the key
-// lsp.Detect and the registry actually use.
-var registryKeys = map[string]string{
-	"Go":                    "go",
-	"TypeScript/JavaScript": "javascript",
-	"Python":                "python",
-	"Rust":                  "rust",
-}
-
-// registryKey returns the Language Server Registry key for a Language-to-LSP
-// Table display name, falling back to a plain lowercase of the name for a
-// language the registry table above does not list (no registry entry can
-// match it either way).
-func registryKey(language string) string {
-	if key, ok := registryKeys[language]; ok {
-		return key
-	}
-	return strings.ToLower(language)
-}
-
 // detectLSPCoverage checks which of the detected languages Forge can serve
 // via its Language Server Registry (internal/lsp) and returns Notes
 // advertising that coverage — never config values. lsp.servers stays empty;
@@ -84,7 +60,7 @@ func detectLSPCoverage(languages []string, cfg config.LSPConfig) []Note {
 
 	registryLanguages := make([]string, len(languages))
 	for i, language := range languages {
-		registryLanguages[i] = registryKey(language)
+		registryLanguages[i] = lsp.LanguageID(language)
 	}
 
 	registry := lsp.NewRegistry(cfg)
@@ -101,7 +77,7 @@ func detectLSPCoverage(languages []string, cfg config.LSPConfig) []Note {
 
 	var servableLanguages, unservableLanguages []string
 	for _, language := range languages {
-		if servable[registryKey(language)] {
+		if servable[lsp.LanguageID(language)] {
 			servableLanguages = append(servableLanguages, language)
 		} else {
 			unservableLanguages = append(unservableLanguages, language)
