@@ -448,6 +448,54 @@ func TestDetect_TrackerType_SelfManagedGitLab_SetsBaseURLFromSSH(t *testing.T) {
 	mustLoadable(t, result)
 }
 
+func TestDetect_TrackerType_CodebergRemote_ComposesGitea(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	runGitT(t, dir, "remote", "set-url", "origin", "https://codeberg.org/example/repo.git")
+
+	result := Detect(dir)
+	if result.Config.Tracker.Type != "gitea" {
+		t.Errorf("Tracker.Type = %q, want gitea detected from the remote", result.Config.Tracker.Type)
+	}
+	if result.Config.SCM.Type != "gitea" || result.Config.CI.Type != "gitea" {
+		t.Errorf("SCM.Type = %q, CI.Type = %q, want both gitea", result.Config.SCM.Type, result.Config.CI.Type)
+	}
+	if result.Config.Tracker.Gitea.Project != "example/repo" {
+		t.Errorf("Gitea.Project = %q, want example/repo", result.Config.Tracker.Gitea.Project)
+	}
+	if result.Config.Tracker.Gitea.BaseURL != "https://codeberg.org" {
+		t.Errorf("Gitea.BaseURL = %q, want https://codeberg.org", result.Config.Tracker.Gitea.BaseURL)
+	}
+	found := false
+	for _, n := range result.Notes {
+		if n.Field == "tracker.gitea.project" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a tracker.gitea.project Note for the inferred project, got %+v", result.Notes)
+	}
+	mustLoadable(t, result)
+}
+
+func TestDetect_TrackerType_SelfManagedGitea_SetsBaseURLFromSSH(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, dir)
+	runGitT(t, dir, "remote", "set-url", "origin", "git@gitea.example.com:team/widget.git")
+
+	result := Detect(dir)
+	if result.Config.Tracker.Type != "gitea" {
+		t.Errorf("Tracker.Type = %q, want gitea detected from the remote", result.Config.Tracker.Type)
+	}
+	if result.Config.Tracker.Gitea.Project != "team/widget" {
+		t.Errorf("Gitea.Project = %q, want team/widget", result.Config.Tracker.Gitea.Project)
+	}
+	if result.Config.Tracker.Gitea.BaseURL != "https://gitea.example.com" {
+		t.Errorf("Gitea.BaseURL = %q, want https://gitea.example.com", result.Config.Tracker.Gitea.BaseURL)
+	}
+	mustLoadable(t, result)
+}
+
 func TestDetect_TrackerType_UnknownHost_LeavesNote(t *testing.T) {
 	dir := t.TempDir()
 	initRepo(t, dir)
