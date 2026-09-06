@@ -49,10 +49,10 @@ func detectLanguages(dir string) []string {
 // detectLSPCoverage turns probe — the outcome of probing languages' ordered
 // candidate Language Server binaries against PATH (see probeLanguageServers)
 // — into Notes advertising that coverage: which languages have a binary
-// ready now, and which have none on PATH yet. Every language in
-// lsp.Languages has a Language Server Registry entry (see lsp.NewRegistry),
-// so probe fully determines coverage; detectLSPCoverage never needs its own
-// registry lookup or PATH probe.
+// ready now, and which have none on PATH yet. probe already resolves PATH
+// availability per candidate binary from lsp.Languages, so detectLSPCoverage
+// only reads probe's Enabled and MissingBinaries fields; it needs no
+// separate registry lookup or PATH probe of its own.
 func detectLSPCoverage(languages []string, probe LSPProbeResult) []Note {
 	if len(languages) == 0 {
 		return nil

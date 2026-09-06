@@ -43,13 +43,8 @@ func NewRegistry(cfg config.LSPConfig) Registry {
 			continue
 		}
 		candidate := spec.Binaries[0]
-		if binary, ok := ProbeBinaries(spec); ok {
-			for _, c := range spec.Binaries {
-				if c.Name == binary {
-					candidate = c
-					break
-				}
-			}
+		if found, ok := ProbeBinaries(spec); ok {
+			candidate = found
 		}
 		registry[spec.RegistryID] = ServerSpec{
 			Command: candidateCommand(candidate),

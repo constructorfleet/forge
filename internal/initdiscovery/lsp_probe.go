@@ -52,7 +52,7 @@ func probeLanguageServers(languages []string) LSPProbeResult {
 			continue
 		}
 		if binary, found := lsp.ProbeBinaries(spec); found {
-			result.Enabled[language] = binary
+			result.Enabled[language] = binary.Name
 		} else {
 			result.Missing = append(result.Missing, language)
 			result.MissingBinaries = append(result.MissingBinaries, MissingBinary{
