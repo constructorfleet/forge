@@ -39,6 +39,7 @@ import (
 	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/tracker/gitea"
 	"github.com/Teagan42/forge/internal/tracker/github"
 	"github.com/Teagan42/forge/internal/tracker/gitlab"
 	"github.com/Teagan42/forge/internal/tracker/linear"
@@ -768,6 +769,8 @@ func buildTracker(cfg config.Config, repoRoot string) (trackerCapability, error)
 	switch cfg.Tracker.Type {
 	case "gitlab":
 		return buildGitLabClient(cfg), nil
+	case "gitea":
+		return buildGiteaClient(cfg)
 	case "linear":
 		return buildLinearClient(cfg), nil
 	default:
@@ -784,6 +787,8 @@ func buildSCM(cfg config.Config, repoRoot string) (engine.PRCreator, error) {
 		return buildGitHubClient(cfg, repoRoot)
 	case "gitlab":
 		return buildGitLabClient(cfg), nil
+	case "gitea":
+		return buildGiteaClient(cfg)
 	default:
 		return nil, fmt.Errorf("forge: unknown scm provider type %q", cfg.SCM.Type)
 	}
@@ -801,6 +806,8 @@ func buildCI(cfg config.Config, repoRoot string) (ci.Tracker, error) {
 		return buildGitHubClient(cfg, repoRoot)
 	case "gitlab":
 		return buildGitLabClient(cfg), nil
+	case "gitea":
+		return buildGiteaClient(cfg)
 	default:
 		return nil, fmt.Errorf("forge: unknown ci provider type %q", cfg.CI.Type)
 	}
@@ -849,6 +856,55 @@ func buildGitLabClient(cfg config.Config) *gitlab.Client {
 	trk.Provider = cfg.Tracker.Provider
 	trk.DependencyOverrides = cfg.Dependencies.Overrides
 	return trk
+}
+
+// buildGiteaClient constructs the gitea.Client for buildTracker's "gitea"
+// case. It needs no git remote: cfg.Tracker.Gitea.Project names the repository
+// as "owner/repo", and cfg.Tracker.Gitea.BaseURL names the instance. A
+// self-managed Gitea instance can use any host name, so Forge does not infer
+// the repository from a remote URL. config.validate already rejected an empty
+// project or base URL.
+//
+// The Gitea token is not passed here. The client reads GITEA_TOKEN from the
+// environment at call time, so no secret ever enters config (see the config
+// package doc comment).
+func buildGiteaClient(cfg config.Config) (*gitea.Client, error) {
+	owner, repo, err := splitGiteaProject(cfg.Tracker.Gitea.Project)
+	if err != nil {
+		return nil, err
+	}
+	trk := gitea.NewClient(nil, giteaAPIRoot(cfg.Tracker.Gitea.BaseURL), owner, repo)
+	trk.Provider = cfg.Tracker.Provider
+	trk.DependencyOverrides = cfg.Dependencies.Overrides
+	return trk, nil
+}
+
+// splitGiteaProject splits a "owner/repo" project string into its owner and
+// its repository name. It reports an error for any other shape, so a
+// misconfigured project fails loudly at wiring time rather than producing a
+// broken request path later.
+func splitGiteaProject(project string) (owner, repo string, err error) {
+	trimmed := strings.Trim(strings.TrimSpace(project), "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("forge: gitea project %q must have the form owner/repo", project)
+	}
+	return parts[0], parts[1], nil
+}
+
+// giteaAPIRoot turns a configured Gitea instance root (for example
+// "https://gitea.example.com") into the REST API root the client sends requests
+// to. It appends "/api/v1" unless the root already ends with it, so an operator
+// configures the host they know and this one place owns the API path.
+func giteaAPIRoot(baseURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasSuffix(trimmed, "/api/v1") {
+		return trimmed
+	}
+	return trimmed + "/api/v1"
 }
 
 // buildLinearClient constructs the linear.Client for buildTracker's
