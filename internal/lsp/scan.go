@@ -103,3 +103,17 @@ func Scan(root string, manifests []ManifestPattern, extensions []ExtensionSpec) 
 	}
 	return result, nil
 }
+
+// ScanLanguages walks root exactly as Scan does, but reads its manifest
+// filenames and fallback extensions straight from languages (the
+// Language-to-LSP Table's LanguageSpec rows), so a caller never builds its
+// own ManifestPattern and ExtensionSpec slices by hand.
+func ScanLanguages(root string, languages []LanguageSpec) (ScanResult, error) {
+	manifests := make([]ManifestPattern, 0, len(languages))
+	extensions := make([]ExtensionSpec, 0, len(languages))
+	for _, spec := range languages {
+		manifests = append(manifests, ManifestPattern{Language: spec.Language, Filenames: spec.ManifestFilenames})
+		extensions = append(extensions, ExtensionSpec{Language: spec.Language, Extensions: spec.FallbackExtensions})
+	}
+	return Scan(root, manifests, extensions)
+}
