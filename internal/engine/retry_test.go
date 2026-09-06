@@ -11,6 +11,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/review"
@@ -892,5 +893,141 @@ func TestRepairCIFailure_UsesCapturedWorkerBaseInsteadOfExecutionBase(t *testing
 	}
 	if invocations[1].Repository.BaseRevision != workerBase {
 		t.Fatalf("repair BaseRevision = %q, want captured worker base", invocations[1].Repository.BaseRevision)
+	}
+}
+
+// TestRepairCIFailure_ConflictRunRefreshesWorkerBaseAndFramesConflictFeedback
+// covers the ADR 0017 amendment: a failed CIRun whose Kind marks a
+// merge-conflict repair (pollConflict refused to replay) makes RepairCIFailure
+// re-point the captured Worker base at the target's current tip before the
+// repair Agent runs, and frames the Agent feedback as a reconcile-your-branch
+// instruction instead of the generic "CI check failed" text.
+func TestRepairCIFailure_ConflictRunRefreshesWorkerBaseAndFramesConflictFeedback(t *testing.T) {
+	te := approvedTestEngine(t, "47", domain.Issue{ID: "47", Title: "conflict repair"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 3}
+	te.gates.Set(&flakyRunner{failUntil: 0})
+	te.eng.TargetTip = engine.TargetTipResolverFunc(func(context.Context) (string, error) {
+		return "second-base", nil
+	})
+
+	ctx := context.Background()
+	initial, err := te.eng.Execute(ctx, "47", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if initial.Issue.State != domain.StateCIPending {
+		t.Fatalf("initial state = %s, want CI_PENDING", initial.Issue.State)
+	}
+
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "47",
+		Status:      storage.CIRunStatusFailed,
+		Kind:        storage.CIRunKindConflict,
+		Details:     "automatic conflict replay refused: internal/tui/pane.go still has unresolved hunks",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "47", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	te.fake.ProgramResult("47", agent.AgentResult{Status: agent.StatusImplemented, Summary: "conflict reconciled"})
+
+	repaired, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "47")
+	if err != nil {
+		t.Fatalf("RepairCIFailure: %v", err)
+	}
+	if repaired.State != domain.StateCIPending {
+		t.Fatalf("repaired state = %s, want CI_PENDING", repaired.State)
+	}
+
+	invocations := te.fake.Invocations()
+	if len(invocations) != 2 {
+		t.Fatalf("got %d agent invocations, want 2 (initial + conflict repair)", len(invocations))
+	}
+	if got := invocations[1].Repository.BaseRevision; got != "second-base" {
+		t.Fatalf("repair BaseRevision = %q, want refreshed captured base 'second-base'", got)
+	}
+	if len(invocations[1].Feedback) != 1 {
+		t.Fatalf("repair Feedback = %+v, want exactly 1 entry", invocations[1].Feedback)
+	}
+	message := invocations[1].Feedback[0].Message
+	if !strings.Contains(message, "cannot merge") {
+		t.Fatalf("repair Feedback = %q, want reconcile-your-branch (conflict) framing", message)
+	}
+	if strings.Contains(message, "CI check failed") {
+		t.Fatalf("repair Feedback = %q, must not use the generic check-failure framing", message)
+	}
+}
+
+// TestRepairCIFailure_OrdinaryCheckFailureKeepsCapturedBase guards the
+// amendment's scope: only a conflict/staleness-marked failed run re-points
+// the Worker base at the current tip. A garden-variety required-check repair
+// keeps ADR 0006's captured base exactly as before, even when a TargetTip is
+// wired.
+func TestRepairCIFailure_OrdinaryCheckFailureKeepsCapturedBase(t *testing.T) {
+	te := approvedTestEngine(t, "49", domain.Issue{ID: "49", Title: "plain ci repair"})
+	pub := &fakePublisher{commitSHA: "sha-1"}
+	prTracker := newFakePRTracker()
+	te.eng.Publisher = pub
+	te.eng.PRTracker = prTracker
+	te.eng.BaseBranch = "main"
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 3}
+	te.gates.Set(&flakyRunner{failUntil: 0})
+	te.eng.TargetTip = engine.TargetTipResolverFunc(func(context.Context) (string, error) {
+		return "second-base", nil
+	})
+
+	ctx := context.Background()
+	initial, err := te.eng.Execute(ctx, "49", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if initial.Issue.State != domain.StateCIPending {
+		t.Fatalf("initial state = %s, want CI_PENDING", initial.Issue.State)
+	}
+
+	if err := te.store.RecordCIRun(ctx, storage.CIRun{
+		ExecutionID: initial.ExecutionID,
+		IssueID:     "49",
+		Status:      storage.CIRunStatusFailed,
+		CheckName:   "build",
+		Details:     "stacktrace line 1",
+		CheckedAt:   te.eng.Now(),
+	}); err != nil {
+		t.Fatalf("RecordCIRun: %v", err)
+	}
+	if _, err := te.store.TransitionIssue(ctx, initial.ExecutionID, "49", domain.StateCIFailed); err != nil {
+		t.Fatalf("TransitionIssue(CI_FAILED): %v", err)
+	}
+
+	te.fake.ProgramResult("49", agent.AgentResult{Status: agent.StatusImplemented, Summary: "ci repaired"})
+
+	repaired, err := te.eng.RepairCIFailure(ctx, initial.ExecutionID, "49")
+	if err != nil {
+		t.Fatalf("RepairCIFailure: %v", err)
+	}
+	if repaired.State != domain.StateCIPending {
+		t.Fatalf("repaired state = %s, want CI_PENDING", repaired.State)
+	}
+
+	invocations := te.fake.Invocations()
+	if len(invocations) != 2 {
+		t.Fatalf("got %d agent invocations, want 2 (initial + repair)", len(invocations))
+	}
+	if got := invocations[1].Repository.BaseRevision; got != te.base {
+		t.Fatalf("repair BaseRevision = %q, want unchanged captured base %q", got, te.base)
+	}
+	if got := invocations[1].Feedback[0].Message; got != "CI check failed:\nCheck: build\nDetails:\nstacktrace line 1" {
+		t.Fatalf("repair Feedback = %q, want generic check-failure framing", got)
 	}
 }

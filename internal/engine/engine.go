@@ -695,6 +695,31 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 		return domain.Issue{}, err
 	}
 
+	// A conflict/staleness repair exists to reconcile a PR that can no
+	// longer merge into its target: re-point the captured Worker base at the
+	// current target tip and let the repair Agent refresh the branch itself
+	// (ADR 0017, amended) instead of reworking in place on the stale base —
+	// reworking in place reproduces the same conflicting branch. refreshRepairBase
+	// is best-effort and records any fault as an event; the Agent still
+	// reconciles in-place against the old base if the tip is unavailable, so
+	// a refresh fault must not abort the repair.
+	latestRun, err := e.latestFailedCIRun(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	feedback := buildCIFeedback(latestRun)
+	if latestRun.Kind == storage.CIRunKindConflict || latestRun.Kind == storage.CIRunKindStale {
+		if err := e.refreshRepairBase(ctx, state.Execution, issueID); err != nil {
+			// refreshRepairBase already appended a worker.base_refresh_failed
+			// event; the repair proceeds in place against the old base.
+			_ = err
+		}
+		workerBase, err = e.workerBase(ctx, state.Execution, issueID)
+		if err != nil {
+			return domain.Issue{}, err
+		}
+	}
+
 	// The environment is the Engine's only path to a Workspace (ticket 305,
 	// constructorfleet/forge#285): Prepare reuses the Workspace just
 	// validated above, since workspace.Manager.Create returns an already
@@ -718,11 +743,6 @@ func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID strin
 	// follow, exactly like ExecuteInExecution's call above.
 	e.prepareSemantic(ctx, executionID, issueID, env.Workspace().Path, repoCtx)
 	defer e.teardownSemantic(executionID, issueID)
-
-	feedback, err := e.latestCIFeedback(ctx, executionID, issueID)
-	if err != nil {
-		return domain.Issue{}, err
-	}
 
 	issue, retried, err := e.repair(
 		ctx, executionID, issueID, env, repoCtx, issue,
@@ -1004,17 +1024,31 @@ func (e *Engine) repair(ctx context.Context, executionID, issueID string, env ex
 	return e.invokeAgent(ctx, executionID, issueID, env, repoCtx, issue, feedback)
 }
 
-func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID string) (agent.Feedback, error) {
+// latestFailedCIRun returns the most recent failed CIRun recorded for the
+// Issue — the single diagnostic a repair (RepairCIFailure) turns into Agent
+// feedback and consumes the CI retry budget against. Callers that also need
+// to branch on the failure class (e.g. whether a conflict-triggered repair
+// must refresh the Worker base) use this directly rather than re-deriving
+// the run.
+func (e *Engine) latestFailedCIRun(ctx context.Context, executionID, issueID string) (storage.CIRun, error) {
 	runs, err := e.Store.CIRunsByIssue(ctx, executionID, issueID)
 	if err != nil {
-		return agent.Feedback{}, fmt.Errorf("engine: load ci runs for issue %s: %w", issueID, err)
+		return storage.CIRun{}, fmt.Errorf("engine: load ci runs for issue %s: %w", issueID, err)
 	}
 	for i := len(runs) - 1; i >= 0; i-- {
 		if runs[i].Status == storage.CIRunStatusFailed {
-			return buildCIFeedback(runs[i]), nil
+			return runs[i], nil
 		}
 	}
-	return agent.Feedback{}, fmt.Errorf("engine: issue %s has no failed CI run to repair", issueID)
+	return storage.CIRun{}, fmt.Errorf("engine: issue %s has no failed CI run to repair", issueID)
+}
+
+func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID string) (agent.Feedback, error) {
+	run, err := e.latestFailedCIRun(ctx, executionID, issueID)
+	if err != nil {
+		return agent.Feedback{}, err
+	}
+	return buildCIFeedback(run), nil
 }
 
 // buildCIFeedback renders a persisted CIRun into bounded Agent feedback.
@@ -1024,22 +1058,34 @@ func (e *Engine) latestCIFeedback(ctx context.Context, executionID, issueID stri
 // storage.CIRunKindReview, produced only for a single reviewer's
 // actionable CHANGES_REQUESTED — see internal/ci's classifyReviews) is
 // framed as reviewer feedback instead, naming the reviewer rather than a
-// check. Kind == storage.CIRunKindConflict never reaches here: a detected
-// conflict routes the Issue to NEEDS_INFO, not CI_FAILED (see
-// internal/ci/conflict.go), so RepairCIFailure never repairs one.
+// check; a conflict-triggered or stale-rebase-conflict repair (Kind ==
+// storage.CIRunKindConflict / storage.CIRunKindStale, produced by
+// internal/ci's pollConflict/pollStale before routing the Issue to
+// CI_FAILED) is framed as a reconcile-your-branch instruction: the Agent
+// must refresh the PR branch onto the current target and resolve the
+// conflict itself, rather than reworking in place on the stale base.
 func buildCIFeedback(run storage.CIRun) agent.Feedback {
-	if run.Kind == storage.CIRunKindReview {
+	switch run.Kind {
+	case storage.CIRunKindReview:
 		message := fmt.Sprintf("Reviewer requested changes:\nReviewer: %s", run.CheckName)
 		if run.Details != "" {
 			message += "\nComment:\n" + run.Details
 		}
 		return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
+	case storage.CIRunKindConflict, storage.CIRunKindStale:
+		message := "Your pull request cannot merge: it conflicts with its target branch and Forge could not replay it cleanly."
+		if run.Details != "" {
+			message += "\nDetails:\n" + run.Details
+		}
+		message += "\nRefresh your branch onto the current target branch (e.g. git fetch origin && git merge origin/<target>) and resolve any conflicts by reconciling your intended change against what is already on the target branch, then commit the result. Do not drop your intended change; integrate it with the target's current state."
+		return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
+	default:
+		message := fmt.Sprintf("CI check failed:\nCheck: %s", run.CheckName)
+		if run.Details != "" {
+			message += "\nDetails:\n" + run.Details
+		}
+		return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
 	}
-	message := fmt.Sprintf("CI check failed:\nCheck: %s", run.CheckName)
-	if run.Details != "" {
-		message += "\nDetails:\n" + run.Details
-	}
-	return agent.Feedback{Source: agent.FeedbackSourceCI, Message: message}
 }
 
 // invokeAgent transitions issue to IMPLEMENTING and invokes the Agent with

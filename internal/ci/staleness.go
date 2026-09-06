@@ -69,9 +69,9 @@ type ConflictBranchRestorer interface {
 // A conflict-free rebase+push is not itself a terminal outcome for the
 // Issue: Wait keeps polling (handled false) so the very next step in this
 // same iteration evaluates checks against the refreshed branch. A rebase
-// conflict is routed to NEEDS_INFO instead, exactly like pollConflict's
-// unresolvable merge conflict — Forge attempts no automatic conflict
-// resolution.
+// conflict is routed to CI_FAILED via routeIssueToCIRepair — exactly like
+// pollConflict's unresolvable merge conflict — so the Agent reconciles the
+// stale branch against its target rather than a human resolving it by hand.
 func (s *Supervisor) pollStale(ctx context.Context, executionID, issueID string, number int, status tracker.PullRequestMergeStatus, haveStatus bool) (handled bool, state domain.IssueState, err error) {
 	if !haveStatus || s.Rebaser == nil || s.Pusher == nil || !status.Behind {
 		return false, "", nil
@@ -98,10 +98,7 @@ func (s *Supervisor) pollStale(ctx context.Context, executionID, issueID string,
 		if err := s.Store.RecordCIRun(ctx, run); err != nil {
 			return true, "", fmt.Errorf("ci: persist run for issue %s: %w", issueID, err)
 		}
-		state, err = s.routeToNeedsInfo(ctx, executionID, issueID,
-			"This pull request fell behind its base branch and Forge's automatic rebase hit a conflict it cannot resolve.",
-			"Resolve the conflict (e.g. rebase manually onto "+s.BaseBranch+") and push the update, or comment with guidance.",
-		)
+		state, err = s.routeIssueToCIRepair(ctx, executionID, issueID)
 		return true, state, err
 	}
 

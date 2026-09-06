@@ -335,6 +335,50 @@ func retryClaimError(issueID string, observed domain.IssueState, err error) erro
 	return fmt.Errorf("engine: retry issue %s: %w", issueID, ErrRetryAlreadyClaimed)
 }
 
+// refreshRepairBase re-resolves executionID/issueID's captured Worker base
+// to the target branch's current tip before a CI repair re-runs the Worker
+// for a merge-conflicted pull request (ADR 0017, amended). Unlike
+// refreshRetryBase (the manual retry path), it does NOT mechanically rebase
+// the existing Workspace: a conflicted PR is by definition one whose replay
+// stops, so the mechanical rebase would stop too — that is exactly the state
+// being repaired. It moves only the captured `worker.base_captured` marker
+// ahead, so downstream diffing (runReview/guardEmptyDiff) and the repair
+// Agent's repository context describe "your change on top of current target"
+// instead of "your change on top of a stale base", and the Agent is expected
+// to refresh its own branch in the Workspace (the feedback instructs it to
+// fetch and merge the target, resolving conflicts) before the engine
+// commits and pushes.
+//
+// The refresh is strictly forward (newBase following oldBase) and only when
+// TargetTip is wired and reports a different tip, mirroring refreshRetryBase's
+// forward-movement rule without the Ancestry/rebasing half. It is best-effort
+// for the repair path: a fault is recorded as a worker.base_refresh_failed
+// event and RepairCIFailure proceeds in place on the old base, where the
+// Agent can still work around the staleness.
+func (e *Engine) refreshRepairBase(ctx context.Context, exec domain.Execution, issueID string) error {
+	if e.TargetTip == nil {
+		return nil
+	}
+
+	oldBase, err := e.workerBase(ctx, exec, issueID)
+	if err != nil {
+		return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "old_base_lookup_failed", "", "", err)
+	}
+	newBase, err := e.TargetTip.CurrentTip(ctx)
+	if err != nil {
+		wrapped := fmt.Errorf("engine: resolve target tip for issue %s repair: %w", issueID, err)
+		return e.reportBaseRefreshFailure(ctx, exec.ID, issueID, "resolve_target_tip_failed", oldBase, "", wrapped)
+	}
+	if newBase == "" || newBase == oldBase {
+		return nil
+	}
+
+	return e.appendEvent(ctx, exec.ID, issueID, "worker.base_captured", map[string]string{
+		"base":     newBase,
+		"old_base": oldBase,
+	})
+}
+
 // refreshRetryBase re-resolves executionID/issueID's Worker base to the
 // target branch's current tip before RetryIssue re-runs it (ticket 29): ADR
 // 0006 captures a Worker's base once, at its original READY transition, so

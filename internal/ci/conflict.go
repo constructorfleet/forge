@@ -6,6 +6,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/prbase"
+	"github.com/Teagan42/forge/internal/statusreflect"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -30,7 +31,12 @@ type ConflictResolutionResult struct {
 }
 
 // ConflictResolver is the optional capability the CI Supervisor uses to
-// attempt ADR-0017 automatic conflict repair before routing to NEEDS_INFO.
+// attempt ADR-0017 automatic conflict repair before routing an unresolvable
+// conflict into the CI repair loop (CI_FAILED, bounded by the Issue's CI
+// retry budget), exactly like a failed required check or an actionable
+// review (see review.go): the resolver's Git replay is the bounded first
+// attempt, and a refusal is a repairable CI failure, not a terminal
+// human-blocking NEEDS_INFO.
 type ConflictResolver interface {
 	ResolveMergeConflict(ctx context.Context, req ConflictResolutionRequest) (ConflictResolutionResult, error)
 }
@@ -43,7 +49,9 @@ type ConflictResolver interface {
 // to ConflictResolver when configured. A successful automatic repair records
 // a passed conflict CIRun and lets Wait continue normal CI supervision; an
 // unconfigured or unresolved conflict is recorded as failed and routed to
-// NEEDS_INFO.
+// CI_FAILED so the scheduler's CIRepairer re-runs the Worker against the
+// current base and the Agent reconciles the conflict itself (ADR 0017,
+// amended for the repair path).
 func (s *Supervisor) pollConflict(ctx context.Context, executionID, issueID string, pr storage.PullRequest, status tracker.PullRequestMergeStatus, haveStatus bool) (handled bool, state domain.IssueState, err error) {
 	if !haveStatus || !status.Conflicted {
 		return false, "", nil
@@ -113,6 +121,14 @@ func (s *Supervisor) conflictResolutionBaseBranch(ctx context.Context, execution
 	return base, nil
 }
 
+// routeUnresolvedConflict records a failed conflict CIRun (Details carries
+// the refusal reason — the conflicting path list or the resolver's message)
+// and routes the Issue into the CI repair loop via routeIssueToCIRepair,
+// instead of the former terminal NEEDS_INFO. The persisted failed run is
+// exactly the diagnostic engine.RepairCIFailure's latestFailedCIRun hands a
+// repair Agent, so a refused conflict is re-worked against the current base
+// (see buildCIFeedback's conflict framing) rather than parked forever as a
+// human decision.
 func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, issueID, details string) (handled bool, state domain.IssueState, err error) {
 	run := storage.CIRun{
 		ExecutionID: executionID,
@@ -126,9 +142,29 @@ func (s *Supervisor) routeUnresolvedConflict(ctx context.Context, executionID, i
 		return true, "", fmt.Errorf("ci: persist run for issue %s: %w", issueID, err)
 	}
 
-	state, err = s.routeToNeedsInfo(ctx, executionID, issueID,
-		"This pull request has a merge conflict with its base branch that Forge cannot resolve automatically.",
-		"Resolve the conflict (e.g. rebase or merge the base branch into the pull request branch) and push the update, or comment with guidance.",
-	)
+	state, err = s.routeIssueToCIRepair(ctx, executionID, issueID)
 	return true, state, err
+}
+
+// routeIssueToCIRepair transitions an Issue already in CI_PENDING to
+// CI_FAILED after the observed CI failure could not be auto-repaired by the
+// poll-layer remedy attached to it (an unresolvable merge conflict, or a
+// stale-PR rebase that hit conflicts), so the scheduler's CIRepairer
+// (engine.RepairCIFailure) re-runs the Worker against the refreshed base and
+// the Agent reconciles the conflict itself, bounded by the Issue's CI retry
+// budget. This mirrors the actionable-review path (review.go) and the
+// failed-required-check path (supervisor.go) exactly: a PR that cannot merge
+// is a repairable CI failure, and only the ambiguous or ownership-lost cases
+// that remain after repair's budget is spent land in a terminal state. The
+// caller records the failed CIRun before calling this; the transition and
+// status reflection are the shared remainder.
+func (s *Supervisor) routeIssueToCIRepair(ctx context.Context, executionID, issueID string) (domain.IssueState, error) {
+	issue, err := s.Store.TransitionIssue(ctx, executionID, issueID, domain.StateCIFailed)
+	if err != nil {
+		return "", fmt.Errorf("ci: transition issue %s to CI_FAILED: %w", issueID, err)
+	}
+	if err := statusreflect.Apply(ctx, s.StatusTracker, s.Config.StatusReflection, issueID, domain.StateCIPending, domain.StateCIFailed); err != nil {
+		return "", fmt.Errorf("ci: reflect status for issue %s: %w", issueID, err)
+	}
+	return issue.State, nil
 }
