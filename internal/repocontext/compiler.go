@@ -16,6 +16,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/lsp"
 )
 
 // instructionFiles lists the agent-instruction files read and merged, in
@@ -24,31 +25,48 @@ import (
 // second.
 var instructionFiles = []string{"AGENTS.md", "CLAUDE.md"}
 
-// manifest associates a project manifest file with the language and package
-// manager it indicates. Detection here is informational only: it never
-// determines Quality Gate commands, which come exclusively from cfg.Quality
-// (see CONTEXT.md "Quality Gate" — gates are configured, not discovered).
-type manifest struct {
-	file           string
-	language       string
-	packageManager string
+// manifestPackageManagers maps a project manifest file to the package
+// manager it indicates. lsp.Languages (see internal/lsp) is the sole
+// source of truth for which manifest files indicate which language; this
+// table adds the package-manager label lsp.Languages does not carry.
+// Detection here is informational only: it never determines Quality Gate
+// commands, which come exclusively from cfg.Quality (see CONTEXT.md
+// "Quality Gate" — gates are configured, not discovered).
+var manifestPackageManagers = map[string]string{
+	"go.mod":           "Go Modules",
+	"Cargo.toml":       "Cargo",
+	"Gemfile":          "Bundler",
+	"pom.xml":          "Maven",
+	"build.gradle":     "Gradle",
+	"build.gradle.kts": "Gradle",
+	"requirements.txt": "pip",
+	"pyproject.toml":   "Poetry",
+	"setup.py":         "pip",
 }
 
-var manifests = []manifest{
-	{file: "go.mod", language: "Go", packageManager: "Go Modules"},
-	{file: "Cargo.toml", language: "Rust", packageManager: "Cargo"},
-	{file: "Gemfile", language: "Ruby", packageManager: "Bundler"},
-	{file: "pom.xml", language: "Java", packageManager: "Maven"},
-	{file: "build.gradle", language: "Java", packageManager: "Gradle"},
-	{file: "build.gradle.kts", language: "Kotlin", packageManager: "Gradle"},
-	{file: "requirements.txt", language: "Python", packageManager: "pip"},
-	{file: "pyproject.toml", language: "Python", packageManager: "Poetry"},
-}
+// jsSourceLanguage is the lsp.Languages display name for JavaScript/
+// TypeScript. detectManifests looks up its RegistryID from lsp.Languages
+// (see lsp.LanguageID) rather than hardcoding it, and handles its manifest
+// file (package.json) separately, below, because its package manager
+// depends on which lock file is present, not on the manifest file alone.
+const jsSourceLanguage = "TypeScript/JavaScript"
+
+var jsRegistryID = lsp.LanguageID(jsSourceLanguage)
+
+// jsLanguage is the display name detectManifests reports for jsRegistryID,
+// kept distinct from lsp.Languages' Language field (jsSourceLanguage) so
+// the Repository Context stays human-readable for the Agent.
+const jsLanguage = "JavaScript"
 
 // jsPackageManagers maps a JavaScript/TypeScript lock file to the package
 // manager it indicates, checked in order. package.json alone (no lock file)
 // falls back to npm, the default that ships with Node.
-var jsPackageManagers = []manifest{
+type jsLockFile struct {
+	file           string
+	packageManager string
+}
+
+var jsPackageManagers = []jsLockFile{
 	{file: "pnpm-lock.yaml", packageManager: "pnpm"},
 	{file: "yarn.lock", packageManager: "Yarn"},
 	{file: "package-lock.json", packageManager: "npm"},
@@ -127,43 +145,69 @@ func normalizeInstructions(repoRoot string) (string, error) {
 // detectManifests inspects repoRoot for known project manifests and returns
 // the sorted, deduplicated languages and package managers they indicate.
 // This is purely informational context for the Agent; it has no bearing on
-// which Quality Gates run.
+// which Quality Gates run. Language detection reuses lsp.Languages'
+// ManifestFilenames (see internal/lsp), the sole source of truth for which
+// manifest files indicate which language, so this table cannot drift from
+// the one Detect and NewRegistry use.
 func detectManifests(repoRoot string) (languages, packageManagers []string, err error) {
 	var langs, pkgMgrs []string
 
-	for _, m := range manifests {
-		ok, err := fileExists(filepath.Join(repoRoot, m.file))
-		if err != nil {
-			return nil, nil, err
-		}
-		if !ok {
+	for _, spec := range lsp.Languages {
+		if spec.RegistryID == jsRegistryID {
+			for _, file := range spec.ManifestFilenames {
+				jsLangs, jsPkgMgrs, err := detectJS(repoRoot, file)
+				if err != nil {
+					return nil, nil, err
+				}
+				langs = append(langs, jsLangs...)
+				pkgMgrs = append(pkgMgrs, jsPkgMgrs...)
+			}
 			continue
 		}
-		langs = append(langs, m.language)
-		pkgMgrs = append(pkgMgrs, m.packageManager)
-	}
-
-	hasPackageJSON, err := fileExists(filepath.Join(repoRoot, "package.json"))
-	if err != nil {
-		return nil, nil, err
-	}
-	if hasPackageJSON {
-		langs = append(langs, "JavaScript")
-		pm := "npm"
-		for _, jm := range jsPackageManagers {
-			ok, err := fileExists(filepath.Join(repoRoot, jm.file))
+		for _, file := range spec.ManifestFilenames {
+			ok, err := fileExists(filepath.Join(repoRoot, file))
 			if err != nil {
 				return nil, nil, err
 			}
-			if ok {
-				pm = jm.packageManager
-				break
+			if !ok {
+				continue
+			}
+			langs = append(langs, spec.Language)
+			if pm, ok := manifestPackageManagers[file]; ok {
+				pkgMgrs = append(pkgMgrs, pm)
 			}
 		}
-		pkgMgrs = append(pkgMgrs, pm)
 	}
 
 	return dedupeSorted(langs), dedupeSorted(pkgMgrs), nil
+}
+
+// detectJS reports the language and package manager indicated by manifest,
+// the JavaScript/TypeScript manifest filename read from lsp.Languages'
+// javascript entry, present at repoRoot. The package manager is chosen from
+// the lock file present, defaulting to npm when manifest alone is present.
+func detectJS(repoRoot, manifest string) (languages, packageManagers []string, err error) {
+	hasManifest, err := fileExists(filepath.Join(repoRoot, manifest))
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasManifest {
+		return nil, nil, nil
+	}
+
+	pm := "npm"
+	for _, jm := range jsPackageManagers {
+		ok, err := fileExists(filepath.Join(repoRoot, jm.file))
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			pm = jm.packageManager
+			break
+		}
+	}
+
+	return []string{jsLanguage}, []string{pm}, nil
 }
 
 // describeStructure returns a deterministic, one-line-per-entry listing of
