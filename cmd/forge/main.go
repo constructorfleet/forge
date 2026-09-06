@@ -156,6 +156,12 @@ func runInit(args []string) error {
 	for _, n := range result.Notes {
 		fmt.Fprintf(os.Stdout, "  note: %s: %s\n", n.Field, n.Message)
 	}
+	if lines := initdiscovery.FormatMissingBinariesReport(result.LSPProbe.MissingBinaries); len(lines) > 0 {
+		fmt.Fprintln(os.Stdout, "Language Server binaries not found on PATH:")
+		for _, line := range lines {
+			fmt.Fprintf(os.Stdout, "  %s\n", line)
+		}
+	}
 	return nil
 }
 

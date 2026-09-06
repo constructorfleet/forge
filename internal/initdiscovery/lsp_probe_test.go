@@ -44,6 +44,20 @@ func TestProbeLanguageServers_AllCandidatesMissing_NoCrashNoEnablement(t *testin
 	}
 }
 
+func TestProbeLanguageServers_MissingBinariesRecordsPreferredCandidateAndHint(t *testing.T) {
+	withFakePATH(t)
+
+	result := probeLanguageServers([]string{"Rust", "Java"})
+
+	want := []MissingBinary{
+		{Language: "Rust", Binary: "rust-analyzer", InstallHint: "rustup component add rust-analyzer"},
+		{Language: "Java", Binary: "jdtls", InstallHint: "brew install jdtls"},
+	}
+	if !reflect.DeepEqual(result.MissingBinaries, want) {
+		t.Errorf("MissingBinaries = %+v, want %+v", result.MissingBinaries, want)
+	}
+}
+
 func TestProbeLanguageServers_UnknownLanguageIgnored(t *testing.T) {
 	withFakePATH(t)
 
