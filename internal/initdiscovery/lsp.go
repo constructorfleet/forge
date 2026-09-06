@@ -14,14 +14,7 @@ import (
 // than one language (a monorepo) reports every one of them rather than
 // stopping at the first match.
 func detectLanguages(dir string) []string {
-	manifests := make([]lsp.ManifestPattern, 0, len(lsp.Languages))
-	extensions := make([]lsp.ExtensionSpec, 0, len(lsp.Languages))
-	for _, spec := range lsp.Languages {
-		manifests = append(manifests, lsp.ManifestPattern{Language: spec.Language, Filenames: spec.ManifestFilenames})
-		extensions = append(extensions, lsp.ExtensionSpec{Language: spec.Language, Extensions: spec.FallbackExtensions})
-	}
-
-	result, err := lsp.Scan(dir, manifests, extensions)
+	result, err := lsp.ScanLanguages(dir, lsp.Languages)
 	if err != nil {
 		return nil
 	}
