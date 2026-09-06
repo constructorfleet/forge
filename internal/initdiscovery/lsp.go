@@ -77,8 +77,7 @@ func registryKey(language string) string {
 // advertising that coverage — never config values. lsp.servers stays empty;
 // the registry, not .forge.yaml, is the source of server commands (see
 // lsp.NewRegistry).
-func detectLSPCoverage(dir string, cfg config.LSPConfig) []Note {
-	languages := detectLanguages(dir)
+func detectLSPCoverage(languages []string, cfg config.LSPConfig) []Note {
 	if len(languages) == 0 {
 		return nil
 	}

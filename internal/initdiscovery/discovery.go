@@ -36,10 +36,17 @@ type Note struct {
 }
 
 // Result is the outcome of Detect: a fully-defaulted, valid config.Config
-// plus any Notes about fields that could not be confidently resolved.
+// plus any Notes about fields that could not be confidently resolved, and
+// the LSP binary probe outcome for the detected languages.
 type Result struct {
 	Config config.Config
 	Notes  []Note
+	// LSPProbe is derived from lsp.Languages' ordered candidate binaries
+	// (see LSPProbeResult). Notes' LSP entries come from the separate,
+	// unreconciled lsp.Registry table (see detectLSPCoverage). The two can
+	// disagree about whether a language is servable until the tables are
+	// reconciled; do not assume LSPProbe and Notes agree for a language.
+	LSPProbe LSPProbeResult
 }
 
 // Detect inspects the repository rooted at dir and returns a Result.
@@ -106,10 +113,13 @@ func Detect(dir string) Result {
 		})
 	}
 
+	languages := detectLanguages(dir)
 	notes = append(notes, detectAgentDocs(dir)...)
-	notes = append(notes, detectLSPCoverage(dir, cfg.LSP)...)
+	notes = append(notes, detectLSPCoverage(languages, cfg.LSP)...)
 
-	return Result{Config: cfg, Notes: notes}
+	probe := probeLanguageServers(languages)
+
+	return Result{Config: cfg, Notes: notes, LSPProbe: probe}
 }
 
 // mergeFirstWins copies src into dst, keeping dst's existing value for any
