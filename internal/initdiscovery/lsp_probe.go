@@ -12,6 +12,20 @@ type LSPProbeResult struct {
 	// Missing lists detected languages for which no candidate binary
 	// resolved on PATH.
 	Missing []string
+	// MissingBinaries lists, for each language in Missing, its preferred
+	// (first) candidate binary and that binary's static install hint —
+	// the data forge init's batch missing-binaries report prints.
+	MissingBinaries []MissingBinary
+}
+
+// MissingBinary is one entry in forge init's consolidated report of
+// languages whose candidate Language Server binaries are all absent from
+// PATH: the language, its first (preferred) candidate binary name, and
+// that binary's static install hint.
+type MissingBinary struct {
+	Language    string
+	Binary      string
+	InstallHint string
 }
 
 // languageSpecs indexes lsp.Languages by display name for lookup by the
@@ -41,6 +55,11 @@ func probeLanguageServers(languages []string) LSPProbeResult {
 			result.Enabled[language] = binary
 		} else {
 			result.Missing = append(result.Missing, language)
+			result.MissingBinaries = append(result.MissingBinaries, MissingBinary{
+				Language:    language,
+				Binary:      spec.Binaries[0].Name,
+				InstallHint: spec.Binaries[0].InstallHint,
+			})
 		}
 	}
 	return result

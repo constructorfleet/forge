@@ -97,6 +97,47 @@ func TestInit_RefusesToOverwriteExistingConfigWithoutForce(t *testing.T) {
 	}
 }
 
+// TestInit_PrintsBatchReportForLanguagesMissingAllCandidateBinaries builds a
+// fixture with two languages (Rust, Java) neither of whose candidate LSP
+// binaries is on PATH, and confirms forge init prints both in a single
+// consolidated report with their install hints, per ticket 698's acceptance
+// criteria.
+func TestInit_PrintsBatchReportForLanguagesMissingAllCandidateBinaries(t *testing.T) {
+	bin := buildBinary(t)
+	dir := initGitFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"foo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte("<project></project>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git not found on test PATH: %v", err)
+	}
+	restrictedPath := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(restrictedPath, "git")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "init", dir)
+	cmd.Env = append(os.Environ(), "PATH="+restrictedPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("forge init exited with error: %v\noutput: %s", err, out)
+	}
+
+	for _, want := range []string{
+		"Rust: rust-analyzer not found on PATH. Install it: rustup component add rust-analyzer",
+		"Java: jdtls not found on PATH. Install it: brew install jdtls",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("forge init output missing %q, got: %s", want, out)
+		}
+	}
+}
+
 // initGitFixture creates a minimal git+Go repo fixture and returns its
 // directory.
 func initGitFixture(t *testing.T) string {
