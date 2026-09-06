@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Teagan42/forge/internal/config"
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
 )
 
 // TestLanguages_ExactSet checks that the table names exactly the seven
@@ -68,32 +69,78 @@ func TestLanguages_InstallHintsNonEmpty(t *testing.T) {
 
 // TestLanguages_RegistryIDMatchesRegistry checks that each LanguageSpec's
 // RegistryID names the exact key the live Registry uses for a language the
-// registry already serves, so a caller of Detect never needs its own
-// display-name-to-key bridge. It reads the real Registry (via NewRegistry,
-// seeded from builtinServers) rather than a hand-written expectation table,
-// so a rename of a registry key (for example "javascript" to "js") fails
-// this test instead of passing silently.
+// registry serves, so a caller of Detect never needs its own
+// display-name-to-key bridge. It reads the real Registry (via NewRegistry)
+// rather than a hand-written expectation table, so a rename of a registry
+// key (for example "javascript" to "js") fails this test instead of
+// passing silently.
 func TestLanguages_RegistryIDMatchesRegistry(t *testing.T) {
 	registry := NewRegistry(config.LSPConfig{})
 
-	// registryServedLanguages names the languages Registry serves today
-	// (see builtinServers). A language absent from this set must have no
-	// matching Registry entry; a language present in it must have one.
-	registryServedLanguages := map[string]bool{
-		"Go":                    true,
-		"TypeScript/JavaScript": true,
-		"Python":                true,
-		"Rust":                  true,
+	// NewRegistry seeds a ServerSpec for every LanguageSpec that carries a
+	// RegistryID and at least one candidate binary — which is every row in
+	// Languages today.
+	for _, spec := range Languages {
+		if _, servedByRegistry := registry[spec.RegistryID]; !servedByRegistry {
+			t.Errorf("%s: RegistryID %q has no matching entry in the live Registry", spec.Language, spec.RegistryID)
+		}
+	}
+}
+
+// TestLanguages_RegistryIDs checks that every language row names the
+// lowercase, single-word Language Server Registry key NewRegistry stores
+// its ServerSpec under, so the two tables share one key per language.
+func TestLanguages_RegistryIDs(t *testing.T) {
+	cases := []struct {
+		language   string
+		registryID string
+	}{
+		{"Go", "go"},
+		{"TypeScript/JavaScript", "javascript"},
+		{"Python", "python"},
+		{"Rust", "rust"},
+		{"C/C++", "cpp"},
+		{"Java", "java"},
+		{"Ruby", "ruby"},
 	}
 
-	for _, spec := range Languages {
-		_, servedByRegistry := registry[spec.RegistryID]
-		switch {
-		case registryServedLanguages[spec.Language] && !servedByRegistry:
-			t.Errorf("%s: RegistryID %q has no matching entry in the live Registry", spec.Language, spec.RegistryID)
-		case !registryServedLanguages[spec.Language] && servedByRegistry:
-			t.Errorf("%s: RegistryID %q unexpectedly matches a live Registry entry; update registryServedLanguages", spec.Language, spec.RegistryID)
+	for _, c := range cases {
+		spec := findLanguageSpec(t, c.language)
+		if spec.RegistryID != c.registryID {
+			t.Errorf("%s: RegistryID = %q, want %q", c.language, spec.RegistryID, c.registryID)
 		}
+	}
+}
+
+// TestLanguages_PythonCandidateCommandsAndProfiles checks that Python's two
+// candidate binaries carry the launch command and ServerProfile their
+// server actually needs: pyright launches via pyright-langserver --stdio
+// with the Pyright hover profile, and pylsp launches bare with no known
+// hover quirk.
+func TestLanguages_PythonCandidateCommandsAndProfiles(t *testing.T) {
+	spec := findLanguageSpec(t, "Python")
+
+	pyright := spec.Binaries[0]
+	if pyright.Name != "pyright" {
+		t.Fatalf("Binaries[0].Name = %q, want %q", pyright.Name, "pyright")
+	}
+	wantCommand := []string{"pyright-langserver", "--stdio"}
+	if len(pyright.Command) != len(wantCommand) || pyright.Command[0] != wantCommand[0] || pyright.Command[1] != wantCommand[1] {
+		t.Errorf("pyright.Command = %v, want %v", pyright.Command, wantCommand)
+	}
+	if pyright.Profile.HoverStyle != lspdriver.HoverStylePyrightAnnotated {
+		t.Errorf("pyright.Profile.HoverStyle = %v, want HoverStylePyrightAnnotated", pyright.Profile.HoverStyle)
+	}
+	if !pyright.Profile.DropSymbolChildren {
+		t.Error("pyright.Profile.DropSymbolChildren = false, want true")
+	}
+
+	pylsp := spec.Binaries[1]
+	if pylsp.Name != "pylsp" {
+		t.Fatalf("Binaries[1].Name = %q, want %q", pylsp.Name, "pylsp")
+	}
+	if len(pylsp.Command) != 0 {
+		t.Errorf("pylsp.Command = %v, want empty (defaults to bare %q)", pylsp.Command, "pylsp")
 	}
 }
 

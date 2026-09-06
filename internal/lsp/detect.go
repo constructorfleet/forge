@@ -26,43 +26,31 @@ type ServerSpec struct {
 // the ServerSpec that serves it.
 type Registry map[string]ServerSpec
 
-// builtinServers seeds the Language Server Registry with Forge's v1
-// defaults: the four supported languages, each with the ServerProfile its
-// server's markdown/symbol quirks require (see ADR 0016). "javascript" is
-// the single key for the whole Node/JS/TS family — repocontext keeps
-// emitting "JavaScript" for package.json, and typescript-language-server
-// serves .js and .ts alike.
-var builtinServers = Registry{
-	"go": {
-		Command: []string{"gopls"},
-		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
-	},
-	"rust": {
-		Command: []string{"rust-analyzer"},
-		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleRustTwoFence},
-	},
-	"python": {
-		Command: []string{"pyright-langserver", "--stdio"},
-		Profile: lspdriver.ServerProfile{
-			HoverStyle:         lspdriver.HoverStylePyrightAnnotated,
-			DropSymbolChildren: true,
-		},
-	},
-	"javascript": {
-		Command: []string{"typescript-language-server", "--stdio"},
-		Profile: lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
-	},
-}
-
-// NewRegistry builds the Language Server Registry from Forge's built-in
-// defaults, merged over/extended by cfg.Servers — a configured command for a
-// language merges into the existing row, preserving its built-in Profile;
-// a configured language absent from the built-ins is added with the zero
-// ServerProfile. Configuration alone never gates which servers run against
-// a workspace; see Detect.
+// NewRegistry builds the Language Server Registry from the Language-to-LSP
+// Table (Languages): for each language it runs ProbeBinaries and stores the
+// candidate binary found on PATH, falling back to the first (preferred)
+// candidate when none resolves — reproducing Forge's original defaults on a
+// machine with no Language Server installed. The result is merged
+// over/extended by cfg.Servers — a configured command for a language merges
+// into the existing row, preserving its resolved Profile; a configured
+// language absent from Languages is added with the zero ServerProfile.
+// Configuration alone never gates which servers run against a workspace;
+// see Detect.
 func NewRegistry(cfg config.LSPConfig) Registry {
-	registry := make(Registry, len(builtinServers)+len(cfg.Servers))
-	maps.Copy(registry, builtinServers)
+	registry := make(Registry, len(Languages)+len(cfg.Servers))
+	for _, spec := range Languages {
+		if spec.RegistryID == "" || len(spec.Binaries) == 0 {
+			continue
+		}
+		candidate := spec.Binaries[0]
+		if found, ok := ProbeBinaries(spec); ok {
+			candidate = found
+		}
+		registry[spec.RegistryID] = ServerSpec{
+			Command: candidateCommand(candidate),
+			Profile: candidate.Profile,
+		}
+	}
 	for language, server := range cfg.Servers {
 		key := strings.ToLower(language)
 		spec := registry[key]
@@ -70,6 +58,15 @@ func NewRegistry(cfg config.LSPConfig) Registry {
 		registry[key] = spec
 	}
 	return registry
+}
+
+// candidateCommand returns the argv that launches c: its explicit Command,
+// or a single bare argument of its Name when Command is unset.
+func candidateCommand(c BinaryCandidate) []string {
+	if len(c.Command) > 0 {
+		return c.Command
+	}
+	return []string{c.Name}
 }
 
 // builtinExtensions is the file-extension -> language table the

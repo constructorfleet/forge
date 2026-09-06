@@ -41,8 +41,8 @@ func TestProbeBinaries_SelectsPylspWhenPyrightAbsent(t *testing.T) {
 	if !ok {
 		t.Fatal("ProbeBinaries ok = false, want true (pylsp is on PATH)")
 	}
-	if found != "pylsp" {
-		t.Errorf("ProbeBinaries found = %q, want %q", found, "pylsp")
+	if found.Name != "pylsp" {
+		t.Errorf("ProbeBinaries found.Name = %q, want %q", found.Name, "pylsp")
 	}
 }
 
@@ -54,8 +54,8 @@ func TestProbeBinaries_PrefersFirstCandidateWhenBothPresent(t *testing.T) {
 	if !ok {
 		t.Fatal("ProbeBinaries ok = false, want true")
 	}
-	if found != "pyright" {
-		t.Errorf("ProbeBinaries found = %q, want %q (first candidate wins)", found, "pyright")
+	if found.Name != "pyright" {
+		t.Errorf("ProbeBinaries found.Name = %q, want %q (first candidate wins)", found.Name, "pyright")
 	}
 }
 
@@ -67,7 +67,7 @@ func TestProbeBinaries_NoneFoundWhenAllCandidatesAbsent(t *testing.T) {
 	if ok {
 		t.Errorf("ProbeBinaries ok = true, want false (neither candidate on PATH)")
 	}
-	if found != "" {
-		t.Errorf("ProbeBinaries found = %q, want empty", found)
+	if found.Name != "" {
+		t.Errorf("ProbeBinaries found.Name = %q, want empty", found.Name)
 	}
 }

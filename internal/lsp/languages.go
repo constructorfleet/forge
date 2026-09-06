@@ -1,20 +1,33 @@
 package lsp
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Teagan42/forge/internal/semantic/lspdriver"
+)
 
 // BinaryCandidate is one Language Server binary Forge may run for a
-// language, in the order Forge tries it, with the static install hint to
-// show when the binary is not on PATH.
+// language, in the order Forge tries it: the binary name ProbeBinaries
+// checks against PATH, the static install hint to show when it is absent,
+// the argv that launches it, and the ServerProfile its quirks require.
 type BinaryCandidate struct {
 	Name        string
 	InstallHint string
+	// Command is the argv NewRegistry stores for this candidate when
+	// ProbeBinaries selects it. An empty Command defaults to a single
+	// argument: Name with no flags.
+	Command []string
+	// Profile is the ServerProfile (see lspdriver.ServerProfile) this
+	// candidate's Language Server needs. The zero value fits a server with
+	// no known hover or symbol quirk.
+	Profile lspdriver.ServerProfile
 }
 
 // LanguageSpec is one row of the Language-to-LSP Table: a language, the
-// manifest filenames and fallback file extensions that detect it (see
-// Scan), the ordered candidate Language Server binaries Forge tries for
-// it, and the RegistryID that names it in the Language Server Registry
-// (Registry, Detect).
+// RegistryID that names it in the Language Server Registry (Registry,
+// NewRegistry, Detect), the manifest filenames and fallback file
+// extensions that detect it (see Scan), and the ordered candidate
+// Language Server binaries Forge tries for it.
 type LanguageSpec struct {
 	Language           string
 	RegistryID         string
@@ -24,24 +37,17 @@ type LanguageSpec struct {
 }
 
 // Languages is the static, ordered Language-to-LSP Table: the sole source
-// of truth for which languages Forge supports, the ordered candidate
-// binaries it tries for each one, each binary's install hint, and the
-// RegistryID that names the language in the Language Server Registry
-// (Registry, Detect). No configuration file, environment variable, or
-// flag overrides this order or pins a binary.
+// of truth for which languages Forge supports, the RegistryID each one
+// shares with lsp.Registry, the ordered candidate binaries it tries for
+// each one, and each binary's launch command, ServerProfile, and static
+// install hint. No configuration file, environment variable, or flag
+// overrides this order or pins a binary.
 //
-// Wiring a real caller — Scan's manifest/extension inputs, or
-// initdiscovery's hand-rolled language table — to read from Languages
-// instead of a second hand-written table is deferred to a follow-up
-// ticket.
-//
-// detect.go's Registry (seeded from builtinServers) governs which
-// Language Server actually starts for a detected language, keyed by
-// RegistryID rather than this table's display names, and it can name
-// different commands (for example pyright-langserver --stdio for Python,
-// versus this table's bare pyright). Registry serves only Go,
-// TypeScript/JavaScript, Python, and Rust today; a RegistryID with no
-// matching Registry entry simply has no server yet (see LanguageID).
+// NewRegistry builds lsp.Registry from this table: for each language it
+// runs ProbeBinaries and stores the first candidate ProbeBinaries finds on
+// PATH, falling back to the first candidate when none resolves. This is
+// the single source of truth for both PATH-availability reporting (see
+// ProbeBinaries) and the command Detect actually launches.
 var Languages = []LanguageSpec{
 	{
 		Language:           "Go",
@@ -49,7 +55,11 @@ var Languages = []LanguageSpec{
 		ManifestFilenames:  []string{"go.mod"},
 		FallbackExtensions: []string{".go"},
 		Binaries: []BinaryCandidate{
-			{Name: "gopls", InstallHint: "go install golang.org/x/tools/gopls@latest"},
+			{
+				Name:        "gopls",
+				InstallHint: "go install golang.org/x/tools/gopls@latest",
+				Profile:     lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+			},
 		},
 	},
 	{
@@ -58,7 +68,12 @@ var Languages = []LanguageSpec{
 		ManifestFilenames:  []string{"package.json"},
 		FallbackExtensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"},
 		Binaries: []BinaryCandidate{
-			{Name: "typescript-language-server", InstallHint: "npm install -g typescript-language-server typescript"},
+			{
+				Name:        "typescript-language-server",
+				InstallHint: "npm install -g typescript-language-server typescript",
+				Command:     []string{"typescript-language-server", "--stdio"},
+				Profile:     lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleFirstFence},
+			},
 		},
 	},
 	{
@@ -67,7 +82,15 @@ var Languages = []LanguageSpec{
 		ManifestFilenames:  []string{"pyproject.toml", "requirements.txt", "setup.py"},
 		FallbackExtensions: []string{".py"},
 		Binaries: []BinaryCandidate{
-			{Name: "pyright", InstallHint: "npm install -g pyright"},
+			{
+				Name:        "pyright",
+				InstallHint: "npm install -g pyright",
+				Command:     []string{"pyright-langserver", "--stdio"},
+				Profile: lspdriver.ServerProfile{
+					HoverStyle:         lspdriver.HoverStylePyrightAnnotated,
+					DropSymbolChildren: true,
+				},
+			},
 			{Name: "pylsp", InstallHint: "pip install python-lsp-server"},
 		},
 	},
@@ -77,7 +100,11 @@ var Languages = []LanguageSpec{
 		ManifestFilenames:  []string{"Cargo.toml"},
 		FallbackExtensions: []string{".rs"},
 		Binaries: []BinaryCandidate{
-			{Name: "rust-analyzer", InstallHint: "rustup component add rust-analyzer"},
+			{
+				Name:        "rust-analyzer",
+				InstallHint: "rustup component add rust-analyzer",
+				Profile:     lspdriver.ServerProfile{HoverStyle: lspdriver.HoverStyleRustTwoFence},
+			},
 		},
 	},
 	{
