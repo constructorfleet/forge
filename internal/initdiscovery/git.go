@@ -2,6 +2,7 @@ package initdiscovery
 
 import (
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 
@@ -61,26 +62,102 @@ func lastPathElem(s string) string {
 	return parts[len(parts)-1]
 }
 
-// detectTracker resolves the issue tracker from the "origin" remote URL.
-// forge currently only supports github, so this only ever confirms github
-// (leaving cfg.Tracker.Type at its config.Default() value of "github") or
-// flags that the remote could not be confirmed as github.
+// detectTracker resolves the issue tracker from the "origin" remote URL and
+// composes it onto cfg. It recognizes github and gitlab hosts. A github
+// remote keeps cfg at its config.Default() github composition. A gitlab
+// remote (gitlab.com, or a host whose name contains "gitlab") switches the
+// whole capability composition to gitlab and fills the project path -- and,
+// for a self-managed instance, the base URL -- from the remote. An
+// unrecognized host leaves the github default in place and returns a Note,
+// because forge cannot confirm the tracker from an unknown host name.
 func detectTracker(dir string, cfg *config.Config) *Note {
-	url, err := runGit(dir, "remote", "get-url", "origin")
-	if err != nil || url == "" {
+	remote, err := runGit(dir, "remote", "get-url", "origin")
+	if err != nil || remote == "" {
 		return &Note{
 			Field:   "tracker.type",
 			Message: "no git remote \"origin\" found; defaulting to github, verify manually",
 		}
 	}
 
-	if strings.Contains(url, "github.com") {
-		cfg.Tracker.Type = "github"
-		return nil
+	host, path, ok := parseRemoteHostPath(remote)
+	if !ok {
+		return &Note{
+			Field:   "tracker.type",
+			Message: fmt.Sprintf("could not parse git remote \"origin\" (%s); defaulting to github, verify manually", remote),
+		}
 	}
 
-	return &Note{
-		Field:   "tracker.type",
-		Message: fmt.Sprintf("git remote \"origin\" (%s) does not look like github.com; forge currently only supports github, verify manually", url),
+	switch {
+	case strings.Contains(host, "github"):
+		cfg.Tracker.Type = "github"
+		return nil
+	case host == "gitlab.com" || strings.Contains(host, "gitlab"):
+		applyGitLabComposition(cfg, host, path)
+		// The project path is inferred from the remote, so the human must
+		// confirm it. A self-managed GitLab instance can use any host name,
+		// so forge cannot detect gitlab there (see config.GitLabConfig);
+		// only a recognizable "gitlab" host reaches this branch.
+		return &Note{
+			Field:   "tracker.gitlab.project",
+			Message: fmt.Sprintf("inferred %q from git remote \"origin\" (%s); verify the path with namespace is correct", path, remote),
+		}
+	default:
+		return &Note{
+			Field:   "tracker.type",
+			Message: fmt.Sprintf("git remote \"origin\" (%s) is not a recognized github or gitlab host; defaulting to github, verify manually", remote),
+		}
 	}
+}
+
+// applyGitLabComposition switches every capability on cfg to gitlab and sets
+// the project the tracker reads and writes. It sets the base URL only for a
+// self-managed instance (a host other than gitlab.com); gitlab.com needs no
+// base URL (see config.GitLabConfig.BaseURL).
+func applyGitLabComposition(cfg *config.Config, host, path string) {
+	cfg.Provider = "gitlab"
+	cfg.Tracker.Type = "gitlab"
+	cfg.Tracker.Provider = "gitlab"
+	cfg.SCM.Type = "gitlab"
+	cfg.CI.Type = "gitlab"
+	cfg.Tracker.GitLab.Project = path
+	if host != "gitlab.com" {
+		cfg.Tracker.GitLab.BaseURL = "https://" + host
+	}
+}
+
+// parseRemoteHostPath splits a git remote URL into its host and its
+// project path (the "group/project" part, without a ".git" suffix or
+// surrounding slashes). It handles both the scp-like SSH syntax
+// ("git@host:group/project.git") and a scheme URL
+// ("https://host/group/project.git", "ssh://git@host/group/project.git").
+// It returns ok=false when either the host or the path is empty.
+func parseRemoteHostPath(remote string) (host, path string, ok bool) {
+	s := strings.TrimSpace(remote)
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", "", false
+		}
+		host = u.Hostname()
+		path = u.Path
+	} else {
+		// scp-like syntax: [user@]host:path, with no scheme and no "/"
+		// before the first ":".
+		if at := strings.LastIndex(s, "@"); at >= 0 {
+			s = s[at+1:]
+		}
+		colon := strings.Index(s, ":")
+		if colon < 0 {
+			return "", "", false
+		}
+		host = s[:colon]
+		path = s[colon+1:]
+	}
+
+	host = strings.ToLower(strings.TrimSpace(host))
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	if host == "" || path == "" {
+		return "", "", false
+	}
+	return host, path, true
 }
