@@ -1,6 +1,10 @@
 package lsp
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Teagan42/forge/internal/config"
+)
 
 // TestLanguages_ExactSet checks that the table names exactly the seven
 // launch languages, with no other language present.
@@ -59,6 +63,54 @@ func TestLanguages_InstallHintsNonEmpty(t *testing.T) {
 				t.Errorf("%s: binary %q has an empty install hint", spec.Language, binary.Name)
 			}
 		}
+	}
+}
+
+// TestLanguages_RegistryIDMatchesRegistry checks that each LanguageSpec's
+// RegistryID names the exact key the live Registry uses for a language the
+// registry already serves, so a caller of Detect never needs its own
+// display-name-to-key bridge. It reads the real Registry (via NewRegistry,
+// seeded from builtinServers) rather than a hand-written expectation table,
+// so a rename of a registry key (for example "javascript" to "js") fails
+// this test instead of passing silently.
+func TestLanguages_RegistryIDMatchesRegistry(t *testing.T) {
+	registry := NewRegistry(config.LSPConfig{})
+
+	// registryServedLanguages names the languages Registry serves today
+	// (see builtinServers). A language absent from this set must have no
+	// matching Registry entry; a language present in it must have one.
+	registryServedLanguages := map[string]bool{
+		"Go":                    true,
+		"TypeScript/JavaScript": true,
+		"Python":                true,
+		"Rust":                  true,
+	}
+
+	for _, spec := range Languages {
+		_, servedByRegistry := registry[spec.RegistryID]
+		switch {
+		case registryServedLanguages[spec.Language] && !servedByRegistry:
+			t.Errorf("%s: RegistryID %q has no matching entry in the live Registry", spec.Language, spec.RegistryID)
+		case !registryServedLanguages[spec.Language] && servedByRegistry:
+			t.Errorf("%s: RegistryID %q unexpectedly matches a live Registry entry; update registryServedLanguages", spec.Language, spec.RegistryID)
+		}
+	}
+}
+
+// TestLanguageID_ReturnsRegistryIDForKnownDisplayName checks that LanguageID
+// resolves a Language-to-LSP Table display name to its RegistryID.
+func TestLanguageID_ReturnsRegistryIDForKnownDisplayName(t *testing.T) {
+	if got := LanguageID("TypeScript/JavaScript"); got != "javascript" {
+		t.Errorf("LanguageID(%q) = %q, want %q", "TypeScript/JavaScript", got, "javascript")
+	}
+}
+
+// TestLanguageID_FallsBackToLowercaseForUnknownDisplayName checks that
+// LanguageID falls back to a plain lowercase of a name absent from the
+// Language-to-LSP Table, since no registry entry can match it either way.
+func TestLanguageID_FallsBackToLowercaseForUnknownDisplayName(t *testing.T) {
+	if got := LanguageID("COBOL"); got != "cobol" {
+		t.Errorf("LanguageID(%q) = %q, want %q", "COBOL", got, "cobol")
 	}
 }
 
