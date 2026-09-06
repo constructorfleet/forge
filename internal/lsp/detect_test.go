@@ -244,6 +244,23 @@ func TestDetect_GoRepoYieldsGopls(t *testing.T) {
 	}
 }
 
+// TestDetect_ReconcilesMultiWordDisplayNameWithRegistryID checks that
+// Detect resolves a Language-to-LSP Table display name with punctuation
+// (for example "C/C++") to its RegistryID before the Registry lookup,
+// instead of a plain lowercase of the display name. A plain lowercase of
+// "C/C++" is "c/c++", which never matches the Registry's "cpp" key.
+func TestDetect_ReconcilesMultiWordDisplayNameWithRegistryID(t *testing.T) {
+	withFakePATH(t)
+	registry := lsp.NewRegistry(config.LSPConfig{})
+
+	got := lsp.Detect([]string{"C/C++"}, registry)
+
+	want := []lsp.DetectedServer{{Language: "cpp", Command: []string{"clangd"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Detect() = %+v, want %+v", got, want)
+	}
+}
+
 func TestDetect_UnregisteredLanguageYieldsNone(t *testing.T) {
 	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
@@ -259,7 +276,7 @@ func TestDetect_SevenLanguagesYieldSevenServers(t *testing.T) {
 	withFakePATH(t)
 	registry := lsp.NewRegistry(config.LSPConfig{})
 
-	got := lsp.Detect([]string{"Go", "Python", "Rust", "JavaScript", "Cpp", "Java", "Ruby"}, registry)
+	got := lsp.Detect([]string{"Go", "Python", "Rust", "JavaScript", "C/C++", "Java", "Ruby"}, registry)
 
 	want := []lsp.DetectedServer{
 		{

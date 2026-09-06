@@ -120,19 +120,23 @@ type DetectedServer struct {
 }
 
 // Detect maps languages (as reported by agent.RepositoryContext.Languages)
-// through registry to produce the workspace's Detected Servers. Detection
-// gates which servers may run: a registry entry for a language absent from
-// languages is never returned, so configuring a server cannot force-start it
-// for an undetected language.
+// through registry to produce the workspace's Detected Servers. Each
+// language resolves to a Registry key through LanguageID, not a plain
+// lowercase, so a multi-word Language-to-LSP Table display name (for
+// example "C/C++") reconciles with its Registry key ("cpp") instead of
+// silently missing it. Detection gates which servers may run: a registry
+// entry for a language absent from languages is never returned, so
+// configuring a server cannot force-start it for an undetected language.
 func Detect(languages []string, registry Registry) []DetectedServer {
 	var detected []DetectedServer
 	for _, language := range languages {
-		spec, ok := registry[strings.ToLower(language)]
+		id := LanguageID(language)
+		spec, ok := registry[id]
 		if !ok {
 			continue
 		}
 		detected = append(detected, DetectedServer{
-			Language: strings.ToLower(language),
+			Language: id,
 			Command:  spec.Command,
 			Profile:  spec.Profile,
 		})
