@@ -157,7 +157,7 @@ func parseIssueID(id string) (int, error) {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(id), "#")
 	n, err := strconv.Atoi(trimmed)
 	if err != nil {
-		return 0, fmt.Errorf("gitlab: invalid issue id %q: %w", id, err)
+		return 0, fmt.Errorf("gitlab: invalid issue id %q: %w: %w", id, tracker.ErrInvalidIssueID, err)
 	}
 	return n, nil
 }

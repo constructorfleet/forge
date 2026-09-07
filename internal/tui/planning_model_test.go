@@ -2,6 +2,8 @@ package tui_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,9 @@ import (
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tui"
 )
+
+// errPlanningTest is a scripted terminal planning failure for the banner tests.
+var errPlanningTest = errors.New("boom")
 
 // fakePlanningApprover is a scripted tui.PlanningApprover double.
 type fakePlanningApprover struct {
@@ -98,6 +103,45 @@ func TestPlanningModelPollTickFetchesAndRenders(t *testing.T) {
 	}
 }
 
+// TestPlanningModelFailureBannerHoldsAcrossPolls proves a PlanningFailedMsg
+// paints the failure banner, keeps the model open (no quit command), and the
+// banner survives a later poll instead of being cleared by a fresh view-model.
+func TestPlanningModelFailureBannerHoldsAcrossPolls(t *testing.T) {
+	m, _ := planningFixture(t, domain.PlanningStatusActive)
+	planningNextPollTick(t, m)
+
+	_, cmd := m.Update(tui.PlanningFailedMsg{Err: errPlanningTest})
+	if cmd != nil {
+		t.Fatalf("PlanningFailedMsg must not quit or command, got a command")
+	}
+	out := m.View().Content
+	if !strings.Contains(out, "planning failed: boom") {
+		t.Fatalf("expected the failure banner, got %q", out)
+	}
+	if !strings.Contains(out, "press q to quit") {
+		t.Fatalf("expected the quit hint, got %q", out)
+	}
+
+	// A later poll must not wipe the banner.
+	planningNextPollTick(t, m)
+	if !strings.Contains(m.View().Content, "planning failed: boom") {
+		t.Fatalf("failure banner must survive a poll, got %q", m.View().Content)
+	}
+}
+
+// TestPlanningModelFailureBannerStillQuitsOnQ proves the failure banner leaves
+// the quit key working, so the operator can dismiss the held-open screen.
+func TestPlanningModelFailureBannerStillQuitsOnQ(t *testing.T) {
+	m, _ := planningFixture(t, domain.PlanningStatusActive)
+	planningNextPollTick(t, m)
+	m.Update(tui.PlanningFailedMsg{Err: errPlanningTest})
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "q", Code: 'q'}))
+	if cmd == nil {
+		t.Fatalf("q must quit the held-open failure screen, got no command")
+	}
+}
+
 // TestPlanningModelViewRunsInAltScreen proves the planning view claims the
 // terminal's alternate screen buffer, so a frame taller than the last never
 // scrolls earlier frames above the visible window.
@@ -172,6 +216,71 @@ func (f *fakePlanningAnswerer) AddComment(_ context.Context, issueID, body strin
 		return tracker.Comment{}, f.err
 	}
 	return tracker.Comment{Author: "forge-bot", Body: body, CreatedAt: time.Now()}, nil
+}
+
+// fakePlanningRecorder is a scripted tui.PlanningAnswerRecorder double.
+type fakePlanningRecorder struct {
+	calls []string
+	err   error
+}
+
+func (f *fakePlanningRecorder) RecordDecisionAnswer(_ context.Context, executionID, decisionID, answer string) error {
+	f.calls = append(f.calls, executionID+"/"+decisionID+": "+answer)
+	return f.err
+}
+
+// TestPlanningModelAnswerKeyRecordsLocallyForLocalFeature proves the answer
+// key falls back to the local answer channel when the tracker reports the
+// Feature id is not a tracker issue (a local Feature slug).
+func TestPlanningModelAnswerKeyRecordsLocallyForLocalFeature(t *testing.T) {
+	m, store := planningFixture(t, domain.PlanningStatusNeedsHuman)
+	store.checkpoints = map[string][]storage.DecisionCheckpoint{
+		"planexec-1": {
+			{ExecutionID: "planexec-1", DecisionID: "decide-1", Question: "Which store engine?"},
+		},
+	}
+	planningNextPollTick(t, m)
+
+	m.OpenAnswer = func(_, _ string) tea.Cmd {
+		return func() tea.Msg { return tui.AnswerClosedMsg{Text: "SQLite."} }
+	}
+	// The tracker rejects the local slug; the model must fall back locally.
+	m.Answerer = &fakePlanningAnswerer{err: fmt.Errorf("gitea: invalid issue id: %w", tracker.ErrInvalidIssueID)}
+	recorder := &fakePlanningRecorder{}
+	m.AnswerRecorder = recorder
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	planningRunImmediateCmd(t, m, cmd)
+
+	if len(recorder.calls) != 1 || recorder.calls[0] != "planexec-1/decide-1: SQLite." {
+		t.Fatalf("RecordDecisionAnswer calls = %v, want one local record for planexec-1/decide-1", recorder.calls)
+	}
+}
+
+// TestPlanningModelAnswerKeyRecordsLocallyWithNoTracker proves the answer key
+// records locally when no tracker answer channel is wired at all.
+func TestPlanningModelAnswerKeyRecordsLocallyWithNoTracker(t *testing.T) {
+	m, store := planningFixture(t, domain.PlanningStatusNeedsHuman)
+	store.checkpoints = map[string][]storage.DecisionCheckpoint{
+		"planexec-1": {
+			{ExecutionID: "planexec-1", DecisionID: "decide-1", Question: "Which store engine?"},
+		},
+	}
+	planningNextPollTick(t, m)
+
+	m.OpenAnswer = func(_, _ string) tea.Cmd {
+		return func() tea.Msg { return tui.AnswerClosedMsg{Text: "Postgres."} }
+	}
+	m.Answerer = nil
+	recorder := &fakePlanningRecorder{}
+	m.AnswerRecorder = recorder
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	planningRunImmediateCmd(t, m, cmd)
+
+	if len(recorder.calls) != 1 || recorder.calls[0] != "planexec-1/decide-1: Postgres." {
+		t.Fatalf("RecordDecisionAnswer calls = %v, want one local record", recorder.calls)
+	}
 }
 
 // TestPlanningModelAnswerKeyDefersToEditorAndPostsToFeature proves the

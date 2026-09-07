@@ -14,6 +14,7 @@ import (
 	"github.com/Teagan42/forge/internal/repolock"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/tui"
 )
 
 // planGateWait is how long the driver waits between checks while a human gate
@@ -51,11 +52,15 @@ type planTUIRequest struct {
 // decision answer to the tracker); the driver observes the change and re-runs
 // runPlanPipeline, which resumes purely from the persisted state.
 func runPlanTUI(ctx context.Context, req planTUIRequest) int {
-	// Preflight before the TUI takes the screen: a tracker-auth or wiring
-	// failure must print a plain error, not corrupt the alternate screen.
+	// Preflight before the TUI takes the screen. A tracker-auth failure is a
+	// warning, not a stop: planning is local-first (the Feature is a local
+	// artifact until `forge materialize` creates tracker issues from the
+	// ticket plan), so a needs-human pause records the answer locally and
+	// needs no tracker. Only a Feature that is itself a tracker issue uses the
+	// tracker, and every such call degrades on its own. Warning here, not
+	// aborting, lets a tracker-less plan run.
 	if err := verifyTrackerAuth(ctx, req.Config, req.RepoRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "forge plan: %v\n", err)
-		return 1
+		fmt.Fprintf(os.Stderr, "forge plan: tracker unavailable, continuing with local planning: %v\n", err)
 	}
 	trk, err := buildTracker(req.Config, req.RepoRoot)
 	if err != nil {
@@ -66,6 +71,7 @@ func runPlanTUI(ctx context.Context, req planTUIRequest) int {
 	locks := repolock.New(req.RepoRoot)
 
 	model := buildPlanningModelForFeature(req.Store, req.FeatureID, answerer, req.RepoRoot)
+	defer model.Close()
 
 	// tuiCtx stops the TUI; driverCtx stops the pipeline. They cancel each
 	// other so a human quitting the TUI ends the run, and the run ending
@@ -75,14 +81,34 @@ func runPlanTUI(ctx context.Context, req planTUIRequest) int {
 	driverCtx, cancelDriver := context.WithCancel(ctx)
 	defer cancelDriver()
 
+	prog := newPlanningProgram(tuiCtx, model)
 	tuiDone := make(chan error, 1)
 	go func() {
-		modelErr := runPlanningModel(tuiCtx, model)
+		modelErr := runPlanningProgram(prog)
 		cancelDriver() // a human quit (q/Ctrl+C) stops the driver too
 		tuiDone <- modelErr
 	}()
 
 	stop, driveErr := drivePlanPipeline(driverCtx, req, trk, locks)
+
+	// A terminal failure holds the TUI open instead of tearing it down: the
+	// driver marks the execution failed, sends the failure banner into the
+	// model, and waits for the operator to quit, so the error and the
+	// transcript stay on screen instead of vanishing with the alternate
+	// screen. A human quit (driverCtx cancelled) returns no error, so this
+	// path is a real pipeline failure only.
+	if driveErr != nil {
+		if finishErr := req.PlanRuntime.Finish(context.Background(), req.FeatureID, req.ExecutionID, domain.PlanningStatusFailed); finishErr != nil {
+			fmt.Fprintf(os.Stderr, "forge plan: mark planning execution failed: %v\n", finishErr)
+		}
+		prog.Send(tui.PlanningFailedMsg{Err: driveErr})
+		if modelErr := <-tuiDone; modelErr != nil {
+			fmt.Fprintf(os.Stderr, "forge plan: %v\n", modelErr)
+		}
+		// The TUI has released the screen; the real terminal message prints now.
+		fmt.Fprintf(os.Stderr, "forge plan: %v\n", driveErr)
+		return 1
+	}
 
 	cancelTUI()
 	if modelErr := <-tuiDone; modelErr != nil {
@@ -90,13 +116,6 @@ func runPlanTUI(ctx context.Context, req planTUIRequest) int {
 	}
 
 	// The TUI has released the screen; the real terminal messages print now.
-	if driveErr != nil {
-		if finishErr := req.PlanRuntime.Finish(context.Background(), req.FeatureID, req.ExecutionID, domain.PlanningStatusFailed); finishErr != nil {
-			fmt.Fprintf(os.Stderr, "forge plan: mark planning execution failed: %v\n", finishErr)
-		}
-		fmt.Fprintf(os.Stderr, "forge plan: %v\n", driveErr)
-		return 1
-	}
 	printPlanTUIOutcome(os.Stdout, req, stop)
 	return stop.Code
 }

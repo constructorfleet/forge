@@ -2,6 +2,7 @@ package wayfinding_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -229,6 +230,88 @@ func TestResumeDecision_NoCheckpoint_ReturnsError(t *testing.T) {
 	_, err := wayfinding.ResumeDecision(ctx, store, trackerDouble, "plan-exec-1", "001-vendor", time.Now)
 	if err == nil {
 		t.Fatal("ResumeDecision: want error for decision with no checkpoint, got nil")
+	}
+}
+
+// invalidIDResumeTracker reports the Feature id is not a tracker issue,
+// simulating a local Feature slug given to a numeric-issue provider.
+type invalidIDResumeTracker struct{}
+
+func (invalidIDResumeTracker) GetComments(_ context.Context, id string) ([]tracker.Comment, error) {
+	return nil, fmt.Errorf("gitea: invalid issue id %q: %w", id, tracker.ErrInvalidIssueID)
+}
+
+// TestResumeDecision_InvalidIssueID_StaysNeedsHumanNoError proves a
+// tracker-comment poll for a local Feature slug is a harmless no-op: the
+// invalid-id error does not crash the poll, and the execution stays
+// NEEDS_HUMAN until the local answer channel resumes it.
+func TestResumeDecision_InvalidIssueID_StaysNeedsHumanNoError(t *testing.T) {
+	store := openResumeTestStore(t)
+	seedResumeExecution(t, store, "plan-exec-1", "autoapply")
+	checkpointTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	seedDecisionCheckpoint(t, store, "plan-exec-1", "001-src", "Which source?", checkpointTime, "forge-bot")
+
+	ctx := context.Background()
+	result, err := wayfinding.ResumeDecision(ctx, store, invalidIDResumeTracker{}, "plan-exec-1", "001-src", time.Now)
+	if err != nil {
+		t.Fatalf("ResumeDecision must not fail on an invalid issue id: %v", err)
+	}
+	if result.Resumed {
+		t.Fatal("Resumed = true, want false for a local Feature with no tracker comments")
+	}
+	exec, err := store.LoadPlanningExecution(ctx, "plan-exec-1")
+	if err != nil {
+		t.Fatalf("LoadPlanningExecution: %v", err)
+	}
+	if exec.Status != domain.PlanningStatusNeedsHuman {
+		t.Errorf("Status = %q, want NEEDS_HUMAN", exec.Status)
+	}
+}
+
+// TestAnswerDecisionLocally_RecordsAnswerAndSetsActive proves the local answer
+// channel resumes a paused Decision without a tracker: it records the answer
+// as the resumed context and transitions the execution to ACTIVE.
+func TestAnswerDecisionLocally_RecordsAnswerAndSetsActive(t *testing.T) {
+	store := openResumeTestStore(t)
+	seedResumeExecution(t, store, "plan-exec-1", "autoapply")
+	checkpointTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	seedDecisionCheckpoint(t, store, "plan-exec-1", "001-src", "Which source?", checkpointTime, "forge-bot")
+
+	ctx := context.Background()
+	result, err := wayfinding.AnswerDecisionLocally(ctx, store, "plan-exec-1", "001-src", "Use the SQL warehouse", time.Now)
+	if err != nil {
+		t.Fatalf("AnswerDecisionLocally: %v", err)
+	}
+	if !result.Resumed {
+		t.Fatal("Resumed = false, want true")
+	}
+
+	exec, err := store.LoadPlanningExecution(ctx, "plan-exec-1")
+	if err != nil {
+		t.Fatalf("LoadPlanningExecution: %v", err)
+	}
+	if exec.Status != domain.PlanningStatusActive {
+		t.Errorf("Status = %q, want ACTIVE", exec.Status)
+	}
+
+	checkpoint, err := store.GetDecisionCheckpoint(ctx, "plan-exec-1", "001-src")
+	if err != nil {
+		t.Fatalf("GetDecisionCheckpoint: %v", err)
+	}
+	if checkpoint.ResumedAt == nil {
+		t.Error("checkpoint.ResumedAt is nil, want set")
+	}
+	if !strings.Contains(checkpoint.ResumedContext, "Use the SQL warehouse") {
+		t.Errorf("ResumedContext = %q, want it to carry the answer", checkpoint.ResumedContext)
+	}
+
+	// A second answer is a no-op once resumed, not a double-record.
+	again, err := wayfinding.AnswerDecisionLocally(ctx, store, "plan-exec-1", "001-src", "changed my mind", time.Now)
+	if err != nil {
+		t.Fatalf("AnswerDecisionLocally (second): %v", err)
+	}
+	if again.Resumed {
+		t.Error("second answer Resumed = true, want false (already resumed)")
 	}
 }
 

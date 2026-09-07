@@ -19,6 +19,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // PlanningApprover is the narrow seam the planning approve key calls into:
@@ -77,6 +78,15 @@ type planningRosterReadMsg struct {
 	err error
 }
 
+// PlanningFailedMsg tells the model the planning pipeline stopped with a
+// terminal error. The `forge plan` driver sends it instead of tearing the
+// TUI down, so the failure banner and the transcript stay on screen until
+// the operator quits. The model is still an observer: the driver has already
+// stopped, so this only paints the banner; q or Ctrl+C exits.
+type PlanningFailedMsg struct {
+	Err error
+}
+
 // PlanningModel is the Bubble Tea model driving the planning-phase view for
 // one Feature. Like LiveModel, it is an observer, never an owner: it has no
 // path to write engineering state directly, so quitting can never stop
@@ -116,9 +126,24 @@ type PlanningModel struct {
 	// Answerer issues AddComment against the Feature's own tracker issue,
 	// mirroring wayfinding.PauseHandler, which posts NEEDS_HUMAN comments to
 	// FeatureID rather than the Decision or Planning Execution id. Nil
-	// disables the control.
-	Answerer   Answerer
+	// disables the tracker answer channel; a local Feature falls back to
+	// AnswerRecorder.
+	Answerer Answerer
+
+	// AnswerRecorder records a Decision answer locally, with no tracker, for a
+	// Feature slug that has no backing tracker issue. startAnswer uses it when
+	// the Answerer is nil or reports the Feature id is not a tracker issue
+	// (tracker.ErrInvalidIssueID). Nil disables the local answer channel.
+	AnswerRecorder PlanningAnswerRecorder
+
 	answerFlow actionFlow
+}
+
+// PlanningAnswerRecorder records a human answer to a paused Decision without a
+// tracker (wayfinding.AnswerDecisionLocally). It is the local answer channel
+// for a Feature slug that has no backing tracker issue.
+type PlanningAnswerRecorder interface {
+	RecordDecisionAnswer(ctx context.Context, executionID, decisionID, answer string) error
 }
 
 // NewPlanningModel builds a planning model over r for featureID, polling
@@ -212,6 +237,8 @@ func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyAnswerResult(msg)
 	case approveResultMsg:
 		m.applyApproveResult(msg)
+	case PlanningFailedMsg:
+		m.applyFailure(msg)
 	case tea.InterruptMsg:
 		m.removeArtifacts()
 		return m, tea.Quit
@@ -245,6 +272,10 @@ func (m *PlanningModel) applyRoster(msg planningRosterReadMsg) {
 	vm.Transcript, vm.Focus = m.vm.Transcript, m.vm.Focus
 	vm.ActionNotice = m.vm.ActionNotice
 	vm.TranscriptNotice = m.vm.TranscriptNotice
+	// A terminal failure banner is set once by the driver and outlives every
+	// later poll, so carry it forward; a fresh view-model's zero value must
+	// not clear it.
+	vm.Failure = m.vm.Failure
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
 	vm.Style = m.vm.Style
@@ -332,6 +363,17 @@ func (m *PlanningModel) startApprove() tea.Cmd {
 	}
 }
 
+// applyFailure paints the terminal planning-failure banner. It sets the
+// banner text only; the model keeps polling and rendering the transcript, so
+// the operator reads the error and the run history until they quit.
+func (m *PlanningModel) applyFailure(msg PlanningFailedMsg) {
+	if msg.Err == nil {
+		return
+	}
+	m.lastErr = msg.Err
+	m.vm.Failure = fmt.Sprintf("planning failed: %s\npress q to quit", msg.Err.Error())
+}
+
 // applyApproveResult commits a finished approve call, mirroring
 // LiveModel.applyApproveResult.
 func (m *PlanningModel) applyApproveResult(msg approveResultMsg) {
@@ -376,27 +418,53 @@ func (m *PlanningModel) openAnswer(dir, artifact string) tea.Cmd {
 	return open(dir, artifact)
 }
 
-// startAnswer returns the command that runs AddComment off the update
-// goroutine, posting the answer to the Feature's own tracker issue.
+// startAnswer returns the command that records the answer off the update
+// goroutine. It posts the answer to the Feature's own tracker issue when the
+// Feature is tracker-backed. When the Feature id is not a tracker issue (a
+// local Feature slug, reported by tracker.ErrInvalidIssueID), or no tracker
+// answer channel is wired, it records the answer through the local channel
+// (AnswerRecorder) instead, so a local Feature can be answered too.
 func (m *PlanningModel) startAnswer(answer string) tea.Cmd {
-	if m.Answerer == nil {
+	if m.Answerer == nil && m.AnswerRecorder == nil {
 		m.answerFlow.close()
 		m.vm.ActionNotice = "answer is not available"
 		return nil
 	}
 	featureID := m.answerFlow.issueID
-	m.vm.ActionNotice = fmt.Sprintf("posting answer for %s…", featureID)
-	answerer, ctx := m.Answerer, m.ctx
+	m.vm.ActionNotice = fmt.Sprintf("recording answer for %s…", featureID)
+	answerer, recorder := m.Answerer, m.AnswerRecorder
+	executionID, store, ctx := m.vm.latestExecutionID, m.Roster.Store, m.ctx
 	return func() tea.Msg {
-		_, err := answerer.AddComment(ctx, featureID, answer)
-		return answerResultMsg{issueID: featureID, err: err}
+		// A tracker-backed Feature answers through the tracker, so an
+		// out-of-band `forge resume` sees the same comment.
+		if answerer != nil {
+			_, err := answerer.AddComment(ctx, featureID, answer)
+			if err == nil {
+				return answerResultMsg{issueID: featureID, err: nil}
+			}
+			if !errors.Is(err, tracker.ErrInvalidIssueID) {
+				return answerResultMsg{issueID: featureID, err: err}
+			}
+			// Fall through: the Feature id is not a tracker issue.
+		}
+		if recorder == nil {
+			return answerResultMsg{issueID: featureID, err: errors.New("local answer is not available")}
+		}
+		checkpoint, err := pendingDecisionCheckpoint(ctx, store, executionID)
+		if err != nil {
+			return answerResultMsg{issueID: featureID, err: err}
+		}
+		if err := recorder.RecordDecisionAnswer(ctx, executionID, checkpoint.DecisionID, answer); err != nil {
+			return answerResultMsg{issueID: featureID, err: err}
+		}
+		return answerResultMsg{issueID: featureID, err: nil}
 	}
 }
 
 // applyAnswerResult commits a finished answer post, mirroring
 // LiveModel.applyAnswerResult.
 func (m *PlanningModel) applyAnswerResult(msg answerResultMsg) {
-	m.answerFlow.applyResult(&m.vm.ActionNotice, msg.issueID, msg.err, "answer", "answer posted for %s")
+	m.answerFlow.applyResult(&m.vm.ActionNotice, msg.issueID, msg.err, "answer", "answer recorded for %s")
 }
 
 // artifactDir returns this session's $EDITOR artifact directory, creating it

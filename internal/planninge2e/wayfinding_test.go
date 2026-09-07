@@ -2,6 +2,8 @@ package planninge2e_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +17,22 @@ import (
 	"github.com/Teagan42/forge/internal/planningsurvey"
 	"github.com/Teagan42/forge/internal/specengine"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/wayfinding"
 )
+
+// localSlugTracker is a NeedsHumanTracker whose issue operations report the id
+// is not a tracker issue (tracker.ErrInvalidIssueID), simulating a local
+// Feature slug given to a numeric-issue provider.
+type localSlugTracker struct{}
+
+func (localSlugTracker) AddLabel(_ context.Context, id string, _ string) error {
+	return fmt.Errorf("gitea: invalid issue id %q: %w", id, tracker.ErrInvalidIssueID)
+}
+
+func (localSlugTracker) AddComment(_ context.Context, id string, _ string) (tracker.Comment, error) {
+	return tracker.Comment{}, fmt.Errorf("gitea: invalid issue id %q: %w", id, tracker.ErrInvalidIssueID)
+}
 
 const goalBody = "Ship a widget service with durable storage."
 
@@ -470,6 +486,156 @@ func TestScenario04_NeedsHumanAndManualResume(t *testing.T) {
 	} else if !isNotFound(err) {
 		t.Errorf("FeaturePlanningLease after Finish: %v", err)
 	}
+}
+
+// TestScenario04b_NeedsHumanLocalFeatureResumesWithoutTracker proves the
+// tracker-less needs-human loop end to end: a local Feature slug pauses off the
+// frontier with no tracker label or comment, the operator answers through the
+// local channel (AnswerDecisionLocally), and a second wayfinding pass -- fed the
+// recorded answer exactly as `forge plan` feeds it (gatherResumedAnswers) --
+// reopens and resolves the Decision. This is the "does it come back?" proof for
+// a Feature that has no tracker issue.
+func TestScenario04b_NeedsHumanLocalFeatureResumesWithoutTracker(t *testing.T) {
+	ctx := context.Background()
+	const featureID = "autoapply" // a local slug, not a tracker issue number
+
+	goal := newGoal(goalBody)
+	loader := newMemLoader(goal)
+	store := openStore(t)
+
+	runtime := planengine.New(store)
+	exec, err := runtime.Start(ctx, featureID, "base")
+	if err != nil {
+		t.Fatalf("planengine.Start: %v", err)
+	}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("decision-resolution", bareJSON(`{"needs_human":
+		{"question":"Which data source should the app read?",
+		 "context":"Only you can pick the source of record."}}`))
+	backend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+
+	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
+	open := &planning.Artifact{
+		Kind:        planning.KindDecision,
+		State:       "proposed",
+		DerivedFrom: []planning.DerivedFromEntry{{Kind: planning.KindGoal, ID: "goal", Revision: goal.Revision}},
+		Sections:    []planning.Section{{Heading: "Question", Body: "Which data source?"}},
+	}
+	open.Revision = planning.ComputeRevision(open)
+	decisions := map[string]*planning.Artifact{"001-application-data-source": open}
+
+	// A local slug: the tracker rejects the id, so the pause runs locally.
+	pause := &wayfinding.PauseHandler{
+		ExecutionID: exec.ID,
+		FeatureID:   featureID,
+		Store:       store,
+		Tracker:     localSlugTracker{},
+		Label:       "forge:needs-human",
+		PostComment: true,
+	}
+	if err := wayfinding.Loop(ctx, backend, repoCtx, goal, goalRef, decisions, loader.persist, pause.Handle); err != nil {
+		t.Fatalf("wayfinding.Loop (pause): %v", err)
+	}
+
+	paused := decisions["001-application-data-source"]
+	if paused.State != decisiongraph.StateNeedsHuman {
+		t.Fatalf("decision state = %q, want %q", paused.State, decisiongraph.StateNeedsHuman)
+	}
+	reloaded, err := store.LoadPlanningExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("LoadPlanningExecution: %v", err)
+	}
+	if reloaded.Status != domain.PlanningStatusNeedsHuman {
+		t.Fatalf("planning execution status = %q, want NEEDS_HUMAN", reloaded.Status)
+	}
+	checkpoint, err := store.GetDecisionCheckpoint(ctx, exec.ID, "001-application-data-source")
+	if err != nil {
+		t.Fatalf("GetDecisionCheckpoint: %v", err)
+	}
+	if checkpoint.LabelAdded || checkpoint.CommentPosted {
+		t.Errorf("checkpoint recorded a tracker label/comment for a local slug: %+v", checkpoint)
+	}
+
+	// The operator answers through the local channel -- no tracker.
+	answer := "Use the platform SQL warehouse."
+	res, err := wayfinding.AnswerDecisionLocally(ctx, store, exec.ID, "001-application-data-source", answer, time.Now)
+	if err != nil {
+		t.Fatalf("AnswerDecisionLocally: %v", err)
+	}
+	if !res.Resumed {
+		t.Fatal("AnswerDecisionLocally did not resume the execution")
+	}
+	after, err := store.LoadPlanningExecution(ctx, exec.ID)
+	if err != nil {
+		t.Fatalf("LoadPlanningExecution after answer: %v", err)
+	}
+	if after.Status != domain.PlanningStatusActive {
+		t.Fatalf("planning execution status = %q, want ACTIVE after local answer", after.Status)
+	}
+
+	// Resume exactly as `forge plan` does: gather the recorded answers, clear
+	// the paused State so the Decision returns to the frontier, and re-run the
+	// loop with the answer in hand.
+	answers := gatherLocalAnswers(t, ctx, store, exec.ID)
+	if answers["001-application-data-source"] != answer {
+		t.Fatalf("gathered answers = %v, want the local answer for the decision", answers)
+	}
+	if paused.State == decisiongraph.StateNeedsHuman {
+		paused.State = ""
+	}
+	if got := decisiongraph.Frontier(decisions); !equalStrings(got, []string{"001-application-data-source"}) {
+		t.Fatalf("frontier after reopening = %v, want [001-application-data-source]", got)
+	}
+
+	resumeBackend := planningagent.NewFakeBackend()
+	resumeBackend.ProgramResult("decision-resolution", bareJSON(`{"outcome":"platform SQL warehouse",
+		"rationale":"the human authorized it","consequences":"reads land on the warehouse",
+		"assumptions":"","new_unknowns":[]}`))
+	resumeBackend.ProgramResult("planning-readiness-review", bareJSON(`{"status":"READY_FOR_SPEC","decisions":[]}`))
+	if err := wayfinding.Loop(ctx, resumeBackend, repoCtx, goal, goalRef, decisions, loader.persist, pause.Handle,
+		wayfinding.WithHumanInputs(answers)); err != nil {
+		t.Fatalf("wayfinding.Loop (resume): %v", err)
+	}
+
+	final := decisions["001-application-data-source"]
+	if !planning.Ready(final) {
+		t.Fatalf("decision is still not Ready after local resume: state=%q", final.State)
+	}
+	if got := sectionBody(final, "Outcome"); got != "platform SQL warehouse" {
+		t.Errorf("resumed decision Outcome = %q, want the human's answer", got)
+	}
+}
+
+// gatherLocalAnswers reads each resumed Decision checkpoint's recorded answer,
+// mirroring cmd/forge's gatherResumedAnswers, so the test feeds the loop the
+// same input `forge plan` would.
+func gatherLocalAnswers(t *testing.T, ctx context.Context, store *storage.SQLiteStore, executionID string) map[string]string {
+	t.Helper()
+	checkpoints, err := store.GetDecisionCheckpointsByExecution(ctx, executionID)
+	if err != nil {
+		t.Fatalf("GetDecisionCheckpointsByExecution: %v", err)
+	}
+	answers := map[string]string{}
+	for _, cp := range checkpoints {
+		if cp.ResumedAt == nil || cp.ResumedContext == "" {
+			continue
+		}
+		var rc wayfinding.ResumedDecisionContext
+		if err := json.Unmarshal([]byte(cp.ResumedContext), &rc); err != nil {
+			t.Fatalf("unmarshal resumed context: %v", err)
+		}
+		var parts []string
+		for _, c := range rc.NewComments {
+			if b := strings.TrimSpace(c.Body); b != "" {
+				parts = append(parts, b)
+			}
+		}
+		if len(parts) > 0 {
+			answers[cp.DecisionID] = strings.Join(parts, "\n\n")
+		}
+	}
+	return answers
 }
 
 func isNotFound(err error) bool {
