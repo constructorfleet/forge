@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.51.1](https://github.com/constructorfleet/forge/compare/forge-v0.51.0...forge-v0.51.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **plan:** local-first needs-human flow for tracker-less Features ([#727](https://github.com/constructorfleet/forge/issues/727)) ([42d5a5c](https://github.com/constructorfleet/forge/commit/42d5a5c880fb7410127be88251e2dfc20fa3b45d))
+
 ## [0.51.0](https://github.com/constructorfleet/forge/compare/forge-v0.50.1...forge-v0.51.0) (2026-09-06)
 
 
