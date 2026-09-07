@@ -95,7 +95,16 @@ A persisted record that one pre-commit Review Finding is non-convergent: the rev
 ### Issue tracker
 
 **Tracker Adapter**:
-The normalized interface to an external issue tracker (GitHub, GitLab, etc.). Scheduler-facing code contains no tracker-specific models.
+The normalized interface to an external issue tracker (GitHub, GitLab, etc.). Scheduler-facing code contains no tracker-specific models. The adapter reports `ErrInvalidIssueID` when an id is not one it can address (for example, a non-numeric slug for a numeric-issue provider). A caller uses this sentinel to tell "not a tracker issue" apart from a transient tracker error.
+
+**Local Feature**:
+A planning Feature that is a local slug (for example `.forge/features/my-feature`) with no backing tracker issue. This is the default: `forge materialize` creates the tracker issues from the ticket plan later, so during `forge plan` the Feature is a local artifact. Planning runs the whole needs-human flow locally for a Local Feature: the pause skips the tracker label and comment, and the operator answers through the Local Answer Channel. `forge plan` warns, but does not stop, when the tracker is unavailable.
+
+**Tracker-backed Feature**:
+A Feature whose id is its tracker issue number. Planning's needs-human pause then posts the label and comment to that issue, and the operator answers with a tracker comment. Make one with `forge goal init <n> --from-issue` (seed from an existing issue) or `forge goal init --create-issue --title <t>` (create the issue, then scaffold the goal under its id). `--from-issue` reads from the configured tracker, not a fixed provider CLI.
+
+**Local Answer Channel**:
+The tracker-less path that records a human answer to a paused Decision. It writes the answer into the Decision's checkpoint and sets the Planning Execution back to ACTIVE, exactly as a tracker comment does. The planning TUI answer key uses it when the tracker reports `ErrInvalidIssueID`; `forge resume --answer` uses it from the command line.
 
 ### Semantic navigation
 

@@ -208,6 +208,12 @@ func runPlan(args []string) int {
 		return 0
 	}
 
+	// A tracker-auth failure is a warning, not a stop: planning is local-first,
+	// so a needs-human pause records the answer locally and needs no tracker.
+	if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "forge plan: tracker unavailable, continuing with local planning: %v\n", err)
+	}
+
 	pstop, err := runPlanPipeline(ctx, planPipelineRequest{
 		Store:        store,
 		PlanRuntime:  planRuntime,
@@ -304,9 +310,13 @@ func runPlanPipeline(ctx context.Context, req planPipelineRequest) (planStop, er
 	// resolved for this planning pass (see plan.go's package doc comment on
 	// idempotency: an existing artifact is never regenerated).
 	if specArtifact == nil {
-		if err := verifyTrackerAuth(ctx, cfg, repoRoot); err != nil {
-			return planStop{}, err
-		}
+		// No tracker-auth preflight here: planning is local-first (see
+		// runPlanTUI), so a needs-human pause records the answer locally and
+		// needs no tracker. Only a Feature that is itself a tracker issue uses
+		// the tracker, and every such call degrades on its own. The command
+		// entry points warn once, up front, if auth fails; this shared path
+		// must not do user I/O, since the TUI driver runs it under the
+		// alternate screen. buildTracker is config-only and stays a hard error.
 		trk, err := buildTracker(cfg, repoRoot)
 		if err != nil {
 			return planStop{}, err

@@ -46,6 +46,12 @@ type PlanningViewModel struct {
 	// filesystem the read path must not touch.
 	Stages []PlanningStageRow
 
+	// Failure is a terminal planning-failure banner. The driver sets it (via
+	// PlanningFailedMsg) when the pipeline errors, so the failure and the
+	// transcript stay on screen until the operator quits, instead of
+	// vanishing with the alternate screen. Empty renders no banner.
+	Failure string
+
 	// Notice explains an empty or failed-to-read stage history.
 	Notice string
 	// TranscriptNotice reports a failed transcript poll pass, kept apart
@@ -126,6 +132,11 @@ func PlanningTranscriptRows(vm PlanningViewModel) int {
 // the rows above the transcript and the rows below it, mirroring
 // chromeLines.
 func planningChromeLines(vm PlanningViewModel) (above, below []string) {
+	// A terminal failure reads first, above every stage row, in the failed-gate
+	// hue, so the operator sees why planning stopped before the run history.
+	if vm.Failure != "" {
+		above = append(above, vm.Style.GateFail.Render(vm.Failure))
+	}
 	for i, row := range vm.Stages {
 		above = append(above, stageRowLine(row, i == len(vm.Stages)-1, vm.Style))
 	}

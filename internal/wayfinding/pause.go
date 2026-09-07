@@ -88,10 +88,22 @@ func (p *PauseHandler) Handle(ctx context.Context, decisionID string, decision *
 	}
 	alreadyCheckpointed := err == nil
 
+	// localFeature is set when the Feature id is not a tracker issue (a local
+	// Feature slug, for example ".forge/features/my-feature"). Planning then
+	// runs the whole needs-human flow locally: it skips the tracker label and
+	// comment, and the operator answers through the local answer channel
+	// (wayfinding.AnswerDecisionLocally) instead of a tracker comment. This
+	// mirrors the nil-Tracker path -- checkpoint and pause still happen -- so a
+	// local Feature is a first-class planning target.
+	localFeature := false
 	labelEligible := p.Label != "" && p.Tracker != nil
 	if labelEligible {
 		if err := p.Tracker.AddLabel(ctx, p.FeatureID, p.Label); err != nil {
-			return nil, fmt.Errorf("wayfinding: add needs-human label for decision %s: %w", decisionID, err)
+			if !errors.Is(err, tracker.ErrInvalidIssueID) {
+				return nil, fmt.Errorf("wayfinding: add needs-human label for decision %s: %w", decisionID, err)
+			}
+			localFeature = true
+			labelEligible = false
 		}
 	}
 
@@ -117,7 +129,7 @@ func (p *PauseHandler) Handle(ctx context.Context, decisionID string, decision *
 		}
 	}
 
-	if p.PostComment && p.Tracker != nil && !checkpoint.CommentPosted {
+	if p.PostComment && p.Tracker != nil && !localFeature && !checkpoint.CommentPosted {
 		posted, err := p.Tracker.AddComment(ctx, p.FeatureID, needsHumanCommentBody(p.ExecutionID, decisionID, detail))
 		if err != nil {
 			return nil, fmt.Errorf("wayfinding: post needs-human comment for decision %s: %w", decisionID, err)

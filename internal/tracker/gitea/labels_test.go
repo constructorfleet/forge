@@ -2,9 +2,12 @@ package gitea_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
 // labelListHandler answers the repo label list with two labels, so a test can
@@ -37,6 +40,23 @@ func TestAddLabel_ResolvesNameToIDAndPosts(t *testing.T) {
 	}
 	if got := gotBody["labels"]; len(got) != 1 || got[0] != 10 {
 		t.Fatalf("expected the resolved label ID 10 to be posted, got %v", got)
+	}
+}
+
+// TestAddLabel_NonNumericIDReportsInvalidIssueID proves a non-numeric id (a
+// local Feature slug) is reported as tracker.ErrInvalidIssueID, so a caller
+// can tell "not a tracker issue" apart from a transient tracker error.
+func TestAddLabel_NonNumericIDReportsInvalidIssueID(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("must not reach the network for an invalid id: %s %s", r.Method, r.URL.Path)
+	})
+
+	err := c.AddLabel(context.Background(), "autoapply", "needs-info")
+	if err == nil {
+		t.Fatal("expected an error for a non-numeric issue id")
+	}
+	if !errors.Is(err, tracker.ErrInvalidIssueID) {
+		t.Fatalf("error = %v, want it to wrap tracker.ErrInvalidIssueID", err)
 	}
 }
 

@@ -524,10 +524,15 @@ func TestRunPlan_FailsLoudlyOutsideGitRepo(t *testing.T) {
 func TestRunPlan_ResolvesConfigFromSubdirectory(t *testing.T) {
 	bin := buildBinary(t)
 	repoRoot := planFixtureRepo(t)
-	// planFixtureRepo's own .forge.yaml selects git.base: main; overwrite it
-	// with a GitLab tracker instead so a repo-root-resolved config reaches a
-	// distinguishable, token-shaped failure.
-	if err := os.WriteFile(filepath.Join(repoRoot, ".forge.yaml"), []byte("version: 1\ngit:\n  base: main\ntracker:\n  type: gitlab\n  gitlab:\n    project: acme/widgets\n"), 0o644); err != nil {
+	// Overwrite the fixture config with a distinctive, unresolvable git.base.
+	// `forge plan` resolves the base revision up front, before any planning, so
+	// a base that no ref matches makes it fail fast with that exact string in
+	// the message -- a deterministic, offline proof that the repo root's
+	// .forge.yaml (not a default or a cwd config) was loaded from the subdir.
+	// The tracker is not used: the preflight is a warning now, not a stop, so a
+	// tracker-shaped failure is no longer a reliable fail-fast signal.
+	const baseMarker = "forge-subdir-config-marker"
+	if err := os.WriteFile(filepath.Join(repoRoot, ".forge.yaml"), []byte("version: 1\ngit:\n  base: "+baseMarker+"\ntracker:\n  type: github\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -539,12 +544,11 @@ func TestRunPlan_ResolvesConfigFromSubdirectory(t *testing.T) {
 
 	cmd := exec.Command(bin, "plan", "widget")
 	cmd.Dir = sub
-	cmd.Env = append(os.Environ(), "GITLAB_TOKEN=")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected an error (missing GITLAB_TOKEN), got success: %s", out)
+		t.Fatalf("expected an error (unresolvable git.base), got success: %s", out)
 	}
-	if !strings.Contains(string(out), "GITLAB_TOKEN") {
-		t.Errorf("expected failure to be about the missing GitLab token (proving the repo root's .forge.yaml was loaded), got: %s", out)
+	if !strings.Contains(string(out), baseMarker) {
+		t.Errorf("expected failure to name the repo root config's git.base %q (proving it was loaded), got: %s", baseMarker, out)
 	}
 }

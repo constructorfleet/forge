@@ -2,11 +2,20 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
 )
+
+// ErrInvalidIssueID reports that an id is not a valid tracker issue id for
+// this provider (for example, a numeric-issue provider given a non-numeric
+// slug). A provider wraps this sentinel so a caller can tell "this id is not
+// a tracker issue" apart from a transient tracker error with errors.Is.
+// Planning uses it to detect a local Feature slug that has no backing tracker
+// issue and fall back to the local, tracker-less needs-human flow.
+var ErrInvalidIssueID = errors.New("tracker: id is not a valid issue id")
 
 // Comment is Forge's normalized representation of a tracker comment. It
 // carries no tracker-specific fields.

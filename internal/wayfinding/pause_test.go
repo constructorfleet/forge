@@ -2,6 +2,7 @@ package wayfinding_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -211,6 +212,67 @@ func TestPauseHandler_Handle_IsIdempotent(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Errorf("EventsByExecution = %v, want 1 event (re-running must not double-record)", events)
+	}
+}
+
+// invalidIDTracker is a wayfinding.NeedsHumanTracker whose AddLabel reports
+// the id is not a tracker issue (tracker.ErrInvalidIssueID), simulating a
+// local Feature slug given to a numeric-issue provider.
+type invalidIDTracker struct {
+	addCommentCalled bool
+}
+
+func (t *invalidIDTracker) AddLabel(_ context.Context, id string, _ string) error {
+	return fmt.Errorf("gitea: invalid issue id %q: %w", id, tracker.ErrInvalidIssueID)
+}
+
+func (t *invalidIDTracker) AddComment(_ context.Context, _ string, _ string) (tracker.Comment, error) {
+	t.addCommentCalled = true
+	return tracker.Comment{}, nil
+}
+
+// TestPauseHandler_Handle_LocalFeatureSkipsTrackerButStillCheckpoints proves a
+// Feature slug that is not a tracker issue does not crash the pause: the
+// tracker label and comment are skipped, and the checkpoint and NEEDS_HUMAN
+// status are still recorded, so a local Feature is a first-class target.
+func TestPauseHandler_Handle_LocalFeatureSkipsTrackerButStillCheckpoints(t *testing.T) {
+	store := openPauseTestStore(t)
+	seedPauseExecution(t, store, "plan-exec-1", "autoapply")
+
+	trk := &invalidIDTracker{}
+	handler := &wayfinding.PauseHandler{
+		ExecutionID: "plan-exec-1",
+		FeatureID:   "autoapply",
+		Store:       store,
+		Tracker:     trk,
+		Label:       "needs-info",
+		PostComment: true,
+	}
+
+	decision := decisionWithQuestion("Which data source?")
+	detail := decisionresolution.NeedsHumanDetail{Question: "Which data source?"}
+
+	if _, err := handler.Handle(context.Background(), "001-application-data-source", decision, detail); err != nil {
+		t.Fatalf("Handle must not fail for a local Feature slug: %v", err)
+	}
+	if trk.addCommentCalled {
+		t.Error("AddComment must be skipped for a local Feature slug")
+	}
+
+	checkpoint, err := store.GetDecisionCheckpoint(context.Background(), "plan-exec-1", "001-application-data-source")
+	if err != nil {
+		t.Fatalf("GetDecisionCheckpoint: %v", err)
+	}
+	if checkpoint.LabelAdded || checkpoint.CommentPosted {
+		t.Errorf("checkpoint = %+v, want LabelAdded and CommentPosted both false for a local Feature", checkpoint)
+	}
+
+	exec, err := store.LoadPlanningExecution(context.Background(), "plan-exec-1")
+	if err != nil {
+		t.Fatalf("LoadPlanningExecution: %v", err)
+	}
+	if exec.Status != domain.PlanningStatusNeedsHuman {
+		t.Errorf("Status = %q, want NEEDS_HUMAN for a local Feature", exec.Status)
 	}
 }
 

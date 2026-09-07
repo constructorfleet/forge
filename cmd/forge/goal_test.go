@@ -2,13 +2,54 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planning"
+	"github.com/Teagan42/forge/internal/tracker"
 )
+
+// fakeGoalTracker is a scripted goalTracker double for the goal command's
+// --from-issue and --create-issue paths.
+type fakeGoalTracker struct {
+	issues     map[string]domain.Issue
+	getErr     error
+	created    tracker.CreatedIssue
+	createErr  error
+	createdReq *tracker.IssueRequest
+}
+
+func (f *fakeGoalTracker) GetIssue(_ context.Context, id string) (domain.Issue, error) {
+	if f.getErr != nil {
+		return domain.Issue{}, f.getErr
+	}
+	iss, ok := f.issues[id]
+	if !ok {
+		return domain.Issue{}, fmt.Errorf("issue %s not found", id)
+	}
+	return iss, nil
+}
+
+func (f *fakeGoalTracker) CreateIssue(_ context.Context, req tracker.IssueRequest) (tracker.CreatedIssue, error) {
+	f.createdReq = &req
+	if f.createErr != nil {
+		return tracker.CreatedIssue{}, f.createErr
+	}
+	return f.created, nil
+}
+
+// useGoalTracker swaps the newGoalTracker seam for the duration of a test, so
+// the goal command reaches trk (and buildErr) instead of a real tracker.
+func useGoalTracker(t *testing.T, trk goalTracker, buildErr error) {
+	t.Helper()
+	prev := newGoalTracker
+	newGoalTracker = func(string) (goalTracker, error) { return trk, buildErr }
+	t.Cleanup(func() { newGoalTracker = prev })
+}
 
 // writeFakeEditor writes a shell script that appends a line to the Goal
 // section's body and returns its path, suitable for $EDITOR/$VISUAL in
@@ -20,18 +61,6 @@ func writeFakeEditor(t *testing.T, dir string) string {
 	}
 	script := filepath.Join(dir, "fake-editor.sh")
 	body := "#!/bin/sh\nprintf '\\n' >> \"$1\"\nprintf 'Edited in-editor.\\n' >> \"$1\"\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return script
-}
-
-func writeFakeGH(t *testing.T, dir string, body string) string {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("fake gh script requires a POSIX shell")
-	}
-	script := filepath.Join(dir, "gh")
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -417,26 +446,15 @@ func TestRunGoalInit_FromWithoutHeadings(t *testing.T) {
 }
 
 // TestRunGoalInit_FromIssueDefaultsToFeatureID confirms --from-issue fetches
-// the feature-id issue through gh, includes both title and body, and writes a
-// freshly stamped draft goal.md.
+// the feature-id issue from the configured tracker, includes both title and
+// body, and writes a freshly stamped draft goal.md.
 func TestRunGoalInit_FromIssueDefaultsToFeatureID(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakeGH(t, binDir, `#!/bin/sh
-if [ "$1" != "issue" ] || [ "$2" != "view" ] || [ "$3" != "245" ]; then
-  echo "unexpected args: $*" >&2
-  exit 2
-fi
-cat <<'JSON'
-{"title":"Seed from tracker","body":"## Context\n\nIssue context.\n\n## Success Criteria\n\nIt works."}
-JSON
-`)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useGoalTracker(t, &fakeGoalTracker{issues: map[string]domain.Issue{
+		"245": {Title: "Seed from tracker", Body: "## Context\n\nIssue context.\n\n## Success Criteria\n\nIt works."},
+	}}, nil)
 
 	if code := runGoalInit([]string{"init", "245", "--from-issue"}); code != 0 {
 		t.Fatalf("runGoalInit --from-issue = %d, want 0", code)
@@ -478,20 +496,9 @@ func TestRunGoalInit_FromIssueOverrideFetchesDifferentIssue(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakeGH(t, binDir, `#!/bin/sh
-if [ "$3" != "999" ]; then
-  echo "expected issue 999, got $3" >&2
-  exit 2
-fi
-cat <<'JSON'
-{"title":"Override source","body":"Overridden body."}
-JSON
-`)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useGoalTracker(t, &fakeGoalTracker{issues: map[string]domain.Issue{
+		"999": {Title: "Override source", Body: "Overridden body."},
+	}}, nil)
 
 	if code := runGoalInit([]string{"init", "local-feature", "--from-issue", "999"}); code != 0 {
 		t.Fatalf("runGoalInit --from-issue 999 = %d, want 0", code)
@@ -526,16 +533,9 @@ func TestRunGoalInit_FromIssueWithForce(t *testing.T) {
 		t.Fatalf("runGoalInit = %d, want 0", code)
 	}
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakeGH(t, binDir, `#!/bin/sh
-cat <<'JSON'
-{"title":"Forced source","body":"Replacement body."}
-JSON
-`)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useGoalTracker(t, &fakeGoalTracker{issues: map[string]domain.Issue{
+		"245": {Title: "Forced source", Body: "Replacement body."},
+	}}, nil)
 
 	if code := runGoalInit([]string{"init", "245", "--from-issue", "--force"}); code != 0 {
 		t.Fatalf("runGoalInit --from-issue --force = %d, want 0", code)
@@ -560,16 +560,9 @@ func TestRunGoalInit_FromIssueWithEdit(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakeGH(t, binDir, `#!/bin/sh
-cat <<'JSON'
-{"title":"Editable source","body":"Initial body."}
-JSON
-`)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useGoalTracker(t, &fakeGoalTracker{issues: map[string]domain.Issue{
+		"245": {Title: "Editable source", Body: "Initial body."},
+	}}, nil)
 
 	editor := writeFakeEditor(t, dir)
 	t.Setenv("EDITOR", editor)
@@ -595,48 +588,103 @@ JSON
 	}
 }
 
-// TestRunGoalInit_FromIssueMissingGHFailsWithoutWriting confirms a missing gh
-// executable is reported before any goal.md is created.
-func TestRunGoalInit_FromIssueMissingGHFailsWithoutWriting(t *testing.T) {
+// TestRunGoalInit_FromIssueTrackerBuildFailsWithoutWriting confirms a tracker
+// that cannot be built is reported before any goal.md is created.
+func TestRunGoalInit_FromIssueTrackerBuildFailsWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	emptyPath := filepath.Join(dir, "empty-path")
-	if err := os.MkdirAll(emptyPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", emptyPath)
+	useGoalTracker(t, nil, fmt.Errorf("no .forge.yaml"))
 
 	if code := runGoalInit([]string{"init", "245", "--from-issue"}); code == 0 {
-		t.Fatal("runGoalInit --from-issue without gh = 0, want non-zero")
+		t.Fatal("runGoalInit --from-issue with no tracker = 0, want non-zero")
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
-		t.Fatalf(".forge dir was created despite missing gh, stat err = %v", err)
+		t.Fatalf(".forge dir was created despite tracker build failure, stat err = %v", err)
 	}
 }
 
-// TestRunGoalInit_FromIssueMissingIssueFailsWithoutWriting confirms a gh
+// TestRunGoalInit_FromIssueMissingIssueFailsWithoutWriting confirms a tracker
 // lookup failure, such as a missing issue, is reported before any goal.md is
 // created.
 func TestRunGoalInit_FromIssueMissingIssueFailsWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
 	chdirTemp(t, dir)
 
-	binDir := filepath.Join(dir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakeGH(t, binDir, `#!/bin/sh
-echo 'GraphQL: Could not resolve to an Issue with the number of 404.' >&2
-exit 1
-`)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useGoalTracker(t, &fakeGoalTracker{getErr: fmt.Errorf("issue 404 not found")}, nil)
 
 	if code := runGoalInit([]string{"init", "404", "--from-issue"}); code == 0 {
 		t.Fatal("runGoalInit --from-issue for missing issue = 0, want non-zero")
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".forge")); !os.IsNotExist(err) {
 		t.Fatalf(".forge dir was created despite missing issue, stat err = %v", err)
+	}
+}
+
+// TestRunGoalInit_CreateIssueScaffoldsUnderCreatedID confirms --create-issue
+// creates a tracker issue from --title (and --from) and scaffolds the goal
+// under the created issue's id, so the Feature is tracker-backed.
+func TestRunGoalInit_CreateIssueScaffoldsUnderCreatedID(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	fake := &fakeGoalTracker{created: tracker.CreatedIssue{ID: "512", URL: "https://tracker/issues/512"}}
+	useGoalTracker(t, fake, nil)
+
+	if code := runGoalInit([]string{"init", "--create-issue", "--title", "Add autoapply"}); code != 0 {
+		t.Fatalf("runGoalInit --create-issue = %d, want 0", code)
+	}
+	if fake.createdReq == nil || fake.createdReq.Title != "Add autoapply" {
+		t.Fatalf("CreateIssue request = %+v, want Title %q", fake.createdReq, "Add autoapply")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".forge", "features", "512", "goal.md"))
+	if err != nil {
+		t.Fatalf("ReadFile under created id: %v", err)
+	}
+	a, err := planning.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Sections) != 1 || a.Sections[0].Heading != "Goal" || a.Sections[0].Body != "Add autoapply" {
+		t.Fatalf("goal sections = %+v, want a single Goal section with the title", a.Sections)
+	}
+	if got := planning.ComputeRevision(a); got != a.Revision {
+		t.Fatalf("artifact is Stale: ComputeRevision = %q, stamped Revision = %q", got, a.Revision)
+	}
+}
+
+// TestRunGoalInit_CreateIssueRequiresTitle confirms --create-issue without
+// --title is a usage error and no tracker call or goal.md happens.
+func TestRunGoalInit_CreateIssueRequiresTitle(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	fake := &fakeGoalTracker{}
+	useGoalTracker(t, fake, nil)
+
+	if code := runGoalInit([]string{"init", "--create-issue"}); code == 0 {
+		t.Fatal("runGoalInit --create-issue without --title = 0, want non-zero")
+	}
+	if fake.createdReq != nil {
+		t.Fatal("CreateIssue was called despite the missing --title")
+	}
+}
+
+// TestRunGoalInit_CreateIssueRejectsFeatureID confirms passing a feature-id
+// with --create-issue is a usage error, since the id is the created issue's.
+func TestRunGoalInit_CreateIssueRejectsFeatureID(t *testing.T) {
+	dir := t.TempDir()
+	chdirTemp(t, dir)
+
+	fake := &fakeGoalTracker{}
+	useGoalTracker(t, fake, nil)
+
+	if code := runGoalInit([]string{"init", "myslug", "--create-issue", "--title", "T"}); code == 0 {
+		t.Fatal("runGoalInit --create-issue with a feature-id = 0, want non-zero")
+	}
+	if fake.createdReq != nil {
+		t.Fatal("CreateIssue was called despite the rejected feature-id")
 	}
 }
 

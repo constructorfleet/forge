@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,17 +9,27 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/planning"
 	"github.com/Teagan42/forge/internal/planningfs"
+	"github.com/Teagan42/forge/internal/tracker"
 )
 
-const goalUsage = `Usage: forge goal init <feature-id> [--force] [--from <path>] [--from-issue [<n>]] [--edit]
+const goalUsage = `Usage:
+  forge goal init <feature-id> [--force] [--from <path>] [--from-issue [<n>]] [--edit]
+  forge goal init --create-issue --title <title> [--from <path>] [--force] [--edit]
 
 Create .forge/features/<feature-id>/goal.md, the human-authored Planning
 Artifact that seeds 'forge plan'. The generated file is a skeleton with
 placeholder prose under four sections (Goal, Context, Constraints, Success
 Criteria) for the author to fill in, already stamped with a valid content
 revision so it is not Stale.
+
+A Feature is a local artifact by default: 'forge materialize' creates the
+tracker issues from the ticket plan later. To make a Feature tracker-backed
+now (so a planning needs-human pause posts to a real issue), give it the
+issue number as its feature-id, seed it with --from-issue, or create the
+issue with --create-issue.
 
   --force        Overwrite an existing goal.md and re-stamp a fresh draft.
   --from <path>  Adopt an existing freeform doc as the goal instead of
@@ -29,28 +38,59 @@ revision so it is not Stale.
                  leading section; a doc with no headings becomes a single
                  'Goal' section) and stamped as a fresh draft.
   --from-issue [<n>]
-                 Fetch GitHub issue <n> with 'gh issue view' and seed the
-                 goal from its title and body. Defaults to <feature-id>.
+                 Fetch issue <n> from the configured tracker and seed the
+                 goal from its title and body. Defaults to <feature-id>, so
+                 'forge goal init <n> --from-issue' makes a tracker-backed
+                 Feature whose id is the issue number.
+  --create-issue Create a new tracker issue from --title (and --from, if
+                 given), then scaffold the goal under the created issue's id.
+                 The Feature is tracker-backed. Requires --title; do not pass
+                 a feature-id (it is the created issue's id).
+  --title <t>    The title for the issue --create-issue creates.
   --edit         Open the written goal.md in $VISUAL (or $EDITOR) after
                  writing it, then re-stamp the revision from the edited
                  content. Composes with --from to edit the adopted draft.
 `
 
 type goalIssueSource struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Title string
+	Body  string
 }
 
-// runGoalInit implements `forge goal init <feature-id> [--force] [--from <path>] [--from-issue [<n>]] [--edit]`.
+// goalTracker is the slice of the configured Tracker the goal command needs:
+// reading an issue to seed a goal (--from-issue) and creating one from a goal
+// (--create-issue).
+type goalTracker interface {
+	GetIssue(ctx context.Context, id string) (domain.Issue, error)
+	CreateIssue(ctx context.Context, req tracker.IssueRequest) (tracker.CreatedIssue, error)
+}
+
+// newGoalTracker builds the configured Tracker for repoRoot. It is a var so a
+// test injects a double without a real tracker or a .forge.yaml.
+var newGoalTracker = func(repoRoot string) (goalTracker, error) {
+	cfg, err := loadConfig(filepath.Join(repoRoot, defaultConfigPath))
+	if err != nil {
+		return nil, err
+	}
+	return buildTracker(cfg, repoRoot)
+}
+
+// goalInitOpts holds the parsed `forge goal init` flags.
+type goalInitOpts struct {
+	featureID   string
+	force       bool
+	from        string
+	fromIssue   string
+	edit        bool
+	createIssue bool
+	title       string
+}
+
+// runGoalInit implements `forge goal init`.
 func runGoalInit(args []string) int {
-	featureID, force, from, fromIssue, edit, code, done := parseGoalInitArgs(args)
+	opts, code, done := parseGoalInitArgs(args)
 	if done {
 		return code
-	}
-
-	if err := validateFeatureID(featureID); err != nil {
-		fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
-		return 1
 	}
 
 	repoRoot, err := discoverRepoRootOrCWD()
@@ -59,8 +99,15 @@ func runGoalInit(args []string) int {
 		return 1
 	}
 
+	ctx := context.Background()
+
+	featureID, goal, code, done := resolveGoalSource(ctx, repoRoot, opts)
+	if done {
+		return code
+	}
+
 	path := filepath.Join(planningfs.FeatureDir(repoRoot, featureID), "goal.md")
-	if !force {
+	if !opts.force {
 		if _, err := os.Stat(path); err == nil {
 			fmt.Fprintf(os.Stderr, "forge goal init: %s already exists; rerun with --force to overwrite\n", path)
 			return 1
@@ -70,26 +117,6 @@ func runGoalInit(args []string) int {
 		}
 	}
 
-	var goal *planning.Artifact
-	if from != "" {
-		src, err := os.ReadFile(from)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "forge goal init: reading %s: %v\n", from, err)
-			return 1
-		}
-		goal = buildGoalFromSource(string(src))
-	} else if fromIssue != "" {
-		issue, err := fetchGoalIssueWithGH(context.Background(), fromIssue)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "forge goal init: fetching issue %s: %v\n", fromIssue, err)
-			return 1
-		}
-		goal = buildGoalFromSource(buildGoalIssueSource(issue))
-	} else {
-		goal = buildGoalSkeleton()
-	}
-
-	ctx := context.Background()
 	loader := &fileArtifactLoader{RepoRoot: repoRoot}
 	if err := loader.SaveGoal(ctx, featureID, goal); err != nil {
 		fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
@@ -98,7 +125,7 @@ func runGoalInit(args []string) int {
 
 	fmt.Fprintf(os.Stdout, "wrote %s\n", path)
 
-	if !edit {
+	if !opts.edit {
 		return 0
 	}
 
@@ -192,36 +219,95 @@ func buildGoalIssueSource(issue goalIssueSource) string {
 	return "## Goal\n\n" + title + "\n\n" + body + "\n"
 }
 
-func fetchGoalIssueWithGH(ctx context.Context, issueID string) (goalIssueSource, error) {
-	cmd := exec.CommandContext(ctx, "gh", "issue", "view", issueID, "--json", "title,body")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			return goalIssueSource{}, err
+// resolveGoalSource resolves the feature-id and the goal Artifact from the
+// parsed flags: it reads --from, fetches --from-issue from the configured
+// tracker, creates the issue for --create-issue, or scaffolds a skeleton. done
+// is true when runGoalInit should return immediately with code.
+func resolveGoalSource(ctx context.Context, repoRoot string, opts goalInitOpts) (featureID string, goal *planning.Artifact, code int, done bool) {
+	switch {
+	case opts.createIssue:
+		body := ""
+		if opts.from != "" {
+			src, err := os.ReadFile(opts.from)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "forge goal init: reading %s: %v\n", opts.from, err)
+				return "", nil, 1, true
+			}
+			body = string(src)
 		}
-		return goalIssueSource{}, fmt.Errorf("%w: %s", err, msg)
-	}
+		trk, err := newGoalTracker(repoRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
+			return "", nil, 1, true
+		}
+		created, err := trk.CreateIssue(ctx, tracker.IssueRequest{Title: opts.title, Body: body})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: creating issue: %v\n", err)
+			return "", nil, 1, true
+		}
+		featureID = created.ID
+		if err := validateFeatureID(featureID); err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: created issue id %q is not a usable feature-id: %v\n", featureID, err)
+			return "", nil, 1, true
+		}
+		source := body
+		if strings.TrimSpace(source) == "" {
+			source = buildGoalIssueSource(goalIssueSource{Title: opts.title})
+		}
+		fmt.Fprintf(os.Stdout, "created issue %s (%s)\n", featureID, created.URL)
+		return featureID, buildGoalFromSource(source), 0, false
 
-	var issue goalIssueSource
-	if err := json.Unmarshal(out, &issue); err != nil {
-		return goalIssueSource{}, fmt.Errorf("parsing gh issue view output: %w", err)
+	case opts.fromIssue != "":
+		if err := validateFeatureID(opts.featureID); err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
+			return "", nil, 1, true
+		}
+		trk, err := newGoalTracker(repoRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
+			return "", nil, 1, true
+		}
+		issue, err := trk.GetIssue(ctx, opts.fromIssue)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: fetching issue %s: %v\n", opts.fromIssue, err)
+			return "", nil, 1, true
+		}
+		source := buildGoalIssueSource(goalIssueSource{Title: issue.Title, Body: issue.Body})
+		return opts.featureID, buildGoalFromSource(source), 0, false
+
+	case opts.from != "":
+		if err := validateFeatureID(opts.featureID); err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
+			return "", nil, 1, true
+		}
+		src, err := os.ReadFile(opts.from)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: reading %s: %v\n", opts.from, err)
+			return "", nil, 1, true
+		}
+		return opts.featureID, buildGoalFromSource(string(src)), 0, false
+
+	default:
+		if err := validateFeatureID(opts.featureID); err != nil {
+			fmt.Fprintf(os.Stderr, "forge goal init: %v\n", err)
+			return "", nil, 1, true
+		}
+		return opts.featureID, buildGoalSkeleton(), 0, false
 	}
-	return issue, nil
 }
 
-// parseGoalInitArgs parses `forge goal init <feature-id> [--force] [--from
-// <path>] [--from-issue [<n>]] [--edit]`'s arguments. done is true when runGoalInit should return
-// immediately with code (help text, or a parse error).
-func parseGoalInitArgs(args []string) (featureID string, force bool, from string, fromIssue string, edit bool, code int, done bool) {
+// parseGoalInitArgs parses `forge goal init`'s arguments. done is true when
+// runGoalInit should return immediately with code (help text, or a parse
+// error).
+func parseGoalInitArgs(args []string) (opts goalInitOpts, code int, done bool) {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(os.Stdout, goalUsage)
-		return "", false, "", "", false, 0, true
+		return goalInitOpts{}, 0, true
 	}
 
 	if args[0] != "init" {
 		fmt.Fprintf(os.Stderr, "forge goal: unknown subcommand %q\n\n%s", args[0], goalUsage)
-		return "", false, "", "", false, 1, true
+		return goalInitOpts{}, 1, true
 	}
 
 	rest := args[1:]
@@ -230,42 +316,73 @@ func parseGoalInitArgs(args []string) (featureID string, force bool, from string
 		switch a {
 		case "--help", "-h":
 			fmt.Fprint(os.Stdout, goalUsage)
-			return "", false, "", "", false, 0, true
+			return goalInitOpts{}, 0, true
 		case "--force":
-			force = true
+			opts.force = true
 		case "--from":
 			if i+1 >= len(rest) {
 				fmt.Fprintf(os.Stderr, "--from requires a <path> argument\n\n%s", goalUsage)
-				return "", false, "", "", false, 1, true
+				return goalInitOpts{}, 1, true
 			}
 			i++
-			from = rest[i]
+			opts.from = rest[i]
 		case "--from-issue":
-			fromIssue = " "
+			opts.fromIssue = " "
 			if i+1 < len(rest) && !strings.HasPrefix(rest[i+1], "-") {
 				i++
-				fromIssue = rest[i]
+				opts.fromIssue = rest[i]
 			}
+		case "--create-issue":
+			opts.createIssue = true
+		case "--title":
+			if i+1 >= len(rest) {
+				fmt.Fprintf(os.Stderr, "--title requires a <title> argument\n\n%s", goalUsage)
+				return goalInitOpts{}, 1, true
+			}
+			i++
+			opts.title = rest[i]
 		case "--edit":
-			edit = true
+			opts.edit = true
 		default:
-			if featureID != "" {
+			if opts.featureID != "" {
 				fmt.Fprintf(os.Stderr, "too many arguments: %v\n\n%s", rest, goalUsage)
-				return "", false, "", "", false, 1, true
+				return goalInitOpts{}, 1, true
 			}
-			featureID = a
+			opts.featureID = a
 		}
 	}
-	if featureID == "" {
-		fmt.Fprintf(os.Stderr, "feature-id is required\n\n%s", goalUsage)
-		return "", false, "", "", false, 1, true
-	}
-	if from != "" && fromIssue != "" {
+
+	if opts.from != "" && opts.fromIssue != "" {
 		fmt.Fprintf(os.Stderr, "--from and --from-issue cannot be used together\n\n%s", goalUsage)
-		return "", false, "", "", false, 1, true
+		return goalInitOpts{}, 1, true
 	}
-	if fromIssue == " " {
-		fromIssue = featureID
+
+	if opts.createIssue {
+		if opts.fromIssue != "" {
+			fmt.Fprintf(os.Stderr, "--create-issue and --from-issue cannot be used together\n\n%s", goalUsage)
+			return goalInitOpts{}, 1, true
+		}
+		if strings.TrimSpace(opts.title) == "" {
+			fmt.Fprintf(os.Stderr, "--create-issue requires --title\n\n%s", goalUsage)
+			return goalInitOpts{}, 1, true
+		}
+		if opts.featureID != "" {
+			fmt.Fprintf(os.Stderr, "do not pass a feature-id with --create-issue; it is the created issue's id\n\n%s", goalUsage)
+			return goalInitOpts{}, 1, true
+		}
+		return opts, 0, false
 	}
-	return featureID, force, from, fromIssue, edit, 0, false
+
+	if opts.title != "" {
+		fmt.Fprintf(os.Stderr, "--title is only valid with --create-issue\n\n%s", goalUsage)
+		return goalInitOpts{}, 1, true
+	}
+	if opts.featureID == "" {
+		fmt.Fprintf(os.Stderr, "feature-id is required\n\n%s", goalUsage)
+		return goalInitOpts{}, 1, true
+	}
+	if opts.fromIssue == " " {
+		opts.fromIssue = opts.featureID
+	}
+	return opts, 0, false
 }
