@@ -222,15 +222,68 @@ func topoSort(keys []string, edges map[string][]string) ([]string, error) {
 // uniqueSlug derives a URL/filename-safe slug from title, disambiguating
 // against taken by appending -2, -3, ... as needed.
 func uniqueSlug(title string, taken map[string]bool) string {
-	base := strings.Trim(slugNonAlnum.ReplaceAllString(strings.ToLower(title), "-"), "-")
-	if base == "" {
-		base = "decision"
-	}
+	base := titleBaseSlug(title)
 	slug := base
 	for n := 2; taken[slug]; n++ {
 		slug = fmt.Sprintf("%s-%d", base, n)
 	}
 	return slug
+}
+
+// disambigSuffix matches the "-N" (N >= 2) suffix uniqueSlug appends to
+// disambiguate a colliding slug. baseSlug strips it, so a Decision that was
+// materialized once as "pre-submission-review" and again as
+// "pre-submission-review-2" both reduce to the same base for duplicate
+// detection.
+var disambigSuffix = regexp.MustCompile(`-[2-9]\d*$`)
+
+// baseSlug reduces a slug to the form uniqueSlug derived it from, before any
+// disambiguating "-N" suffix. It is the identity key DropAlreadyMaterialized
+// compares on.
+func baseSlug(slug string) string {
+	return disambigSuffix.ReplaceAllString(slug, "")
+}
+
+// titleBaseSlug derives a Title's base slug the same way uniqueSlug does,
+// before any disambiguating suffix, so a proposal's Title compares against an
+// existing Decision's stored slug.
+func titleBaseSlug(title string) string {
+	base := strings.Trim(slugNonAlnum.ReplaceAllString(strings.ToLower(title), "-"), "-")
+	if base == "" {
+		base = "decision"
+	}
+	return base
+}
+
+// DropAlreadyMaterialized returns the proposals whose Title does not match a
+// Decision already materialized for the Feature. A memory-less survey or
+// readiness pass often re-proposes a Decision that already exists; without
+// this, Materialize would mint a second identity for it (a fresh "NNN-slug"),
+// so a human answer keyed to the first Decision's ID never matches the second,
+// and interactive planning re-asks the same question forever.
+//
+// Matching is by base slug -- the slug Materialize derives from a Title before
+// it appends any "-N" disambiguator -- because a re-proposed Decision keeps
+// its Title even when the reviewer rewords the question (the observed failure
+// mode). This is a duplicate filter for the loop to run BEFORE Materialize;
+// Materialize itself keeps its contract of assigning distinct identity to
+// whatever it is given, so a caller that means to force a new Decision can
+// still bypass this filter.
+func DropAlreadyMaterialized(proposed []planningsurvey.ProposedDecision, existingIDs []string) []planningsurvey.ProposedDecision {
+	existing := make(map[string]bool, len(existingIDs))
+	for _, id := range existingIDs {
+		if _, slug, ok := splitID(id); ok {
+			existing[baseSlug(slug)] = true
+		}
+	}
+	out := make([]planningsurvey.ProposedDecision, 0, len(proposed))
+	for _, d := range proposed {
+		if existing[titleBaseSlug(d.Title)] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 var idPattern = regexp.MustCompile(`^(\d+)-(.+)$`)

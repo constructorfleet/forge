@@ -9,6 +9,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -40,9 +41,11 @@ type PlanningStageRow struct {
 // IssueState-derived legality, and no liveness column, so reusing ViewModel
 // would carry fields that mean nothing here.
 type PlanningViewModel struct {
-	// Stages is the Feature's stage-history strip, oldest first. Position —
-	// which row is the single live head — comes from this run history
-	// (len(Stages)-1), never from planning.DeriveStage, which reads the
+	// Stages is the Feature's recorded planning runs, oldest first. The frame
+	// renders one collapsed line from it — the current stage (len(Stages)-1),
+	// the total attempt count, and the last activity — never one line per run,
+	// so a stage that re-runs many times can not grow the strip. Position comes
+	// from this run history, never from planning.DeriveStage, which reads the
 	// filesystem the read path must not touch.
 	Stages []PlanningStageRow
 
@@ -91,6 +94,13 @@ type PlanningViewModel struct {
 	ApproveLegal bool
 	AnswerLegal  bool
 
+	// DecisionQuestion and DecisionContext hold the pending Decision the
+	// answer control replies to. The frame renders them inline while
+	// AnswerLegal is true, so the operator reads the question in the panel
+	// without opening $EDITOR. Both are empty when no Decision is pending.
+	DecisionQuestion string
+	DecisionContext  string
+
 	// latestExecutionID is the current Planning Execution's id, carried for
 	// the answer control's DecisionCheckpoint lookup only. It is
 	// deliberately unexported: the planning-execution UUID must never leak
@@ -108,6 +118,12 @@ func PlanningLegalKeys(vm PlanningViewModel) []KeyBinding {
 	}
 	if vm.ApproveLegal {
 		keys = append(keys, KeyBinding{Key: "p", Label: "approve"})
+	}
+	// tab reaches the transcript pane, where enter expands a row to its full
+	// thinking, tool input, or tool output. The hint makes that reach
+	// discoverable from the stage view, which otherwise offers only q/a/p.
+	if vm.Transcript != nil {
+		keys = append(keys, KeyBinding{Key: "tab", Label: "transcript"})
 	}
 	return keys
 }
@@ -137,9 +153,18 @@ func planningChromeLines(vm PlanningViewModel) (above, below []string) {
 	if vm.Failure != "" {
 		above = append(above, vm.Style.GateFail.Render(vm.Failure))
 	}
-	for i, row := range vm.Stages {
-		above = append(above, stageRowLine(row, i == len(vm.Stages)-1, vm.Style))
+	// The stage strip is one line for the current stage, never one line per
+	// recorded attempt. Planning re-runs the same six stages many times, so a
+	// per-attempt strip grows without bound and pushes the transcript off
+	// screen; the current stage plus an attempt count is the state the
+	// operator needs, and the transcript below carries the per-attempt detail.
+	if len(vm.Stages) > 0 {
+		above = append(above, currentStageLine(vm.Stages, vm.Style))
 	}
+	// A pending Decision reads inline, so the operator sees the question
+	// without pressing the answer key. It sits above the notices, right under
+	// the stage line, because it is the one thing that needs an action.
+	above = append(above, decisionQuestionLines(vm)...)
 	if vm.Notice != "" {
 		above = append(above, vm.Style.Notice.Render(vm.Notice))
 	}
@@ -184,19 +209,53 @@ func planningFrameKeys(vm PlanningViewModel) []KeyBinding {
 	return PlanningLegalKeys(vm)
 }
 
-// stageRowLine renders one stage row. head marks the single live head — the
-// newest recorded row — with the cursor; no liveness or attention glyph is
-// ever drawn, because planning claims neither.
-func stageRowLine(row PlanningStageRow, head bool, style Style) string {
-	cur := " "
-	if head {
-		cur = ">"
+// currentStageLine renders the one stage line: the current stage (the newest
+// recorded row), the total attempt count across the run history, and the last
+// activity time. It replaces the old per-attempt strip, so the chrome stays
+// one line high however many attempts a stage takes.
+func currentStageLine(stages []PlanningStageRow, style Style) string {
+	row := stages[len(stages)-1]
+	line := fmt.Sprintf("> %-28s (attempt %d)  %s", row.Stage, len(stages), formatLastActivity(row.LastActivity))
+	return style.Selection.Render(line)
+}
+
+// decisionQuestionLines renders the pending Decision inline: a header naming
+// the action, then the question and its context, each wrapped as their own
+// commented block. It returns no lines when no Decision is pending, so the
+// chrome stays empty until planning parks for an answer.
+func decisionQuestionLines(vm PlanningViewModel) []string {
+	if !vm.AnswerLegal || vm.DecisionQuestion == "" {
+		return nil
 	}
-	line := fmt.Sprintf("%s %-28s %s", cur, row.Stage, formatLastActivity(row.LastActivity))
-	if head {
-		return style.Selection.Render(line)
+	lines := []string{vm.Style.Notice.Render("❓ decision needed (press a to answer)")}
+	lines = append(lines, indentedLabelBlock("Q", vm.DecisionQuestion)...)
+	if vm.DecisionContext != "" {
+		lines = append(lines, indentedLabelBlock("Context", vm.DecisionContext)...)
 	}
-	return line
+	return lines
+}
+
+// indentedLabelBlock renders text under a label, one physical line per source
+// line, so a multi-line question or context keeps its shape. The label opens
+// the first line only; later lines indent to align under it.
+func indentedLabelBlock(label, text string) []string {
+	rows := splitLines(text)
+	out := make([]string, 0, len(rows))
+	for i, row := range rows {
+		if i == 0 {
+			out = append(out, fmt.Sprintf("  %s: %s", label, row))
+			continue
+		}
+		out = append(out, fmt.Sprintf("     %s", row))
+	}
+	return out
+}
+
+// splitLines splits text into its lines, dropping a trailing empty line, so a
+// block that ends in a newline adds no blank row.
+func splitLines(text string) []string {
+	rows := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	return rows
 }
 
 // stageDetailLine renders the live head's stage and last-activity timestamp.

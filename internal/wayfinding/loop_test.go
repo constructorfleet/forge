@@ -271,6 +271,72 @@ func TestLoop_NeedsHumanPausesOnlyAffectedPathAndContinuesOthers(t *testing.T) {
 	}
 }
 
+// TestLoop_HaltsWhilePendingHumanDecisionAwaitsAnswer proves the loop stops
+// when the frontier empties only because a Decision is paused awaiting a human
+// answer, and does NOT run the readiness review: a memory-less review cannot
+// see the paused Decision and would re-surface it as a new one every pass,
+// which is the non-convergence bug this guards against.
+func TestLoop_HaltsWhilePendingHumanDecisionAwaitsAnswer(t *testing.T) {
+	goal := goalArtifact()
+	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
+	decisions := map[string]*planning.Artifact{
+		"001-vendor": questionDecision("Which vendor do we pick?"),
+	}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("decision-resolution", `{"needs_human":{"question":"Which vendor?"}}`)
+	// If the loop wrongly ran the readiness review it would re-surface the
+	// paused question; program it to prove the loop never gets there.
+	backend.ProgramResult("planning-readiness-review", `{"status":"NOT_READY","decisions":[`+
+		`{"temp_key":"a","title":"Which vendor do we pick","question":"Which vendor, reworded?","depends_on":[],"consequential":true}`+
+		`]}`)
+
+	onNeedsHuman := func(ctx context.Context, decisionID string, decision *planning.Artifact, detail decisionresolution.NeedsHumanDetail) (*planning.Artifact, error) {
+		return decisiongraph.Pause(decision), nil
+	}
+
+	persist := &fakePersist{}
+	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, onNeedsHuman); err != nil {
+		t.Fatalf("Loop: %v", err)
+	}
+
+	if len(decisions) != 1 {
+		t.Fatalf("len(decisions) = %d, want 1 (no new Decision minted while the human decision pends)", len(decisions))
+	}
+	for _, inv := range backend.Invocations() {
+		if inv.Key == "planning-readiness-review" {
+			t.Fatalf("readiness review ran while a human decision was pending; the loop must halt instead")
+		}
+	}
+}
+
+// TestLoop_ReadinessDuplicateProposalDoesNotMintNewDecision proves a readiness
+// review that re-proposes a Decision already on file (same title) mints no
+// duplicate: the proposal is dropped and, with nothing genuinely new left, the
+// plan converges.
+func TestLoop_ReadinessDuplicateProposalDoesNotMintNewDecision(t *testing.T) {
+	goal := goalArtifact()
+	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}
+
+	d := questionDecision("Where does state live?")
+	d.ApprovedRevision = d.Revision // Ready, so the frontier is empty at once.
+	decisions := map[string]*planning.Artifact{"001-pick-storage": d}
+
+	backend := planningagent.NewFakeBackend()
+	backend.ProgramResult("planning-readiness-review", `{"status":"NOT_READY","decisions":[`+
+		`{"temp_key":"a","title":"Pick storage","question":"Where does state live, reworded?","depends_on":[],"consequential":true}`+
+		`]}`)
+
+	persist := &fakePersist{}
+	if err := wayfinding.Loop(context.Background(), backend, agent.RepositoryContext{BaseRevision: "base"}, goal, goalRef, decisions, persist.persist, nil); err != nil {
+		t.Fatalf("Loop: %v", err)
+	}
+
+	if len(decisions) != 1 {
+		t.Fatalf("len(decisions) = %d, want 1 (a re-proposed existing Decision must not mint a duplicate)", len(decisions))
+	}
+}
+
 func TestLoop_NeedsHumanWithoutHandlerReturnsError(t *testing.T) {
 	goal := goalArtifact()
 	goalRef := decisiongraph.GoalRef{ID: "goal", Revision: goal.Revision}

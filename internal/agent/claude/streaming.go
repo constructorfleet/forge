@@ -59,6 +59,7 @@ type streamMessage struct {
 type streamContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
@@ -248,6 +249,21 @@ func (p *streamParser) emitAssistantBlocks(msg *streamMessage, ts time.Time) {
 				Type:      agent.TranscriptEventMessage,
 				Role:      "assistant",
 				Text:      boundedTranscriptField(block.Text),
+				Timestamp: ts,
+			})
+		case "thinking":
+			// Extended-thinking blocks carry the model's reasoning. They are
+			// not part of the final text (they never enter p.assistant), but
+			// they are the most useful record of why a structured-output turn
+			// reached its result, so the transcript keeps them as their own
+			// role for the reader to expand.
+			if block.Thinking == "" {
+				continue
+			}
+			p.emit(agent.TranscriptEvent{
+				Type:      agent.TranscriptEventMessage,
+				Role:      "thinking",
+				Text:      boundedTranscriptField(block.Thinking),
 				Timestamp: ts,
 			})
 		case "tool_use":

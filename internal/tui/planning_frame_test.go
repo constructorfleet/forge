@@ -46,12 +46,12 @@ func TestPlanningLegalKeysNeverOffersCancel(t *testing.T) {
 	}
 }
 
-// TestRenderPlanningShowsStageHistoryWithOneLiveHead proves the planning
-// frame renders a strip of every recorded stage row and marks only the
-// newest one — the single live head — with the cursor, never claiming
-// liveness (no heartbeat glyph, no elapsed figure: only an absolute
-// "last activity at" timestamp).
-func TestRenderPlanningShowsStageHistoryWithOneLiveHead(t *testing.T) {
+// TestRenderPlanningShowsSingleCurrentStageLine proves the planning frame
+// collapses the stage strip to one line: the current stage (the newest
+// recorded row), the total attempt count, and an absolute activity time. It
+// never renders one line per attempt, so a stage that re-runs many times can
+// not grow the strip and push the transcript off screen.
+func TestRenderPlanningShowsSingleCurrentStageLine(t *testing.T) {
 	t1 := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	t2 := t1.Add(5 * time.Minute)
 	vm := tui.PlanningViewModel{
@@ -62,21 +62,42 @@ func TestRenderPlanningShowsStageHistoryWithOneLiveHead(t *testing.T) {
 	}
 	out := tui.RenderPlanning(vm)
 
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 rendered lines, got %d: %q", len(lines), out)
+	if strings.Contains(out, "decision-resolution") {
+		t.Fatalf("older stage rows must not render, got %q", out)
 	}
-	if !strings.HasPrefix(lines[0], " ") || !strings.Contains(lines[0], "decision-resolution") {
-		t.Fatalf("first row must be unmarked, got %q", lines[0])
+	if !strings.Contains(out, "> specification-generation") {
+		t.Fatalf("current stage must carry the cursor, got %q", out)
 	}
-	if !strings.HasPrefix(lines[1], ">") || !strings.Contains(lines[1], "specification-generation") {
-		t.Fatalf("newest row must carry the live-head cursor, got %q", lines[1])
+	if !strings.Contains(out, "attempt 2") {
+		t.Fatalf("stage line must show the total attempt count, got %q", out)
 	}
 	if strings.ContainsAny(out, "•×") {
 		t.Fatalf("planning render must claim no liveness glyph, got %q", out)
 	}
 	if !strings.Contains(out, "last activity at") {
 		t.Fatalf("detail strip must show an absolute last-activity timestamp, got %q", out)
+	}
+}
+
+// TestRenderPlanningShowsPendingDecisionInline proves the frame renders a
+// pending Decision's question and context inline while the answer control is
+// legal, so the operator reads the question without opening $EDITOR.
+func TestRenderPlanningShowsPendingDecisionInline(t *testing.T) {
+	vm := tui.PlanningViewModel{
+		Stages:           []tui.PlanningStageRow{{Stage: "decision-resolution"}},
+		AnswerLegal:      true,
+		DecisionQuestion: "Should autoapply proceed without a tracker issue?",
+		DecisionContext:  "The Feature slug is local-only.",
+	}
+	out := tui.RenderPlanning(vm)
+	if !strings.Contains(out, "decision needed") {
+		t.Fatalf("expected a decision-needed header, got %q", out)
+	}
+	if !strings.Contains(out, "Should autoapply proceed without a tracker issue?") {
+		t.Fatalf("expected the question inline, got %q", out)
+	}
+	if !strings.Contains(out, "The Feature slug is local-only.") {
+		t.Fatalf("expected the context inline, got %q", out)
 	}
 }
 

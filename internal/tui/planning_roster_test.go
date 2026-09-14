@@ -134,6 +134,36 @@ func TestPlanningRosterFetchGatesControlsFromLatestPlanningExecutionStatus(t *te
 	}
 }
 
+// TestPlanningRosterFetchReadsPendingDecisionForInlineDisplay proves a poll
+// that finds the Feature parked awaiting a Decision reads that Decision's
+// question and context into the view model, so the frame renders them inline.
+func TestPlanningRosterFetchReadsPendingDecisionForInlineDisplay(t *testing.T) {
+	store := &fakePlanningRosterStore{
+		executions: []domain.PlanningExecution{
+			{ID: "exec-1", FeatureID: "feat-1", Status: domain.PlanningStatusNeedsHuman, StartedAt: time.Now()},
+		},
+		checkpoints: map[string][]storage.DecisionCheckpoint{
+			"exec-1": {{
+				ExecutionID: "exec-1",
+				DecisionID:  "dec-1",
+				Question:    "Should autoapply proceed?",
+				Context:     "The Feature slug is local-only.",
+			}},
+		},
+	}
+	roster := tui.NewPlanningRoster(store)
+	vm, err := roster.Fetch(context.Background(), "feat-1")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if vm.DecisionQuestion != "Should autoapply proceed?" {
+		t.Fatalf("DecisionQuestion = %q, want the pending question", vm.DecisionQuestion)
+	}
+	if vm.DecisionContext != "The Feature slug is local-only." {
+		t.Fatalf("DecisionContext = %q, want the pending context", vm.DecisionContext)
+	}
+}
+
 // TestPlanningRosterFetchPicksLatestPlanningExecutionByOrder proves the
 // poller picks the last of several recorded Planning Executions (the store
 // returns them ordered by started_at, id), never the first, so a re-plan

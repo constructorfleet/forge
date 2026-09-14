@@ -81,9 +81,17 @@ func buildPrompt(pc planningagent.PlanningContext) string {
 	}
 
 	if len(pc.Decisions) > 0 {
-		b.WriteString("## Resolved decisions\n\n")
+		b.WriteString("## Decisions already surfaced\n\n")
+		b.WriteString("These questions are already on record. Do NOT propose a new decision that " +
+			"repeats or rewords any of them; a reworded repeat creates a duplicate that never " +
+			"converges. Only propose a genuinely new unknown not covered below.\n\n")
 		for _, d := range pc.Decisions {
-			fmt.Fprintf(&b, "- %s: %s\n", d.ID, d.Sections["Outcome"])
+			question := firstLine(d.Sections["Question"])
+			outcome := d.Sections["Outcome"]
+			if outcome == "" {
+				outcome = "(awaiting a human answer)"
+			}
+			fmt.Fprintf(&b, "- %s — %s → %s\n", d.ID, question, outcome)
 		}
 		b.WriteString("\n")
 	}
@@ -93,6 +101,15 @@ func buildPrompt(pc planningagent.PlanningContext) string {
 		`"question":"...","depends_on":["..."],"consequential":true}]}` + "\n")
 
 	return b.String()
+}
+
+// firstLine returns text up to its first newline, trimmed, so a multi-line
+// Decision question renders as one bullet in the prompt.
+func firstLine(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	}
+	return strings.TrimSpace(text)
 }
 
 // validateResult rejects a structured response InvokeStructured cannot

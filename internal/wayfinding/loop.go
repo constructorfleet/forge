@@ -103,6 +103,17 @@ func Loop(
 	for {
 		frontier := decisiongraph.Frontier(decisions)
 		if len(frontier) == 0 {
+			// A paused (needs-human) Decision blocks the plan until the operator
+			// answers it. Stop here rather than run the readiness review: the
+			// review is a fresh, memory-less pass that cannot see a paused
+			// Decision (it has no Outcome), so it re-surfaces the same unknown as
+			// a brand-new Decision every pass and never converges. The Planning
+			// Execution is already NEEDS_HUMAN (PauseHandler set it), so the
+			// caller stops for input; a resumed `forge plan` clears the answered
+			// Decisions' pause and the loop continues from here.
+			if hasPendingHuman(decisions) {
+				return nil
+			}
 			ready, err := runReadinessReview(ctx, backend, repo, goalArtifact, goalRef, decisions, persist)
 			if err != nil {
 				return err
@@ -149,11 +160,15 @@ func Loop(
 			return fmt.Errorf("wayfinding: persist %s: %w", targetID, err)
 		}
 
-		if len(res.NewUnknowns) == 0 {
+		// Drop any new unknown that only re-proposes a Decision already on file,
+		// so a re-surfaced question keeps its original ID (and the human answer
+		// keyed to it) instead of minting a duplicate.
+		newUnknowns := decisiongraph.DropAlreadyMaterialized(res.NewUnknowns, existingIDs(decisions))
+		if len(newUnknowns) == 0 {
 			continue
 		}
 
-		materialized, err := decisiongraph.Materialize(res.NewUnknowns, goalRef, existingIDs(decisions))
+		materialized, err := decisiongraph.Materialize(newUnknowns, goalRef, existingIDs(decisions))
 		if err != nil {
 			return fmt.Errorf("wayfinding: materialize new unknowns from %s: %w", targetID, err)
 		}
@@ -179,6 +194,19 @@ func compilePlanningContext(repo agent.RepositoryContext, goalArtifact *planning
 		artifacts = append(artifacts, planningagent.NamedArtifact{ID: id, Artifact: d})
 	}
 	return planningagent.Compile(repo, artifacts, humanInputs)
+}
+
+// hasPendingHuman reports that at least one Decision is paused awaiting a
+// human answer (decisiongraph.Pause set State to StateNeedsHuman). Loop uses
+// it to stop when the frontier empties only because paused Decisions were
+// dropped from it, rather than run a readiness review that cannot see them.
+func hasPendingHuman(decisions map[string]*planning.Artifact) bool {
+	for _, d := range decisions {
+		if d != nil && d.State == decisiongraph.StateNeedsHuman {
+			return true
+		}
+	}
+	return false
 }
 
 // existingIDs returns decisions' keys, sorted, for decisiongraph.Materialize's
@@ -229,7 +257,17 @@ func runReadinessReview(
 		return true, nil
 	}
 
-	materialized, err := decisiongraph.Materialize(res.Decisions, goalRef, existingIDs(decisions))
+	// A memory-less reviewer often re-proposes Decisions that already exist.
+	// Drop those before materializing, so a re-surfaced question keeps its
+	// original ID instead of minting a duplicate. If every proposal is a
+	// duplicate, the reviewer found nothing genuinely new, so the plan is
+	// ready -- treat it as such rather than loop on the same re-proposal.
+	proposals := decisiongraph.DropAlreadyMaterialized(res.Decisions, existingIDs(decisions))
+	if len(proposals) == 0 {
+		return true, nil
+	}
+
+	materialized, err := decisiongraph.Materialize(proposals, goalRef, existingIDs(decisions))
 	if err != nil {
 		return false, fmt.Errorf("wayfinding: materialize readiness review decisions: %w", err)
 	}
