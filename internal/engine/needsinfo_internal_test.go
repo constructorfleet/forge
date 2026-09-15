@@ -8,6 +8,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -150,5 +151,91 @@ func TestHandleNeedsInfo_NilTracker_LabelAddedReflectsNoLabelActuallyAdded(t *te
 	}
 	if cp.CommentPosted {
 		t.Error("checkpoint.CommentPosted = true, want false (no NeedsInfoTracker to post it)")
+	}
+}
+
+// TestHandleNeedsInfo_SetsSessionStatusNeedsInfo proves TKT-005's core
+// acceptance criterion at the handler level: handleNeedsInfo is the single
+// choke point every StatusNeedsInfo AgentResult (real or synthetic, see
+// escalateReviewToNeedsInfo) funnels through, so setting the Engine's
+// executeloop.Session status here covers every caller.
+func TestHandleNeedsInfo_SetsSessionStatusNeedsInfo(t *testing.T) {
+	store := &inMemoryStore{}
+	session := executeloop.NewSession()
+	e := &Engine{
+		Store:   store,
+		Config:  config.Default(),
+		Now:     time.Now,
+		Session: session,
+	}
+	result := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	}
+
+	if _, err := e.handleNeedsInfo(context.Background(), "exec-3", "11", "worker-1", result); err != nil {
+		t.Fatalf("handleNeedsInfo: %v", err)
+	}
+
+	if got := session.Status(); got != executeloop.StatusNeedsInfo {
+		t.Errorf("Session.Status() = %q, want %q", got, executeloop.StatusNeedsInfo)
+	}
+}
+
+// TestHandleNeedsInfo_NilSession_DoesNotPanic asserts Session is optional,
+// like NeedsInfoTracker and the other Engine collaborators wired in later
+// tickets: a caller who has not wired a Session yet keeps compiling and
+// running unchanged.
+func TestHandleNeedsInfo_NilSession_DoesNotPanic(t *testing.T) {
+	store := &inMemoryStore{}
+	e := &Engine{
+		Store:   store,
+		Config:  config.Default(),
+		Now:     time.Now,
+		Session: nil,
+	}
+	result := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	}
+
+	if _, err := e.handleNeedsInfo(context.Background(), "exec-4", "12", "worker-1", result); err != nil {
+		t.Fatalf("handleNeedsInfo: %v", err)
+	}
+}
+
+// TestHandleNeedsInfo_CalledTwice_SessionStaysSingleScalarStatus proves
+// TKT-005's "at most one outstanding NEEDS_INFO at a time" criterion: a
+// second NEEDS_INFO signal for the same Session does not create a separate
+// tracked request or identifier, since executeloop.Session holds a single
+// scalar status field, not a list keyed by ID (see executeloop.Session).
+func TestHandleNeedsInfo_CalledTwice_SessionStaysSingleScalarStatus(t *testing.T) {
+	store := &inMemoryStore{}
+	session := executeloop.NewSession()
+	e := &Engine{
+		Store:   store,
+		Config:  config.Default(),
+		Now:     time.Now,
+		Session: session,
+	}
+
+	first := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	}
+	if _, err := e.handleNeedsInfo(context.Background(), "exec-5", "13", "worker-1", first); err != nil {
+		t.Fatalf("first handleNeedsInfo: %v", err)
+	}
+
+	second := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "a different question entirely"},
+	}
+	if _, err := e.handleNeedsInfo(context.Background(), "exec-5", "13", "worker-1", second); err != nil {
+		t.Fatalf("second handleNeedsInfo: %v", err)
+	}
+
+	if got := session.Status(); got != executeloop.StatusNeedsInfo {
+		t.Errorf("Session.Status() = %q, want %q", got, executeloop.StatusNeedsInfo)
 	}
 }
