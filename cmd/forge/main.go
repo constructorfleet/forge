@@ -37,6 +37,7 @@ Commands:
   cancel <execution-id>    Stop an active Execution and mark running work CANCELLED
   retry <execution>/<issue> Retry a FAILED Issue within its Execution
   resume <execution-id>    Reconcile and continue an incomplete Execution
+  steer <loop-id> <message> Queue a steering message or NEEDS_INFO answer for a running loop
   goal init <feature-id>   Create a skeleton .forge/features/<feature-id>/goal.md
   plan <feature-id>        Run the planning compiler pipeline for a Feature
   approve <feature-id> spec   Approve a Specification at its current revision
@@ -79,6 +80,8 @@ func run(args []string) int {
 		return runRetry(rest)
 	case "resume":
 		return runResume(rest)
+	case "steer":
+		return runSteer(rest)
 	case "goal":
 		return runGoalInit(rest)
 	case "plan":

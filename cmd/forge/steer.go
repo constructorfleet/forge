@@ -1,0 +1,61 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/Teagan42/forge/internal/steering"
+)
+
+// steerer is the narrow seam doRunSteer enqueues through. steering.Registry
+// satisfies it in production; a test double lets doRunSteer's argument
+// parsing and output be verified without a real running loop.
+type steerer interface {
+	Steer(loopID, text string) error
+}
+
+// runSteer implements `forge steer <loop-id> <message...>`: it resolves
+// loop-id through steering.DefaultRegistry and enqueues a free-form
+// steering message or NEEDS_INFO answer onto the Queue registered there.
+//
+// No production code registers a running execute loop's Queue into
+// DefaultRegistry yet (constructorfleet/forge#746), so today every
+// loop-id resolves to steering.ErrLoopNotFound. This command establishes
+// the callable entry point Enqueue requires; wiring it to a real running
+// loop is #746's scope.
+func runSteer(args []string) int {
+	return doRunSteer(args, steering.DefaultRegistry, os.Stdout, os.Stderr)
+}
+
+// doRunSteer resolves the running loop named by args' first positional
+// argument and enqueues the remaining arguments (joined with spaces) as one
+// steering Message onto it. The message takes effect only at that loop's
+// next step boundary (internal/engine's runRepairLoop drains its Queue
+// there, between steps, never mid-step), so doRunSteer always reports the
+// message as queued, never applied — even when a step is currently running:
+// Steer returns as soon as the message is enqueued, without waiting for that
+// step to finish.
+func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("forge steer", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() < 2 {
+		fmt.Fprintln(stderr, "forge steer: expected two arguments, <loop-id> <message>")
+		return 2
+	}
+	loopID := fs.Arg(0)
+	text := strings.Join(fs.Args()[1:], " ")
+
+	if err := s.Steer(loopID, text); err != nil {
+		fmt.Fprintf(stderr, "forge steer: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "message queued for loop %s; it takes effect at that loop's next step boundary\n", loopID)
+	return 0
+}
