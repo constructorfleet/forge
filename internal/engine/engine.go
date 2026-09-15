@@ -962,6 +962,25 @@ func (e *Engine) drainSteeringFeedback() []agent.Feedback {
 	return []agent.Feedback{{Source: agent.FeedbackSourceSteering, Message: drained}}
 }
 
+// emitSteeringFeedback writes every STEERING-sourced Feedback entry to sink
+// (TKT-007) as a TranscriptEventSteering event, so a human-supplied steering
+// message or NEEDS_INFO answer is visible in the same persisted transcript,
+// under the same Seq-cursor contract, as the Agent's own events. Emit is
+// best-effort per ticket 28's contract, so this never fails the Agent
+// invocation in progress.
+func emitSteeringFeedback(sink agent.TranscriptSink, feedback []agent.Feedback) {
+	for _, fb := range feedback {
+		if fb.Source != agent.FeedbackSourceSteering {
+			continue
+		}
+		sink.Emit(agent.TranscriptEvent{
+			Type: agent.TranscriptEventSteering,
+			Role: "user",
+			Text: fb.Message,
+		})
+	}
+}
+
 // applyReviewOverrides suppresses any Finding this Issue has already been
 // escalated for as non-convergent (issue #375). The persisted
 // ReviewOverride is keyed by IssueID, not ExecutionID, so it is applied on
@@ -1227,6 +1246,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 		return domain.Issue{}, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
 	}
 	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now, func() { e.touchWorkerActivity(executionID, issueID) })
+	emitSteeringFeedback(req.Transcript, feedback)
 
 	agentCtx, cancel := context.WithTimeout(ctx, agentDeadlineMultiplier*e.Config.Agent.EffectiveTimeout())
 	defer cancel()
