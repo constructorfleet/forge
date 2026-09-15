@@ -163,14 +163,70 @@ func TestRunRepairLoop_PersistsSteeringMessageToTranscript(t *testing.T) {
 	}
 	var steeringEvents []storage.TranscriptEvent
 	for _, event := range events {
-		if event.Type == "STEERING" {
+		if event.Type == "user-steering" {
 			steeringEvents = append(steeringEvents, event)
 		}
 	}
 	if len(steeringEvents) != 1 {
-		t.Fatalf("got %d STEERING transcript events, want 1 (from %+v)", len(steeringEvents), events)
+		t.Fatalf("got %d user-steering transcript events, want 1 (from %+v)", len(steeringEvents), events)
 	}
 	if steeringEvents[0].Text != "steer during step 1" {
-		t.Errorf("STEERING transcript event Text = %q, want %q", steeringEvents[0].Text, "steer during step 1")
+		t.Errorf("user-steering transcript event Text = %q, want %q", steeringEvents[0].Text, "steer during step 1")
+	}
+}
+
+// TestRunRepairLoop_PersistsNeedsInfoAnswerToTranscriptWithDistinctTag proves
+// constructorfleet/forge#745's requirement: a Message drained from the
+// Queue with Kind KindAnswer is persisted to the transcript with a Type
+// distinguishing it from a free-form steering message's "user-steering" tag.
+func TestRunRepairLoop_PersistsNeedsInfoAnswerToTranscriptWithDistinctTag(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"53": {ID: "53"},
+	})
+	te.fake.ProgramResult("53", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := &flakyRunner{failUntil: 1}
+	te.gates.Set(runner)
+
+	queue := steering.NewQueue()
+	te.eng.Steering = queue
+	wrapped := &enqueueOnFirstCallAgent{
+		inner: te.eng.Agent,
+		queue: queue,
+		msg:   steering.Message{Text: "the answer is 42", Kind: steering.KindAnswer},
+	}
+	te.eng.Agent = wrapped
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "53", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
+	}
+
+	events, err := te.store.TranscriptEventsByIssue(ctx, result.ExecutionID, "53")
+	if err != nil {
+		t.Fatalf("TranscriptEventsByIssue: %v", err)
+	}
+	var answerEvents, steeringEvents []storage.TranscriptEvent
+	for _, event := range events {
+		switch event.Type {
+		case "user-answer":
+			answerEvents = append(answerEvents, event)
+		case "user-steering":
+			steeringEvents = append(steeringEvents, event)
+		}
+	}
+	if len(steeringEvents) != 0 {
+		t.Fatalf("got %d user-steering transcript events, want 0 (message was Kind answer): %+v", len(steeringEvents), events)
+	}
+	if len(answerEvents) != 1 {
+		t.Fatalf("got %d user-answer transcript events, want 1 (from %+v)", len(answerEvents), events)
+	}
+	if answerEvents[0].Text != "the answer is 42" {
+		t.Errorf("user-answer transcript event Text = %q, want %q", answerEvents[0].Text, "the answer is 42")
 	}
 }

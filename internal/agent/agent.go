@@ -161,6 +161,13 @@ const (
 	FeedbackSourceCI        FeedbackSource = "CI"
 	FeedbackSourceNeedsInfo FeedbackSource = "NEEDS_INFO"
 	FeedbackSourceSteering  FeedbackSource = "STEERING"
+	// FeedbackSourceSteeringAnswer identifies a NEEDS_INFO answer delivered
+	// through the steering Queue (a Message with Kind steering.KindAnswer),
+	// as opposed to FeedbackSourceNeedsInfo, which identifies an answer
+	// resumed through the tracker (see BuildResumedFeedback). Kept distinct
+	// so a steering-queue answer's transcript tag never depends on the
+	// unrelated tracker-resume path (constructorfleet/forge#745).
+	FeedbackSourceSteeringAnswer FeedbackSource = "STEERING_ANSWER"
 )
 
 // Feedback is one bounded diagnostic routed back to the Agent for a repair

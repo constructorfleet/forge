@@ -946,35 +946,81 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains e.Steering (if configured) and returns its
-// content as a single Feedback entry, or nil if e.Steering is unset or was
-// empty at the time of the call. runRepairLoop calls this once per
-// iteration, at the step boundary between iterations — never while a step
-// is in progress.
+// drainSteeringFeedback drains e.Steering (if configured) and returns one
+// Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
+// nil if e.Steering is unset or was empty at the time of the call. A run's
+// Messages are joined into one Feedback.Message with a newline between each,
+// matching Queue.DrainAll's join, and its Source names the Kind
+// (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.
+// KindSteering becomes FeedbackSourceSteering — see feedbackSourceForKind)
+// so a later NEEDS_INFO answer is never merged into a steering message's
+// transcript tag, or vice versa (constructorfleet/forge#745). runRepairLoop
+// calls this once per iteration, at the step boundary between iterations —
+// never while a step is in progress.
 func (e *Engine) drainSteeringFeedback() []agent.Feedback {
 	if e.Steering == nil {
 		return nil
 	}
-	drained := e.Steering.DrainAll()
-	if drained == "" {
+	messages := e.Steering.Drain()
+	if len(messages) == 0 {
 		return nil
 	}
-	return []agent.Feedback{{Source: agent.FeedbackSourceSteering, Message: drained}}
+	var feedback []agent.Feedback
+	runKind := messages[0].Kind
+	var run []string
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		feedback = append(feedback, agent.Feedback{
+			Source:  feedbackSourceForKind(runKind),
+			Message: strings.Join(run, "\n"),
+		})
+		run = nil
+	}
+	for _, msg := range messages {
+		if msg.Kind != runKind {
+			flush()
+			runKind = msg.Kind
+		}
+		run = append(run, msg.Text)
+	}
+	flush()
+	return feedback
 }
 
-// emitSteeringFeedback writes every STEERING-sourced Feedback entry to sink
-// (TKT-007) as a TranscriptEventSteering event, so a human-supplied steering
-// message or NEEDS_INFO answer is visible in the same persisted transcript,
-// under the same Seq-cursor contract, as the Agent's own events. Emit is
-// best-effort per ticket 28's contract, so this never fails the Agent
-// invocation in progress.
+// feedbackSourceForKind maps a drained steering.Message's Kind to the
+// agent.FeedbackSource emitSteeringFeedback keys its transcript Type off of
+// (constructorfleet/forge#745).
+func feedbackSourceForKind(kind steering.Kind) agent.FeedbackSource {
+	if kind == steering.KindAnswer {
+		return agent.FeedbackSourceSteeringAnswer
+	}
+	return agent.FeedbackSourceSteering
+}
+
+// emitSteeringFeedback writes every steering-queue-sourced Feedback entry to
+// sink (TKT-007) as a transcript event, so a human-supplied steering message
+// or NEEDS_INFO answer is visible in the same persisted transcript, under
+// the same Seq-cursor contract, as the Agent's own events. The event Type
+// distinguishes the two: FeedbackSourceSteering becomes
+// TranscriptEventUserSteering ("user-steering"), FeedbackSourceSteeringAnswer
+// becomes TranscriptEventUserAnswer ("user-answer") (constructorfleet/
+// forge#745). Emit is best-effort per ticket 28's contract, so this never
+// fails the Agent invocation in progress.
 func emitSteeringFeedback(sink agent.TranscriptSink, feedback []agent.Feedback) {
 	for _, fb := range feedback {
-		if fb.Source != agent.FeedbackSourceSteering {
+		var eventType agent.TranscriptEventType
+		switch fb.Source {
+		case agent.FeedbackSourceSteering:
+			eventType = agent.TranscriptEventUserSteering
+		case agent.FeedbackSourceSteeringAnswer:
+			eventType = agent.TranscriptEventUserAnswer
+		default:
 			continue
 		}
 		sink.Emit(agent.TranscriptEvent{
-			Type: agent.TranscriptEventSteering,
+			Type: eventType,
 			Role: "user",
 			Text: fb.Message,
 		})
