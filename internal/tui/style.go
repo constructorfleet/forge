@@ -15,6 +15,9 @@ import "charm.land/lipgloss/v2"
 type Style struct {
 	// Message styles an assistant MESSAGE entry's header.
 	Message lipgloss.Style
+	// Thinking styles an extended-thinking MESSAGE entry's header, so the
+	// model's reasoning reads apart from its final voice.
+	Thinking lipgloss.Style
 	// Tool styles a TOOL_CALL or TOOL_RESULT entry's header.
 	Tool lipgloss.Style
 	// Truncation styles the reader-side eviction marker, the Agent's own
@@ -44,6 +47,7 @@ type Style struct {
 func DefaultStyle() Style {
 	return Style{
 		Message:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Thinking:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true),
 		Tool:       lipgloss.NewStyle().Faint(true),
 		Truncation: lipgloss.NewStyle().Faint(true),
 		GatePass:   lipgloss.NewStyle().Foreground(lipgloss.Color("2")),

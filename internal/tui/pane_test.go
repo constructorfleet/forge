@@ -867,6 +867,78 @@ func TestPaneEmptyToolOutputHasNoBlankLine(t *testing.T) {
 	}
 }
 
+// thinking builds a thinking MESSAGE pane event.
+func thinking(seq int, text string) tui.TranscriptEvent {
+	return tui.TranscriptEvent{Seq: seq, Type: "MESSAGE", Role: "thinking", Text: text}
+}
+
+// TestPaneStructuredOutputSummarizesInput proves a collapsed StructuredOutput
+// call shows the decision it recorded (outcome plus rationale) instead of the
+// "provided successfully" boilerplate its result carries.
+func TestPaneStructuredOutputSummarizesInput(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "StructuredOutput", `{"outcome":"autoapply","rationale":"No tracker issue is present.\nDefault applies."}`),
+		result(1, "t1", "StructuredOutput", "Structured output provided successfully"),
+	}})
+
+	got := tui.RenderTranscript(pane)
+	if !strings.Contains(got, "outcome: autoapply") {
+		t.Errorf("collapsed StructuredOutput must show the outcome, got:\n%s", got)
+	}
+	if !strings.Contains(got, "No tracker issue is present.") {
+		t.Errorf("collapsed StructuredOutput must show the rationale first line, got:\n%s", got)
+	}
+	if strings.Contains(got, "provided successfully") {
+		t.Errorf("collapsed StructuredOutput must not show the result boilerplate, got:\n%s", got)
+	}
+}
+
+// TestPaneStructuredOutputNamesSchemaRetry proves a rejected StructuredOutput
+// attempt (a schema mismatch) reads as a named retry, so the reader sees the
+// wasted turn rather than a blank success line.
+func TestPaneStructuredOutputNamesSchemaRetry(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		call(0, "t1", "StructuredOutput", `{"outcome":"autoapply"}`),
+		result(1, "t1", "StructuredOutput", "Output does not match required schema: root: must have required property 'rationale'"),
+	}})
+
+	got := tui.RenderTranscript(pane)
+	if !strings.Contains(got, "schema retry") {
+		t.Errorf("a schema mismatch must read as a schema retry, got:\n%s", got)
+	}
+}
+
+// TestPaneThinkingGlyphAndExpand proves a thinking message carries its own
+// glyph, collapses to its first line, and expands to its whole reasoning.
+func TestPaneThinkingGlyphAndExpand(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		thinking(0, "First the default.\nThen the exception."),
+	}})
+
+	collapsed := tui.RenderTranscript(pane)
+	if !strings.Contains(collapsed, "∴") {
+		t.Errorf("thinking must carry its own glyph, got:\n%s", collapsed)
+	}
+	if !strings.Contains(collapsed, "First the default.") {
+		t.Errorf("thinking must collapse to its first line, got:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "Then the exception.") {
+		t.Errorf("collapsed thinking must not leak later lines, got:\n%s", collapsed)
+	}
+
+	if !pane.CanExpand() {
+		t.Fatalf("a multiline thinking message must be expandable")
+	}
+	pane.ToggleExpand()
+	expanded := tui.RenderTranscript(pane)
+	if !strings.Contains(expanded, "Then the exception.") {
+		t.Errorf("expanded thinking must show its whole reasoning, got:\n%s", expanded)
+	}
+}
+
 // nonEmptyLines splits a render into its non-blank lines.
 func nonEmptyLines(s string) []string {
 	var out []string

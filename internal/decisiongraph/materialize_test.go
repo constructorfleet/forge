@@ -127,6 +127,40 @@ func TestMaterialize_ContinuesNumberingAndAvoidsSlugCollisions(t *testing.T) {
 	}
 }
 
+func TestDropAlreadyMaterialized_DropsTitleMatchAcrossDisambiguatedIDs(t *testing.T) {
+	existing := []string{
+		"001-pick-storage",
+		"004-pick-storage-2",
+		"012-target-destinations-7",
+		"020-per-application-customization-3",
+	}
+	proposed := []planningsurvey.ProposedDecision{
+		// Same title as an existing Decision (reworded question) -> dropped.
+		{TempKey: "a", Title: "Pick storage", Question: "Where does state live, again?", Consequential: true},
+		// Same title as a disambiguated existing Decision -> dropped.
+		{TempKey: "b", Title: "Target destinations", Question: "Which destinations?", Consequential: true},
+		// A genuinely new unknown -> kept.
+		{TempKey: "c", Title: "Rate limiting", Question: "How do we throttle?", Consequential: true},
+	}
+
+	kept := decisiongraph.DropAlreadyMaterialized(proposed, existing)
+	if len(kept) != 1 {
+		t.Fatalf("kept %d proposals, want 1 (only the genuinely new one): %+v", len(kept), kept)
+	}
+	if kept[0].TempKey != "c" {
+		t.Errorf("kept[0].TempKey = %q, want c (the new unknown)", kept[0].TempKey)
+	}
+}
+
+func TestDropAlreadyMaterialized_KeepsAllWhenNoExisting(t *testing.T) {
+	proposed := []planningsurvey.ProposedDecision{
+		{TempKey: "a", Title: "Pick storage", Consequential: true},
+	}
+	if kept := decisiongraph.DropAlreadyMaterialized(proposed, nil); len(kept) != 1 {
+		t.Fatalf("kept %d proposals, want 1 (nothing to dedup against)", len(kept))
+	}
+}
+
 func TestMaterialize_DuplicateTempKeyErrors(t *testing.T) {
 	proposed := []planningsurvey.ProposedDecision{
 		{TempKey: "a", Title: "A", Consequential: true},

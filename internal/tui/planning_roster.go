@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/planningagent"
 	"github.com/Teagan42/forge/internal/storage"
 )
@@ -76,7 +77,29 @@ func (r *PlanningRoster) Fetch(ctx context.Context, featureID string) (PlanningV
 	}
 
 	vm.ApproveLegal, vm.AnswerLegal, vm.latestExecutionID = r.legality(ctx, featureID)
+	if vm.AnswerLegal {
+		vm.DecisionQuestion, vm.DecisionContext = r.pendingDecision(ctx, vm.latestExecutionID)
+	}
 	return vm, nil
+}
+
+// pendingDecision reads the pending Decision the answer control replies to and
+// returns its question and context, comment markers stripped, for the frame to
+// render inline. A read failure or a resolved Decision returns empty strings:
+// the roster is an observer, so it never aborts a poll on this read.
+func (r *PlanningRoster) pendingDecision(ctx context.Context, executionID string) (question, contextText string) {
+	if executionID == "" {
+		return "", ""
+	}
+	checkpoint, err := pendingDecisionCheckpoint(ctx, r.Store, executionID)
+	if err != nil {
+		return "", ""
+	}
+	question = stripCommentMarker(checkpoint.Question, needsinfo.KindNeedsHuman, checkpoint.ExecutionID, checkpoint.DecisionID)
+	if checkpoint.Context != "" {
+		contextText = stripCommentMarker(checkpoint.Context, needsinfo.KindNeedsHuman, checkpoint.ExecutionID, checkpoint.DecisionID)
+	}
+	return question, contextText
 }
 
 // stageLabel reads run's transcript events for the subagent Key that names

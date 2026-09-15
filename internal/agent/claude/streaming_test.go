@@ -68,6 +68,34 @@ func TestParseStreamTranscript_EmitsEventsAndReturnsFinalText(t *testing.T) {
 	}
 }
 
+// TestParseStreamTranscript_EmitsThinkingBlocks proves an extended-thinking
+// block is captured as a MESSAGE with role "thinking", so the transcript
+// keeps the model's reasoning. The reasoning is not part of the final text: a
+// structured-output turn that only thinks and then calls a tool still returns
+// its tool result as the final text, not the thinking.
+func TestParseStreamTranscript_EmitsThinkingBlocks(t *testing.T) {
+	transcript := `{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The Feature has no tracker issue, so autoapply is the default."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"StructuredOutput","input":{"outcome":"autoapply"}}]}}
+{"type":"result","subtype":"success","result":"done"}
+`
+	recorder := agent.NewTranscriptRecorder()
+	if _, ok := parseStreamTranscript(transcript, recorder, time.Now); !ok {
+		t.Fatalf("parseStreamTranscript reported ok=false, want true")
+	}
+
+	events := recorder.Events()
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3 (system init, thinking, tool call): %+v", len(events), events)
+	}
+	if events[1].Type != agent.TranscriptEventMessage || events[1].Role != "thinking" {
+		t.Fatalf("events[1] = %+v, want a thinking message", events[1])
+	}
+	if !strings.Contains(events[1].Text, "autoapply is the default") {
+		t.Fatalf("events[1].Text = %q, want the reasoning captured", events[1].Text)
+	}
+}
+
 // TestParseStreamTranscript_PerEventTimestampsAreDistinctAndMonotonic is
 // issue 36's core fix: occurred_at must come from each stream event's own
 // timestamp, not a single persist-time stamp shared by every row. A real

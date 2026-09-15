@@ -4,7 +4,9 @@ package tui
 // state.
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,8 +23,14 @@ const (
 	eventTruncation = "TRUNCATION"
 )
 
+// roleThinking marks a MESSAGE event that carries the model's extended
+// thinking rather than its final voice. The Claude adapter stamps it (see
+// streaming.go), so the pane renders the reasoning apart from a plain message.
+const roleThinking = "thinking"
+
 // TranscriptGlyph maps one event to its single-rune column. Prose carries no
-// glyph, so a message reads as the Agent's own voice and not as machinery.
+// glyph, so a message reads as the Agent's own voice and not as machinery;
+// thinking carries its own mark so the reasoning reads apart from that voice.
 func TranscriptGlyph(e TranscriptEvent) string {
 	switch e.Type {
 	case eventToolCall:
@@ -32,6 +40,9 @@ func TranscriptGlyph(e TranscriptEvent) string {
 	case eventTruncation:
 		return "░"
 	default:
+		if e.Role == roleThinking {
+			return "∴"
+		}
 		return " "
 	}
 }
@@ -65,6 +76,17 @@ type TranscriptEntry struct {
 
 // IsToolCall reports that the entry is a tool call.
 func (e TranscriptEntry) IsToolCall() bool { return e.Gate == nil && e.Event.Type == eventToolCall }
+
+// isMultilineMessage reports that the entry is a MESSAGE whose text has more
+// than one line, so an expansion reveals text the collapsed first line hides.
+// A thinking block is the common case: the reader collapses to its first line
+// and expands to read the whole reasoning.
+func (e TranscriptEntry) isMultilineMessage() bool {
+	if e.Gate != nil || e.Event.Type != eventMessage {
+		return false
+	}
+	return strings.Contains(strings.TrimRight(e.Event.Text, "\n"), "\n")
+}
 
 // IsGate reports that the entry is a synthetic quality-gate row.
 func (e TranscriptEntry) IsGate() bool { return e.Gate != nil }
@@ -412,8 +434,9 @@ func (p *TranscriptPane) requestScroll(n int) bool {
 	return true
 }
 
-// ToggleExpand expands the selected tool call, or collapses it when it is
-// already expanded. Entries that are not tool calls have nothing to expand.
+// ToggleExpand expands the selected entry, or collapses it when it is already
+// expanded. An entry that CanExpand rejects (not a tool call, gate, or
+// multiline message) has nothing to expand.
 func (p *TranscriptPane) ToggleExpand() {
 	if !p.CanExpand() {
 		return
@@ -428,10 +451,11 @@ func (p *TranscriptPane) ToggleExpand() {
 // Expanded reports that the entry at index i renders expanded.
 func (p *TranscriptPane) Expanded(i int) bool { return i != noSelection && p.expanded == i }
 
-// CanExpand reports that the selection expands: a tool call or a gate row.
+// CanExpand reports that the selection expands: a tool call, a gate row, or a
+// multiline message (a thinking block is the common case).
 func (p *TranscriptPane) CanExpand() bool {
 	e, ok := p.SelectedEntry()
-	return ok && (e.IsToolCall() || e.IsGate())
+	return ok && (e.IsToolCall() || e.IsGate() || e.isMultilineMessage())
 }
 
 // SelectedEntry returns the selected entry. The bool is false on an empty pane.
@@ -750,8 +774,36 @@ func entryLines(e TranscriptEntry, selected, expanded bool, style Style) []strin
 	case eventTruncation:
 		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: truncationText(e.Event.Text)}, style.Truncation, style.Axis)}
 	default:
-		return []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)}, style.Message, style.Axis)}
+		return messageLines(e, cur, glyph, expanded, style)
 	}
+}
+
+// messageLines renders a MESSAGE entry. A thinking message uses the thinking
+// style and, when expanded, shows its whole reasoning block; a plain message
+// collapses to its first line and expands to its whole text, both in the
+// message style.
+func messageLines(e TranscriptEntry, cur, glyph string, expanded bool, style Style) []string {
+	textStyle := style.Message
+	if e.Event.Role == roleThinking {
+		textStyle = style.Thinking
+	}
+	head := header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: firstLine(e.Event.Text)}, textStyle, style.Axis)
+	if !expanded {
+		return []string{head}
+	}
+	// The header already shows the first line, so the expansion adds only the
+	// lines after it.
+	return append([]string{head}, indentedBlock(restLines(e.Event.Text))...)
+}
+
+// restLines returns text with its first line removed, so an expanded message
+// does not repeat the first line already shown in its header. It returns an
+// empty string when text has no line after the first.
+func restLines(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[i+1:]
+	}
+	return ""
 }
 
 // toolCallLines renders a tool call: collapsed to its name plus the first
@@ -761,6 +813,13 @@ func entryLines(e TranscriptEntry, selected, expanded bool, style Style) []strin
 func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style Style) []string {
 	lines := []string{header(headerParts{cursor: cur, glyph: glyph, axis: e.Event.Subagent, text: e.Event.ToolName}, style.Tool, style.Axis)}
 	if !expanded {
+		// A StructuredOutput call's own result is boilerplate ("provided
+		// successfully") or a schema-retry error. The reader wants the
+		// decision itself, so the collapsed line summarizes the call input, or
+		// names a schema retry, instead of that boilerplate.
+		if s, ok := structuredOutputSummary(e); ok {
+			return append(lines, indented(s))
+		}
 		if e.Result != nil {
 			lines = withFirstOutput(lines, e.Result.ToolOutput)
 		}
@@ -772,6 +831,99 @@ func toolCallLines(e TranscriptEntry, cur, glyph string, expanded bool, style St
 		lines = append(lines, indentedBlock(e.Result.ToolOutput)...)
 	}
 	return lines
+}
+
+// structuredOutputSummary summarizes a StructuredOutput tool call for the
+// collapsed view. It reports a schema retry when the call's result names one
+// (that churn is the useful signal), otherwise it summarizes the call input —
+// the decision the model recorded. ok is false for any other tool, so the
+// caller keeps its default rendering.
+func structuredOutputSummary(e TranscriptEntry) (string, bool) {
+	if e.Event.ToolName != "StructuredOutput" {
+		return "", false
+	}
+	if e.Result != nil && isSchemaRetry(e.Result.ToolOutput) {
+		return "schema retry: " + firstLine(e.Result.ToolOutput), true
+	}
+	return summarizeStructuredInput(e.Event.ToolInput), true
+}
+
+// isSchemaRetry reports that a StructuredOutput result records a rejected
+// attempt: a schema mismatch or an input the tool could not parse as JSON.
+// Each one is a wasted turn, so the reader sees it named rather than hidden.
+func isSchemaRetry(output string) bool {
+	return strings.Contains(output, "does not match required schema") ||
+		strings.Contains(output, "could not be parsed")
+}
+
+// summarizeStructuredInput renders a one-line summary of a StructuredOutput
+// call's JSON input. It prefers a salient decision field (outcome, then a set
+// of common alternates), and appends the first line of the rationale when one
+// is present. Input that is not a JSON object, or holds none of the known
+// fields, falls back to the field names it does hold, so the line is never
+// blank.
+func summarizeStructuredInput(input string) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &fields); err != nil || len(fields) == 0 {
+		if s := firstLine(input); s != "" {
+			return s
+		}
+		return "(no output recorded)"
+	}
+	lead := ""
+	for _, key := range []string{"outcome", "decision", "verdict", "status", "summary"} {
+		if v, ok := stringField(fields, key); ok {
+			lead = key + ": " + v
+			break
+		}
+	}
+	rationale := ""
+	for _, key := range []string{"rationale", "reason", "reasoning"} {
+		if v, ok := stringField(fields, key); ok {
+			rationale = firstLine(v)
+			break
+		}
+	}
+	switch {
+	case lead != "" && rationale != "":
+		return lead + " — " + rationale
+	case lead != "":
+		return lead
+	case rationale != "":
+		return rationale
+	default:
+		return "fields: " + strings.Join(sortedKeys(fields), ", ")
+	}
+}
+
+// stringField returns the named field of fields as a trimmed string when it is
+// present and holds a JSON string. A non-string field (an object or array) is
+// reported absent, so the summary never prints a raw JSON fragment.
+func stringField(fields map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := fields[key]
+	if !ok {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// sortedKeys returns the map's keys in a stable order, so a fallback summary
+// renders the same line every poll.
+func sortedKeys(fields map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // withFirstOutput adds the first output line under an entry. A tool that
