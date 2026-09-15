@@ -29,6 +29,32 @@ func TestQueue_DrainReturnsMessagesInEnqueueOrder(t *testing.T) {
 	}
 }
 
+// TestQueue_DrainPreservesKind proves a Message's Kind survives Enqueue and
+// Drain unchanged, so a caller can tell a free-form steering instruction
+// (KindSteering, also the zero value) from a NEEDS_INFO answer (KindAnswer)
+// after draining (constructorfleet/forge#745).
+func TestQueue_DrainPreservesKind(t *testing.T) {
+	q := steering.NewQueue()
+
+	q.Enqueue(steering.Message{Text: "steer this way"})
+	q.Enqueue(steering.Message{Text: "42", Kind: steering.KindAnswer})
+
+	got := q.Drain()
+
+	want := []steering.Message{
+		{Text: "steer this way", Kind: steering.KindSteering},
+		{Text: "42", Kind: steering.KindAnswer},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Drain() returned %d messages, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Drain()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestQueue_DrainEmptiesTheQueue(t *testing.T) {
 	q := steering.NewQueue()
 	q.Enqueue(steering.Message{Text: "only"})

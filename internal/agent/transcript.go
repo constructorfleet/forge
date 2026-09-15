@@ -25,11 +25,17 @@ const (
 	// front, that what follows is the most-recent window rather than an
 	// unlabelled sliver.
 	TranscriptEventTruncation TranscriptEventType = "TRUNCATION"
-	// TranscriptEventSteering marks a human-supplied steering message or
-	// NEEDS_INFO answer injected into an Agent invocation's context (TKT-007),
-	// distinguishing it from the Agent's own MESSAGE/TOOL_CALL/TOOL_RESULT
-	// entries. Its Role is "user".
-	TranscriptEventSteering TranscriptEventType = "STEERING"
+	// TranscriptEventUserSteering marks a human-supplied, free-form
+	// steering message injected into an Agent invocation's context
+	// (TKT-007), distinguishing it from the Agent's own MESSAGE/TOOL_CALL/
+	// TOOL_RESULT entries and from TranscriptEventUserAnswer. Its Role is
+	// "user".
+	TranscriptEventUserSteering TranscriptEventType = "user-steering"
+	// TranscriptEventUserAnswer marks a human-supplied NEEDS_INFO answer
+	// injected into an Agent invocation's context (TKT-007/constructorfleet/
+	// forge#745), distinguishing it from a free-form
+	// TranscriptEventUserSteering message. Its Role is "user".
+	TranscriptEventUserAnswer TranscriptEventType = "user-answer"
 )
 
 // TranscriptEvent is one observed step of an Agent's work on an Issue: a

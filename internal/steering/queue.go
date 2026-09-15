@@ -8,10 +8,26 @@ import (
 	"sync"
 )
 
+// Kind distinguishes what a Message carries: a free-form steering
+// instruction, or a NEEDS_INFO answer from a human. KindSteering is the
+// zero value, so a Message built without setting Kind is a steering
+// instruction, matching every call site written before Kind existed
+// (constructorfleet/forge#745).
+type Kind string
+
+const (
+	// KindSteering marks a free-form steering instruction.
+	KindSteering Kind = ""
+	// KindAnswer marks a NEEDS_INFO answer from a human.
+	KindAnswer Kind = "answer"
+)
+
 // Message is one steering input queued for the execute loop: a free-form
-// steering instruction or a NEEDS_INFO answer from a human.
+// steering instruction or a NEEDS_INFO answer from a human, told apart by
+// Kind.
 type Message struct {
 	Text string
+	Kind Kind
 }
 
 // Queue is a thread-safe FIFO queue of steering Messages. A caller enqueues
