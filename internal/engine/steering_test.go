@@ -8,6 +8,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/steering"
+	"github.com/Teagan42/forge/internal/storage"
 )
 
 // enqueueOnFirstCallAgent wraps an agent.Agent and enqueues one steering
@@ -121,5 +122,55 @@ func TestRunRepairLoop_EmptyQueueLeavesFeedbackUnchanged(t *testing.T) {
 	}
 	if len(invocations[1].Feedback) != 1 || invocations[1].Feedback[0].Source != agent.FeedbackSourceGate {
 		t.Fatalf("repair invocation Feedback = %+v, want exactly 1 GATE entry, no STEERING", invocations[1].Feedback)
+	}
+}
+
+// TestRunRepairLoop_PersistsSteeringMessageToTranscript proves TKT-007's
+// acceptance criteria: a Message drained from the Queue and injected into
+// the next step's Feedback is also written to the transcript store, tagged
+// with a Type distinguishing it from agent-generated transcript entries.
+func TestRunRepairLoop_PersistsSteeringMessageToTranscript(t *testing.T) {
+	te := newTestEngine(t, map[string]domain.Issue{
+		"52": {ID: "52"},
+	})
+	te.fake.ProgramResult("52", agent.AgentResult{Status: agent.StatusImplemented})
+	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	runner := &flakyRunner{failUntil: 1}
+	te.gates.Set(runner)
+
+	queue := steering.NewQueue()
+	te.eng.Steering = queue
+	wrapped := &enqueueOnFirstCallAgent{
+		inner: te.eng.Agent,
+		queue: queue,
+		msg:   steering.Message{Text: "steer during step 1"},
+	}
+	te.eng.Agent = wrapped
+
+	ctx := context.Background()
+	result, err := te.eng.Execute(ctx, "52", te.base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Issue.State != domain.StateCommitting {
+		t.Fatalf("final state = %s, want COMMITTING", result.Issue.State)
+	}
+
+	events, err := te.store.TranscriptEventsByIssue(ctx, result.ExecutionID, "52")
+	if err != nil {
+		t.Fatalf("TranscriptEventsByIssue: %v", err)
+	}
+	var steeringEvents []storage.TranscriptEvent
+	for _, event := range events {
+		if event.Type == "STEERING" {
+			steeringEvents = append(steeringEvents, event)
+		}
+	}
+	if len(steeringEvents) != 1 {
+		t.Fatalf("got %d STEERING transcript events, want 1 (from %+v)", len(steeringEvents), events)
+	}
+	if steeringEvents[0].Text != "steer during step 1" {
+		t.Errorf("STEERING transcript event Text = %q, want %q", steeringEvents[0].Text, "steer during step 1")
 	}
 }
