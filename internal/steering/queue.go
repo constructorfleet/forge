@@ -3,7 +3,10 @@
 // time, including while a step is executing.
 package steering
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // Message is one steering input queued for the execute loop: a free-form
 // steering instruction or a NEEDS_INFO answer from a human.
@@ -43,4 +46,19 @@ func (q *Queue) Drain() []Message {
 	drained := q.messages
 	q.messages = nil
 	return drained
+}
+
+// DrainAll removes all queued Messages and returns their text concatenated,
+// in FIFO order, with a newline between each message. It leaves the queue
+// empty and returns an empty string if the queue is empty.
+func (q *Queue) DrainAll() string {
+	messages := q.Drain()
+	if len(messages) == 0 {
+		return ""
+	}
+	texts := make([]string, len(messages))
+	for i, msg := range messages {
+		texts[i] = msg.Text
+	}
+	return strings.Join(texts, "\n")
 }
