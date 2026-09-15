@@ -34,6 +34,7 @@ import (
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/semantic"
 	"github.com/Teagan42/forge/internal/statusreflect"
+	"github.com/Teagan42/forge/internal/steering"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/textcap"
 	"github.com/Teagan42/forge/internal/tracker"
@@ -169,6 +170,18 @@ type Engine struct {
 	// or reopened planning Decision (ticket 22). Optional like
 	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
 	ReplanDecisions ReplanDecisionRecorder
+
+	// Steering is the steering.Queue holding free-form steering messages and
+	// NEEDS_INFO answers enqueued for this Engine's execute loop (TKT-001/
+	// TKT-002, constructorfleet/forge#732). runRepairLoop drains it once per
+	// iteration, at the top of the loop — after the previous step fully
+	// completed and before the next step starts. Drained text is folded into
+	// that step's Agent Feedback only when the iteration proceeds into a
+	// repair (a failed gate or a CHANGES_REQUIRED review verdict); if gates
+	// pass and review approves, the drained text for that iteration is
+	// discarded. Optional: nil disables draining entirely, leaving loop
+	// behavior unchanged for existing callers of New.
+	Steering *steering.Queue
 
 	// Backend is the ExecutionBackend cmd/forge selects from
 	// Config.Execution.Backend (issue #304, constructorfleet/forge#285:
@@ -811,6 +824,13 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	// local slice is exactly the retry history the check needs.
 	var previousReviewFindings []review.Finding
 	for {
+		// Drained once per iteration, at the very top of the loop — after
+		// the previous iteration's step (gate run, review, and any repair
+		// Agent invocation) has fully completed, and before this iteration's
+		// step starts. A message enqueued while that previous step was still
+		// executing is picked up here, never mid-step.
+		steeringFeedback := e.drainSteeringFeedback()
+
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateValidating)
 		if err != nil {
 			return domain.Issue{}, err
@@ -822,7 +842,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		}
 
 		if !gatesPassed {
-			feedback := []agent.Feedback{gate.BuildFeedback(*failedGate)}
+			feedback := append([]agent.Feedback{gate.BuildFeedback(*failedGate)}, steeringFeedback...)
 			issue, retried, err := e.repair(ctx, executionID, issueID, env, repoCtx, issue,
 				issue.RetryBudget.GateExhausted(),
 				func() (domain.Issue, error) {
@@ -871,7 +891,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			return resting, nil
 		}
 
-		feedback := review.BuildFeedback(findings)
+		feedback := append(review.BuildFeedback(findings), steeringFeedback...)
 
 		// The "review.findings_routed" Event is the missing link issue
 		// #222 flagged: "review.run" (storage.appendReviewRunEvent) already
@@ -914,6 +934,22 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 			return issue, nil
 		}
 	}
+}
+
+// drainSteeringFeedback drains e.Steering (if configured) and returns its
+// content as a single Feedback entry, or nil if e.Steering is unset or was
+// empty at the time of the call. runRepairLoop calls this once per
+// iteration, at the step boundary between iterations — never while a step
+// is in progress.
+func (e *Engine) drainSteeringFeedback() []agent.Feedback {
+	if e.Steering == nil {
+		return nil
+	}
+	drained := e.Steering.DrainAll()
+	if drained == "" {
+		return nil
+	}
+	return []agent.Feedback{{Source: agent.FeedbackSourceSteering, Message: drained}}
 }
 
 // applyReviewOverrides suppresses any Finding this Issue has already been
