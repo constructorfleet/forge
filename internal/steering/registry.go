@@ -16,45 +16,70 @@ var ErrLoopNotFound = errors.New("steering: loop not found")
 // RPC handler) can later reach the right Queue by loop identifier alone,
 // without holding a reference to the loop itself.
 //
-// No production code calls Register or Unregister yet: internal/engine
-// does not register a running loop's Queue into DefaultRegistry, and
-// forge execute and a separately-invoked forge steer run as distinct OS
-// processes with independent DefaultRegistry instances in any case, so
-// even same-process registration would not let `forge steer` reach a loop
-// started by a different forge execute invocation. Wiring registration,
-// and deciding whether cross-process delivery needs a store-backed relay
-// (the pattern forge cancel uses), is tracked in
-// constructorfleet/forge#746.
+// internal/engine's ExecuteInExecution registers a running loop's Queue
+// into DefaultRegistry under its Execution ID (constructorfleet/forge#746),
+// so `forge steer <execution-id>` reaches a loop running in the same
+// process. forge execute and a separately-invoked forge steer still run as
+// distinct OS processes with independent DefaultRegistry instances, so
+// forge steer cannot yet reach a loop started by a different forge execute
+// invocation; whether cross-process delivery needs a store-backed relay
+// (the pattern forge cancel uses) is left to a future ticket.
 type Registry struct {
 	mu    sync.Mutex
-	loops map[string]*Queue
+	loops map[string]*registration
+}
+
+// registration tracks a registered Queue alongside a reference count, so
+// concurrent Workers that share one loop-id (one Execution's concurrently
+// dispatched Issues, all registering the same Queue under the same
+// Execution ID) can each Register and Unregister independently: the
+// loop-id stays registered until every outstanding Register call for it
+// has a matching Unregister.
+type registration struct {
+	queue *Queue
+	count int
 }
 
 // NewRegistry returns an empty Registry ready for concurrent use.
 func NewRegistry() *Registry {
-	return &Registry{loops: make(map[string]*Queue)}
+	return &Registry{loops: make(map[string]*registration)}
 }
 
 // DefaultRegistry is the process-wide Registry `forge steer` resolves loop
-// identifiers through. See the Registry doc comment: nothing registers a
-// running execute loop's Queue here yet (constructorfleet/forge#746), so
-// DefaultRegistry is empty in every real forge invocation today.
+// identifiers through. See the Registry doc comment: internal/engine
+// registers a running execute loop's Queue here under its Execution ID.
 var DefaultRegistry = NewRegistry()
 
 // Register attaches queue under loopID. A later Steer call for that loopID
-// enqueues onto queue.
+// enqueues onto queue. Register is reference-counted: calling it more than
+// once for the same loopID (concurrent Workers sharing one Execution's
+// loop-id) requires a matching number of Unregister calls before loopID is
+// removed.
 func (r *Registry) Register(loopID string, queue *Queue) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.loops[loopID] = queue
+	if reg, ok := r.loops[loopID]; ok {
+		reg.count++
+		return
+	}
+	r.loops[loopID] = &registration{queue: queue, count: 1}
 }
 
-// Unregister removes loopID, e.g. once its execute loop finishes. A later
-// Steer call for that loopID then returns ErrLoopNotFound.
+// Unregister releases one Register call for loopID. It removes loopID once
+// every outstanding Register call for it has a matching Unregister, e.g.
+// once every concurrent Worker sharing that loop-id has finished. A later
+// Steer call for a fully unregistered loopID then returns ErrLoopNotFound.
 func (r *Registry) Unregister(loopID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.loops, loopID)
+	reg, ok := r.loops[loopID]
+	if !ok {
+		return
+	}
+	reg.count--
+	if reg.count <= 0 {
+		delete(r.loops, loopID)
+	}
 }
 
 // Steer resolves loopID to its registered Queue and enqueues a Message built
@@ -64,11 +89,11 @@ func (r *Registry) Unregister(loopID string) {
 // step-execution goroutine.
 func (r *Registry) Steer(loopID, text string) error {
 	r.mu.Lock()
-	queue, ok := r.loops[loopID]
+	reg, ok := r.loops[loopID]
 	r.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrLoopNotFound, loopID)
 	}
-	queue.Enqueue(Message{Text: text})
+	reg.queue.Enqueue(Message{Text: text})
 	return nil
 }
