@@ -21,11 +21,14 @@ type steerer interface {
 // loop-id through steering.DefaultRegistry and enqueues a free-form
 // steering message or NEEDS_INFO answer onto the Queue registered there.
 //
-// No production code registers a running execute loop's Queue into
-// DefaultRegistry yet (constructorfleet/forge#746), so today every
-// loop-id resolves to steering.ErrLoopNotFound. This command establishes
-// the callable entry point Enqueue requires; wiring it to a real running
-// loop is #746's scope.
+// loop-id is a running execute loop's Execution ID: internal/engine's
+// ExecuteInExecution registers that loop's Queue into DefaultRegistry under
+// its Execution ID for the loop's duration (constructorfleet/forge#746).
+// forge steer only reaches a loop running in the same OS process — a
+// forge execute invocation and a separately-invoked forge steer are
+// distinct processes with independent DefaultRegistry instances, so a
+// loop-id from another process's forge execute still resolves to
+// steering.ErrLoopNotFound.
 func runSteer(args []string) int {
 	return doRunSteer(args, steering.DefaultRegistry, os.Stdout, os.Stderr)
 }

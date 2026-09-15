@@ -795,6 +795,38 @@ func TestComposition_ValidGithubConfigurationWiresEndToEnd(t *testing.T) {
 	}
 }
 
+// TestBuildEngine_WiresSteeringQueueAndRegistry proves constructorfleet/
+// forge#746's wiring: buildEngine gives every Engine it builds a live
+// Steering Queue and a SteeringRegistry to register it under, so
+// ExecuteInExecution's loop-id registration (internal/engine) actually has
+// something to register in a real `forge execute` run, not only in tests
+// that set eng.Steering by hand.
+func TestBuildEngine_WiresSteeringQueueAndRegistry(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	store, err := openStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	cfg := config.Default()
+	cfg.Agent.Provider = "fake"
+
+	eng, err := buildEngine(store, cfg, root)
+	if err != nil {
+		t.Fatalf("buildEngine: %v", err)
+	}
+	if eng.Steering == nil {
+		t.Error("eng.Steering is nil, want a live steering.Queue so a running loop is steerable")
+	}
+	if eng.SteeringRegistry == nil {
+		t.Error("eng.SteeringRegistry is nil, want a Registry so the loop can register its Queue under its Execution ID")
+	}
+}
+
 // TestComposition_ValidGitLabConfigurationWiresEndToEnd proves issue #290's
 // all-GitLab composition reaches the Engine seams that publish the merge
 // request and watch GitLab's pipeline gate.

@@ -184,6 +184,25 @@ type Engine struct {
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
 
+	// SteeringRegistry resolves a loop-id (an Execution's ID) to that
+	// Execution's Steering Queue for the `forge steer` CLI entry point
+	// (constructorfleet/forge#746). ExecuteInExecution registers Steering
+	// under the Execution's ID for the running loop's duration, and
+	// unregisters it once the loop rests, so `forge steer <loop-id>` reaches
+	// a same-process running loop. New sets this to steering.DefaultRegistry,
+	// the process-wide Registry `forge steer` resolves through; a distinct
+	// forge steer invocation is a separate OS process with its own
+	// DefaultRegistry, so this only ever reaches a loop in the same process
+	// — cross-process delivery is out of scope here. Registration is skipped
+	// entirely when Steering is nil, so an Engine with no Steering Queue
+	// configured registers nothing, exactly as before this field existed.
+	// Registry.Register/Unregister are reference-counted, so the concurrent
+	// Workers internal/scheduler dispatches for one Execution (all sharing
+	// this Engine and its execution.ID) can each Register and Unregister
+	// independently without one Worker's finish evicting the loop-id while
+	// sibling Workers under the same Execution are still running.
+	SteeringRegistry *steering.Registry
+
 	// Session is the executeloop.Session tracking this Engine's execute
 	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
 	// sets it to executeloop.StatusNeedsInfo on every AgentResult flagged
@@ -364,6 +383,7 @@ func New(store storage.Store, trk IssueFetcher, workspaces WorkspaceCreator, ag 
 		Config:             cfg,
 		RepoRoot:           repoRoot,
 		IssueLock:          repolock.New(repoRoot),
+		SteeringRegistry:   steering.DefaultRegistry,
 		Now:                time.Now,
 		NewExecutionID:     func() string { return uuid.NewString() },
 		OwnerPID:           os.Getpid,
@@ -508,6 +528,14 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
 func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
+	// Register this Execution's ID as the loop-id `forge steer` resolves
+	// (constructorfleet/forge#746), for this loop's whole duration — every
+	// return path below, success or failure, unregisters it via defer.
+	if e.Steering != nil && e.SteeringRegistry != nil {
+		e.SteeringRegistry.Register(execution.ID, e.Steering)
+		defer e.SteeringRegistry.Unregister(execution.ID)
+	}
+
 	issue, err := e.Tracker.GetIssue(ctx, issueID)
 	if err != nil {
 		return ExecuteResult{}, fmt.Errorf("engine: fetch issue %s: %w", issueID, err)

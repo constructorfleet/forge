@@ -47,6 +47,31 @@ func TestRegistry_UnregisterRemovesLoop(t *testing.T) {
 	}
 }
 
+// TestRegistry_UnregisterKeepsLoopWhileOtherRegistrationOutstanding proves
+// the fix for constructorfleet/forge#746's concurrent-Workers gap:
+// ExecuteInExecution registers the same Execution ID once per concurrent
+// Worker sharing that Execution, so one Worker's Unregister must not evict
+// the loop-id while a sibling Worker's registration is still outstanding.
+func TestRegistry_UnregisterKeepsLoopWhileOtherRegistrationOutstanding(t *testing.T) {
+	r := steering.NewRegistry()
+	q := steering.NewQueue()
+	r.Register("loop-1", q)
+	r.Register("loop-1", q)
+
+	r.Unregister("loop-1")
+
+	if err := r.Steer("loop-1", "still running"); err != nil {
+		t.Fatalf("Steer() after one of two Unregister() calls error = %v, want nil", err)
+	}
+
+	r.Unregister("loop-1")
+
+	err := r.Steer("loop-1", "too late")
+	if !errors.Is(err, steering.ErrLoopNotFound) {
+		t.Fatalf("Steer() after both Unregister() calls error = %v, want ErrLoopNotFound", err)
+	}
+}
+
 // TestRegistry_SteerDuringInProgressStepReturnsWithoutWaiting proves the CLI/API
 // entry point's acceptance criterion: submitting a message while a step is in
 // progress returns a queued acknowledgement without waiting for step

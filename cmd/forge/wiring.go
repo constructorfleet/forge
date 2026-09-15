@@ -37,6 +37,7 @@ import (
 	"github.com/Teagan42/forge/internal/review/agentreviewer"
 	"github.com/Teagan42/forge/internal/scheduler"
 	"github.com/Teagan42/forge/internal/semantic"
+	"github.com/Teagan42/forge/internal/steering"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/tracker/gitea"
@@ -168,6 +169,12 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 
 	eng := engine.New(store, trk, wsMgr, ag, cfg, repoRoot)
 	eng.Backend = backend
+	// eng.Steering (constructorfleet/forge#746) is wired unconditionally, so
+	// every Engine buildEngine produces is steerable: ExecuteInExecution
+	// registers this Queue under the running loop's Execution ID into
+	// eng.SteeringRegistry (steering.DefaultRegistry, set by engine.New) for
+	// `forge steer` to reach from the same process.
+	eng.Steering = steering.NewQueue()
 	// eng.Semantic (issue #126) is wired unconditionally, like
 	// Publisher/PRTracker below: the SemanticProvider seam degrades to
 	// fully inert on its own whenever cfg.LSP.Enabled is false (the
