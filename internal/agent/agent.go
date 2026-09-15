@@ -160,6 +160,7 @@ const (
 	FeedbackSourceReview    FeedbackSource = "REVIEW"
 	FeedbackSourceCI        FeedbackSource = "CI"
 	FeedbackSourceNeedsInfo FeedbackSource = "NEEDS_INFO"
+	FeedbackSourceSteering  FeedbackSource = "STEERING"
 )
 
 // Feedback is one bounded diagnostic routed back to the Agent for a repair
