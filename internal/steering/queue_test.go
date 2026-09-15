@@ -41,6 +41,43 @@ func TestQueue_DrainEmptiesTheQueue(t *testing.T) {
 	}
 }
 
+func TestQueue_DrainAllConcatenatesMessagesInFIFOOrder(t *testing.T) {
+	q := steering.NewQueue()
+
+	q.Enqueue(steering.Message{Text: "from user"})
+	q.Enqueue(steering.Message{Text: "from needs-info answer"})
+	q.Enqueue(steering.Message{Text: "from another source"})
+
+	got := q.DrainAll()
+
+	want := "from user\nfrom needs-info answer\nfrom another source"
+	if got != want {
+		t.Fatalf("DrainAll() = %q, want %q", got, want)
+	}
+}
+
+func TestQueue_DrainAllEmptiesTheQueue(t *testing.T) {
+	q := steering.NewQueue()
+	q.Enqueue(steering.Message{Text: "only"})
+
+	_ = q.DrainAll()
+	got := q.DrainAll()
+
+	if got != "" {
+		t.Fatalf("DrainAll() after a prior DrainAll() = %q, want empty", got)
+	}
+}
+
+func TestQueue_DrainAllOnEmptyQueueReturnsEmptyString(t *testing.T) {
+	q := steering.NewQueue()
+
+	got := q.DrainAll()
+
+	if got != "" {
+		t.Fatalf("DrainAll() on empty queue = %q, want empty", got)
+	}
+}
+
 func TestQueue_ConcurrentEnqueueDuringSimulatedStep_PreservesOrderAndLosesNothing(t *testing.T) {
 	q := steering.NewQueue()
 
