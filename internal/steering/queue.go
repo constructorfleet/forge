@@ -4,6 +4,7 @@
 package steering
 
 import (
+	"context"
 	"strings"
 	"sync"
 )
@@ -36,6 +37,11 @@ type Message struct {
 type Queue struct {
 	mu       sync.Mutex
 	messages []Message
+
+	// notify is closed, then set back to nil, on the next Enqueue call —
+	// giving a Wait caller parked on it a single-shot wakeup. It is created
+	// lazily, only once a Wait call needs one.
+	notify chan struct{}
 }
 
 // NewQueue returns an empty Queue ready for concurrent use.
@@ -49,6 +55,33 @@ func (q *Queue) Enqueue(msg Message) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.messages = append(q.messages, msg)
+	if q.notify != nil {
+		close(q.notify)
+		q.notify = nil
+	}
+}
+
+// Wait blocks until a Message is enqueued, or ctx is done, whichever comes
+// first. It returns immediately, without blocking, if the queue already
+// holds an undrained Message — a message that arrived before Wait was
+// called is not missed. Wait never inspects unrelated work while blocked:
+// it parks on a channel woken only by this Queue's own Enqueue calls.
+func (q *Queue) Wait(ctx context.Context) {
+	q.mu.Lock()
+	if len(q.messages) > 0 {
+		q.mu.Unlock()
+		return
+	}
+	if q.notify == nil {
+		q.notify = make(chan struct{})
+	}
+	ch := q.notify
+	q.mu.Unlock()
+
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
 }
 
 // Drain removes and returns all queued Messages in FIFO order, leaving the

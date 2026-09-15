@@ -1,10 +1,12 @@
 package steering_test
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Teagan42/forge/internal/steering"
 )
@@ -155,6 +157,82 @@ func TestQueue_ConcurrentEnqueueDuringSimulatedStep_PreservesOrderAndLosesNothin
 		if lastSeen[p] != perProducer-1 {
 			t.Fatalf("producer %d: last seen seq %d, want %d (messages lost)", p, lastSeen[p], perProducer-1)
 		}
+	}
+}
+
+// TestQueue_WaitReturnsImmediatelyWhenMessagesAlreadyQueued proves Wait does
+// not block a caller that reaches it after a message was already enqueued
+// (e.g. a NEEDS_INFO answer that arrived while the paused loop's caller was
+// still setting up the wait) — TKT-006's resume path must not miss a
+// message that raced ahead of it.
+func TestQueue_WaitReturnsImmediatelyWhenMessagesAlreadyQueued(t *testing.T) {
+	q := steering.NewQueue()
+	q.Enqueue(steering.Message{Text: "already here"})
+
+	done := make(chan struct{})
+	go func() {
+		q.Wait(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait() blocked despite a message already queued")
+	}
+}
+
+// TestQueue_WaitBlocksUntilEnqueue proves Wait blocks a caller with an empty
+// queue until Enqueue is called from another goroutine — the "loop waits,
+// does not poll" acceptance criterion.
+func TestQueue_WaitBlocksUntilEnqueue(t *testing.T) {
+	q := steering.NewQueue()
+
+	done := make(chan struct{})
+	go func() {
+		q.Wait(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("Wait() returned before Enqueue was ever called")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	q.Enqueue(steering.Message{Text: "the answer"})
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait() did not return after Enqueue")
+	}
+}
+
+// TestQueue_WaitReturnsWhenContextDone proves Wait does not hang forever
+// when its ctx is cancelled before any message ever arrives.
+func TestQueue_WaitReturnsWhenContextDone(t *testing.T) {
+	q := steering.NewQueue()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		q.Wait(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("Wait() returned before ctx was cancelled or any message arrived")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait() did not return after ctx cancellation")
 	}
 }
 

@@ -135,6 +135,45 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 	return issue, nil
 }
 
+// waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on
+// e.Steering until a Message is enqueued (a NEEDS_INFO answer or a
+// free-form steering message — both travel the same Enqueue/DrainAll path,
+// no separate reply channel or correlation ID), then drains the queue,
+// restores the loop's status to running, and reclaims the Issue through the
+// same legal edges `forge resume` takes: NEEDS_INFO -> READY (Resume,
+// resume.go) and READY -> CLAIMED -> PREPARING (reclaimAndPrepare, shared
+// with resumeFromReady in recovery.go).
+//
+// This is distinct from the cross-process `forge resume` flow (Resume,
+// resumeNeedsInfoIssue): that flow re-fetches tracker comments after this
+// same process has already exited NEEDS_INFO as a resting state. Here the
+// process, Workspace, and ExecutionEnvironment are all still alive, so
+// executeAgent's own loop (see its doc comment) continues in place rather
+// than ending it. Callers only reach this once e.Steering is known to be
+// non-nil.
+func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, issueID string) (domain.Issue, []agent.Feedback, error) {
+	e.Steering.Wait(ctx)
+	if err := ctx.Err(); err != nil {
+		return domain.Issue{}, nil, err
+	}
+
+	feedback := e.drainSteeringFeedback()
+
+	if e.Session != nil {
+		e.Session.SetStatus(executeloop.StatusRunning)
+	}
+
+	if _, err := e.transition(ctx, executionID, issueID, domain.StateReady); err != nil {
+		return domain.Issue{}, nil, err
+	}
+	issue, err := e.reclaimAndPrepare(ctx, executionID, issueID)
+	if err != nil {
+		return domain.Issue{}, nil, err
+	}
+
+	return issue, feedback, nil
+}
+
 // needsInfoCommentBody renders the structured comment posted on NEEDS_INFO.
 // Each header names exactly the AgentResult field it renders, so the same
 // value is never called by different names in different places (the
@@ -178,6 +217,15 @@ func isNotFound(err error) bool {
 // and reviewContext become the synthetic AgentResult's NeedsInfo.Question/
 // Context, rendered into the same structured comment (needsInfoCommentBody)
 // a real Agent-reported NEEDS_INFO would produce.
+//
+// This NEEDS_INFO does not get TKT-006's in-process queue resume
+// (waitForSteeringAndReclaim): that mechanism is scoped to the
+// agent-signaled branch TKT-005 introduced (executeAgent's own
+// StatusNeedsInfo case), per this ticket's Implementation Context. A review
+// escalation still rests as a plain NEEDS_INFO Issue and needs the
+// cross-process `forge resume` flow (Resume, resumeNeedsInfoIssue) to
+// continue, even though an answer enqueued via Enqueue/DrainAll for it
+// would sit in the queue unread until that happens.
 func (e *Engine) escalateReviewToNeedsInfo(ctx context.Context, executionID, issueID, question, reviewContext string) (domain.Issue, error) {
 	synthetic := agent.AgentResult{
 		Status:  agent.StatusNeedsInfo,

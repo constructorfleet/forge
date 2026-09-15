@@ -169,21 +169,31 @@ func (e *Engine) resumeNeedsInfoIssue(ctx context.Context, exec domain.Execution
 }
 
 func (e *Engine) resumeFromReady(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string, feedback []agent.Feedback) (domain.Issue, error) {
-	if err := e.Store.ClaimIssue(ctx, exec.ID, issue.ID, workerRef(exec.ID, issue.ID)); err != nil && !errors.Is(err, storage.ErrAlreadyClaimed) {
-		return domain.Issue{}, fmt.Errorf("engine: claim issue %s: %w", issue.ID, err)
-	}
-	if err := e.Store.UpdateWorkerOwner(ctx, exec.ID, issue.ID, e.OwnerPID(), e.ownerToken(ctx)); err != nil {
-		return domain.Issue{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issue.ID, err)
-	}
-	issue, err := e.transition(ctx, exec.ID, issue.ID, domain.StateClaimed)
-	if err != nil {
-		return domain.Issue{}, err
-	}
-	issue, err = e.transition(ctx, exec.ID, issue.ID, domain.StatePreparing)
+	issue, err := e.reclaimAndPrepare(ctx, exec.ID, issue.ID)
 	if err != nil {
 		return domain.Issue{}, err
 	}
 	return e.resumeFromPreparing(ctx, exec, issue, workerBase, feedback)
+}
+
+// reclaimAndPrepare re-claims an Issue already in StateReady and drives it
+// through the CLAIMED -> PREPARING edges, recording worker ownership along
+// the way. It is the shared claim/transition sequence both resumeFromReady
+// (the cross-process `forge resume` path) and waitForSteeringAndReclaim
+// (needsinfo.go's in-process NEEDS_INFO resume, TKT-006) need after each
+// reaches StateReady by its own distinct route, so the two callers cannot
+// silently drift on what "reclaiming an Issue" means.
+func (e *Engine) reclaimAndPrepare(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
+	if err := e.Store.ClaimIssue(ctx, executionID, issueID, workerRef(executionID, issueID)); err != nil && !errors.Is(err, storage.ErrAlreadyClaimed) {
+		return domain.Issue{}, fmt.Errorf("engine: claim issue %s: %w", issueID, err)
+	}
+	if err := e.Store.UpdateWorkerOwner(ctx, executionID, issueID, e.OwnerPID(), e.ownerToken(ctx)); err != nil {
+		return domain.Issue{}, fmt.Errorf("engine: record worker owner for issue %s: %w", issueID, err)
+	}
+	if _, err := e.transition(ctx, executionID, issueID, domain.StateClaimed); err != nil {
+		return domain.Issue{}, err
+	}
+	return e.transition(ctx, executionID, issueID, domain.StatePreparing)
 }
 
 func (e *Engine) resumeFromPreparing(ctx context.Context, exec domain.Execution, issue domain.Issue, workerBase string, feedback []agent.Feedback) (domain.Issue, error) {

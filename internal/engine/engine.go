@@ -1276,13 +1276,43 @@ const qualityDeadlineMultiplier = 3
 // env wraps (constructorfleet/forge#302) — rather than through Engine's
 // own Agent field, so the Agent that runs is always the one bound to the
 // active ExecutionEnvironment.
+//
+// A NEEDS_INFO result that has a Steering queue to resume from does not
+// return to its caller: it loops back to the top and re-invokes the Agent
+// in place, once the queue-drain wait (waitForSteeringAndReclaim) returns.
+// This is a plain `for` loop, not recursion into executeAgent, so an Issue
+// that cycles through NEEDS_INFO N times in one run adds no stack depth
+// beyond one frame — matching the bound-free iteration runRepairLoop
+// already uses for its own per-step steering drain (see
+// drainSteeringFeedback).
 func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback, transitionToImplementing bool) (_ domain.Issue, implemented bool, _ error) {
 	workspacePath := env.Workspace().Path
+	for {
+		var again bool
+		var err error
+		issue, implemented, again, err = e.executeAgentStep(ctx, executionID, issueID, env, repoCtx, issue, feedback, transitionToImplementing, workspacePath)
+		if err != nil || !again {
+			return issue, implemented, err
+		}
+		issue, feedback, err = e.waitForSteeringAndReclaim(ctx, executionID, issueID)
+		if err != nil {
+			return domain.Issue{}, false, err
+		}
+		transitionToImplementing = true
+	}
+}
+
+// executeAgentStep runs exactly one Agent invocation and interprets its
+// result. again is true only for a StatusNeedsInfo result that has a
+// Steering queue to resume from (executeAgent's caller then waits on that
+// queue and loops back into another step); every other outcome is a
+// resting state the caller returns as-is.
+func (e *Engine) executeAgentStep(ctx context.Context, executionID, issueID string, env execbackend.ExecutionEnvironment, repoCtx agent.RepositoryContext, issue domain.Issue, feedback []agent.Feedback, transitionToImplementing bool, workspacePath string) (_ domain.Issue, implemented bool, again bool, _ error) {
 	var err error
 	if transitionToImplementing {
 		issue, err = e.transition(ctx, executionID, issueID, domain.StateImplementing)
 		if err != nil {
-			return domain.Issue{}, false, err
+			return domain.Issue{}, false, false, err
 		}
 	}
 
@@ -1301,7 +1331,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	req = e.augmentSemantic(executionID, issueID, req)
 	contextBytes, err := agent.ContextSizeBytes(req)
 	if err != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: encode agent request for issue %s telemetry: %w", issueID, err)
+		return domain.Issue{}, false, false, fmt.Errorf("engine: encode agent request for issue %s telemetry: %w", issueID, err)
 	}
 	started := e.Now()
 
@@ -1317,7 +1347,7 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 		ContextBytes: contextBytes,
 	})
 	if startErr != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
+		return domain.Issue{}, false, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
 	}
 	req.Transcript = newPersistingTranscriptSink(ctx, e.Store, executionID, issueID, agentRunID, string(domain.StateImplementing), "", e.Now, func() { e.touchWorkerActivity(executionID, issueID) })
 	emitSteeringFeedback(req.Transcript, feedback)
@@ -1351,42 +1381,48 @@ func (e *Engine) executeAgent(ctx context.Context, executionID, issueID string, 
 	// Execute returns leaves the row at AgentRunResultRunning — a durable
 	// "interrupted" marker — rather than losing the row entirely.
 	if finalizeErr := e.Store.FinalizeAgentRun(ctx, agentRunID, run); finalizeErr != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: finalize agent run for issue %s: %w", issueID, finalizeErr)
+		return domain.Issue{}, false, false, fmt.Errorf("engine: finalize agent run for issue %s: %w", issueID, finalizeErr)
 	}
 	if err != nil {
-		return domain.Issue{}, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
+		return domain.Issue{}, false, false, fmt.Errorf("engine: agent execute issue %s: %w", issueID, err)
 	}
 	if err := e.appendEvent(ctx, executionID, issueID, "agent.result", map[string]string{
 		"status":  string(result.Status),
 		"summary": result.Summary,
 	}); err != nil {
-		return domain.Issue{}, false, err
+		return domain.Issue{}, false, false, err
 	}
 
 	// Automatic self reporting (issue 141) runs regardless of Status: an
 	// Agent may surface out-of-scope observations alongside any outcome,
 	// and filing them is orthogonal to how this Issue itself resolves.
 	if err := e.reportFollowUps(ctx, executionID, issueID, result.FollowUps); err != nil {
-		return domain.Issue{}, false, err
+		return domain.Issue{}, false, false, err
 	}
 
 	switch result.Status {
 	case agent.StatusImplemented:
-		return issue, true, nil
+		return issue, true, false, nil
 	case agent.StatusNeedsInfo:
 		issue, err := e.handleNeedsInfo(ctx, executionID, issueID, workerRef(executionID, issueID), result)
-		return issue, false, err
+		if err != nil {
+			return issue, false, false, err
+		}
+		if e.Steering == nil {
+			return issue, false, false, nil
+		}
+		return issue, false, true, nil
 	case agent.StatusReplanRequired:
 		issue, err := e.handleReplanRequired(ctx, executionID, issueID, workerRef(executionID, issueID), issue, result)
-		return issue, false, err
+		return issue, false, false, err
 	case agent.StatusProviderLimit:
 		issue, err := e.handleProviderLimit(ctx, executionID, issueID, workerRef(executionID, issueID), result)
-		return issue, false, err
+		return issue, false, false, err
 	case agent.StatusFailed:
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateFailed)
-		return issue, false, err
+		return issue, false, false, err
 	default:
-		return domain.Issue{}, false, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
+		return domain.Issue{}, false, false, fmt.Errorf("engine: agent returned unknown status %q for issue %s", result.Status, issueID)
 	}
 }
 
