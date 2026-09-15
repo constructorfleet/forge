@@ -12,6 +12,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/gittest"
 	"github.com/Teagan42/forge/internal/review"
@@ -391,7 +392,10 @@ func TestExecute_GateBudgetExhaustion_RoutesToFailed(t *testing.T) {
 // gate-failure repair whose re-invoked Agent reports StatusNeedsInfo rather
 // than StatusImplemented, asserting invokeAgent's non-StatusImplemented
 // arms are reachable from a repair iteration too, not just Execute's first
-// attempt.
+// attempt. It also proves TKT-005's acceptance criteria end to end: the
+// Engine's executeloop.Session status becomes needs_info, and the loop
+// stops advancing steps — it does not run a further gate attempt or Agent
+// invocation, even though the gate retry budget still has room left.
 func TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo(t *testing.T) {
 	te := newTestEngine(t, map[string]domain.Issue{
 		"44": {ID: "44"},
@@ -402,9 +406,14 @@ func TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo(t *testing.T
 		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
 	})
 	te.eng.Config.Quality.Gates = []config.QualityGate{{Name: "test", Command: "make test"}}
-	te.eng.Config.Retry = domain.RetryLimits{Gate: 1, Review: 1, CI: 1}
+	// Budget has room for a second retry: if the loop kept going after
+	// NEEDS_INFO, it would run a further gate attempt and Agent invocation.
+	te.eng.Config.Retry = domain.RetryLimits{Gate: 5, Review: 5, CI: 5}
 	runner := &flakyRunner{failUntil: 1000} // never passes; repair's Agent call is what changes
 	te.gates.Set(runner)
+
+	session := executeloop.NewSession()
+	te.eng.Session = session
 
 	result, err := te.eng.Execute(context.Background(), "44", te.base)
 	if err != nil {
@@ -413,8 +422,14 @@ func TestExecute_GateRepair_AgentReturnsNeedsInfo_RoutesToNeedsInfo(t *testing.T
 	if result.Issue.State != domain.StateNeedsInfo {
 		t.Fatalf("final state = %s, want NEEDS_INFO", result.Issue.State)
 	}
+	if got := session.Status(); got != executeloop.StatusNeedsInfo {
+		t.Errorf("Session.Status() = %q, want %q", got, executeloop.StatusNeedsInfo)
+	}
 	if got := len(te.fake.Invocations()); got != 2 {
-		t.Errorf("got %d agent invocations, want 2 (initial + 1 repair)", got)
+		t.Errorf("got %d agent invocations, want 2 (initial + 1 repair, loop halts on NEEDS_INFO)", got)
+	}
+	if got := runner.Calls(); got != 1 {
+		t.Errorf("got %d gate calls, want 1 (loop halts on NEEDS_INFO before a retry gate run)", got)
 	}
 }
 

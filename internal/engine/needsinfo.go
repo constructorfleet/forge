@@ -8,6 +8,7 @@ import (
 
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/needsinfo"
 	"github.com/Teagan42/forge/internal/review"
 	"github.com/Teagan42/forge/internal/storage"
@@ -118,7 +119,20 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 		return domain.Issue{}, fmt.Errorf("engine: release worker claim for issue %s: %w", issueID, err)
 	}
 
-	return e.transition(ctx, executionID, issueID, domain.StateNeedsInfo)
+	issue, err := e.transition(ctx, executionID, issueID, domain.StateNeedsInfo)
+	if err != nil {
+		return domain.Issue{}, err
+	}
+
+	// Every NEEDS_INFO signal funnels through this one handler (see the
+	// doc comment above), so this is the single place that needs to set
+	// the loop's status — at most one outstanding NEEDS_INFO is ever
+	// tracked, since Session.status is a scalar, not a list keyed by ID.
+	if e.Session != nil {
+		e.Session.SetStatus(executeloop.StatusNeedsInfo)
+	}
+
+	return issue, nil
 }
 
 // needsInfoCommentBody renders the structured comment posted on NEEDS_INFO.

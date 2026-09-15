@@ -27,6 +27,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/executeloop"
 	execbackend "github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/gate"
 	"github.com/Teagan42/forge/internal/repocontext"
@@ -182,6 +183,15 @@ type Engine struct {
 	// discarded. Optional: nil disables draining entirely, leaving loop
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
+
+	// Session is the executeloop.Session tracking this Engine's execute
+	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
+	// sets it to executeloop.StatusNeedsInfo on every AgentResult flagged
+	// StatusNeedsInfo (real or synthetic, see escalateReviewToNeedsInfo), so
+	// the loop's paused state is queryable independent of transcript
+	// content. Optional: nil disables the status transition entirely,
+	// leaving existing callers of New unaffected.
+	Session *executeloop.Session
 
 	// Backend is the ExecutionBackend cmd/forge selects from
 	// Config.Execution.Backend (issue #304, constructorfleet/forge#285:
