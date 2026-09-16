@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.52.0](https://github.com/constructorfleet/forge/compare/forge-v0.51.1...forge-v0.52.0) (2026-09-16)
+
+
+### Features
+
+* Distinguish NEEDS_INFO answers from steering messages in the transcript tag ([#752](https://github.com/constructorfleet/forge/issues/752)) ([ed88c7b](https://github.com/constructorfleet/forge/commit/ed88c7b770bd4178a07e11a9ed6c58cd54db0e71)), closes [#745](https://github.com/constructorfleet/forge/issues/745)
+* Register running execute loops into steering.DefaultRegistry ([#753](https://github.com/constructorfleet/forge/issues/753)) ([5193a78](https://github.com/constructorfleet/forge/commit/5193a78ce7c5a677c25041b07e2994e5d20a0db8)), closes [#746](https://github.com/constructorfleet/forge/issues/746)
+* TKT-001: Add a thread-safe FIFO message queue type attached to the execute loop session that accepts steering messages and NEEDS_INFO answers at any time, including while a step is executing. ([#742](https://github.com/constructorfleet/forge/issues/742)) ([9ba00a8](https://github.com/constructorfleet/forge/commit/9ba00a838672062667c89198b3802d2fe6be4c3e)), closes [#731](https://github.com/constructorfleet/forge/issues/731)
+* TKT-002: Add a DrainAll method to the steering queue that atomically empties the queue and returns all queued messages concatenated in FIFO arrival order. ([#743](https://github.com/constructorfleet/forge/issues/743)) ([99faff5](https://github.com/constructorfleet/forge/commit/99faff519a6a26c3542c2f45b9f3740df4c1f5e6)), closes [#732](https://github.com/constructorfleet/forge/issues/732)
+* TKT-003: Wire queue draining into the execute loop's step-boundary logic so the loop checks and drains the queue only between steps (never mid-step) and injects the drained content as free-form context for the next step. ([#744](https://github.com/constructorfleet/forge/issues/744)) ([123f6d1](https://github.com/constructorfleet/forge/commit/123f6d1e491c5956cf0ac95e2031b69a632ea0ff)), closes [#733](https://github.com/constructorfleet/forge/issues/733)
+* TKT-004: Add a distinct loop status field (e.g. status: running | needs_info) to the loop's state model, queryable independent of transcript content. ([#741](https://github.com/constructorfleet/forge/issues/741)) ([c719d6d](https://github.com/constructorfleet/forge/commit/c719d6d719be077fca25941ced234f3ae71429af)), closes [#734](https://github.com/constructorfleet/forge/issues/734)
+* TKT-005: Transition the loop to 'needs_info' status and halt further step execution when the agent raises a NEEDS_INFO signal, supporting at most one outstanding NEEDS_INFO at a time. ([#747](https://github.com/constructorfleet/forge/issues/747)) ([3b0ead8](https://github.com/constructorfleet/forge/commit/3b0ead84d7572b33d77f2a0aaafa848fd8a87bba)), closes [#735](https://github.com/constructorfleet/forge/issues/735)
+* TKT-006: Resume normal loop execution from 'needs_info' status once the user injects context via the queue, incorporating the drained queue contents into the next step. ([#754](https://github.com/constructorfleet/forge/issues/754)) ([25b0f31](https://github.com/constructorfleet/forge/commit/25b0f316a54d158640f8c9953c6033e7f619cd1e)), closes [#736](https://github.com/constructorfleet/forge/issues/736)
+* TKT-007: Persist steering messages and NEEDS_INFO answers to the loop's transcript/history store, tagged with a distinguishable entry type separate from agent-generated content. ([#749](https://github.com/constructorfleet/forge/issues/749)) ([8284005](https://github.com/constructorfleet/forge/commit/8284005c1c214dde2dad1db7c0a9f945011e4eab)), closes [#737](https://github.com/constructorfleet/forge/issues/737)
+* TKT-008: Expose an API/CLI-facing entry point that accepts a user steering message or NEEDS_INFO answer and enqueues it onto the running loop's queue. ([#748](https://github.com/constructorfleet/forge/issues/748)) ([9e11473](https://github.com/constructorfleet/forge/commit/9e1147399c9a603dc23b6deb19eac1afc9ad237e)), closes [#738](https://github.com/constructorfleet/forge/issues/738)
+
+
+### Bug Fixes
+
+* **plan:** converge the planning loop and surface it in the TUI ([#729](https://github.com/constructorfleet/forge/issues/729)) ([9eb4235](https://github.com/constructorfleet/forge/commit/9eb4235e905cbcc392c317087d1796b8f944c26b))
+
 ## [0.51.1](https://github.com/constructorfleet/forge/compare/forge-v0.51.0...forge-v0.51.1) (2026-09-07)
 
 
