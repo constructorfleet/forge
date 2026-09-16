@@ -11,6 +11,8 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/executeloop"
+	"github.com/Teagan42/forge/internal/steering"
 	"github.com/Teagan42/forge/internal/storage"
 )
 
@@ -126,7 +128,7 @@ func TestPrintStatus_IncludesExecutionIssuesAndEvents(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printStatus(&buf, report)
+	printStatus(&buf, report, "")
 	out := buf.String()
 
 	for _, want := range []string{
@@ -136,6 +138,81 @@ func TestPrintStatus_IncludesExecutionIssuesAndEvents(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("printStatus output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestPrintStatus_IncludesLoopStatusWhenKnown proves TKT-009's acceptance
+// criterion: when the loop is paused on needs_info, the queried status
+// explicitly reports "needs_info" in `forge status` output rather than
+// omitting status or requiring transcript inspection.
+func TestPrintStatus_IncludesLoopStatusWhenKnown(t *testing.T) {
+	report := engine.StatusReport{
+		Execution: domain.Execution{ID: "exec-1", BaseRevision: "deadbeef", StartedAt: time.Unix(0, 0).UTC()},
+	}
+
+	var buf bytes.Buffer
+	printStatus(&buf, report, string(executeloop.StatusNeedsInfo))
+	out := buf.String()
+
+	if !strings.Contains(out, "loop status: needs_info") {
+		t.Errorf("printStatus output missing explicit loop status:\n%s", out)
+	}
+}
+
+// TestPrintStatus_OmitsLoopStatusLineWhenUnknown covers the case where no
+// live loop is registered in this process (a separate forge execute
+// invocation, or a resting Execution) — the loop status line is omitted
+// rather than printed with a guessed or blank value.
+func TestPrintStatus_OmitsLoopStatusLineWhenUnknown(t *testing.T) {
+	report := engine.StatusReport{
+		Execution: domain.Execution{ID: "exec-1", BaseRevision: "deadbeef", StartedAt: time.Unix(0, 0).UTC()},
+	}
+
+	var buf bytes.Buffer
+	printStatus(&buf, report, "")
+	out := buf.String()
+
+	if strings.Contains(out, "loop status") {
+		t.Errorf("printStatus output has a loop status line for an unknown status:\n%s", out)
+	}
+}
+
+// TestProbeLoopStatus_ReturnsRegisteredStatus proves probeLoopStatus reaches
+// a same-process running loop's live status through the same Registry
+// `forge steer` resolves loop-ids through (TKT-009), and reflects the
+// underlying executeloop.Session's transitions.
+func TestProbeLoopStatus_ReturnsRegisteredStatus(t *testing.T) {
+	registry := steering.NewRegistry()
+	queue := steering.NewQueue()
+	session := executeloop.NewSession()
+	registry.Register("loop-1", queue, session)
+
+	if got := probeLoopStatus(registry, "loop-1"); got != string(executeloop.StatusRunning) {
+		t.Fatalf("probeLoopStatus() = %q, want %q", got, executeloop.StatusRunning)
+	}
+
+	session.SetStatus(executeloop.StatusNeedsInfo)
+
+	if got := probeLoopStatus(registry, "loop-1"); got != string(executeloop.StatusNeedsInfo) {
+		t.Fatalf("probeLoopStatus() = %q, want %q", got, executeloop.StatusNeedsInfo)
+	}
+
+	session.SetStatus(executeloop.StatusRunning)
+
+	if got := probeLoopStatus(registry, "loop-1"); got != string(executeloop.StatusRunning) {
+		t.Fatalf("probeLoopStatus() = %q, want %q", got, executeloop.StatusRunning)
+	}
+}
+
+// TestProbeLoopStatus_ReturnsEmptyForUnknownLoop covers both "no loop
+// registered under this id" and "registered with no Session tracked" —
+// probeLoopStatus reports both the same way: an empty string, so printStatus
+// omits the line rather than printing an error.
+func TestProbeLoopStatus_ReturnsEmptyForUnknownLoop(t *testing.T) {
+	registry := steering.NewRegistry()
+
+	if got := probeLoopStatus(registry, "no-such-loop"); got != "" {
+		t.Fatalf("probeLoopStatus() = %q, want empty string", got)
 	}
 }
 
