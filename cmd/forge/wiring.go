@@ -24,6 +24,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
@@ -175,6 +176,14 @@ func buildEngine(store storage.Store, cfg config.Config, repoRoot string) (*engi
 	// eng.SteeringRegistry (steering.DefaultRegistry, set by engine.New) for
 	// `forge steer` to reach from the same process.
 	eng.Steering = steering.NewQueue()
+	// eng.Session (TKT-009, constructorfleet/forge#739) is wired
+	// unconditionally alongside eng.Steering above: ExecuteInExecution
+	// registers it into eng.SteeringRegistry next to the Queue, so
+	// `forge status <execution-id>` can report the loop's live
+	// running/needs_info status (handleNeedsInfo/waitForSteeringAndReclaim,
+	// internal/engine/needsinfo.go) from the same process, not only in
+	// tests that set eng.Session by hand.
+	eng.Session = executeloop.NewSession()
 	// eng.Semantic (issue #126) is wired unconditionally, like
 	// Publisher/PRTracker below: the SemanticProvider seam degrades to
 	// fully inert on its own whenever cfg.LSP.Enabled is false (the

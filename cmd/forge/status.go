@@ -10,8 +10,35 @@ import (
 	"strings"
 
 	"github.com/Teagan42/forge/internal/engine"
+	"github.com/Teagan42/forge/internal/executeloop"
+	"github.com/Teagan42/forge/internal/steering"
 	"github.com/Teagan42/forge/internal/storage"
 )
+
+// loopStatusProber is the narrow seam runStatus queries for a running
+// loop's live running/needs_info status (TKT-004, constructorfleet/
+// forge#734), so `forge status` reports a paused loop without requiring
+// transcript inspection (TKT-009, constructorfleet/forge#739).
+// steering.Registry satisfies it in production.
+type loopStatusProber interface {
+	Status(loopID string) (executeloop.Status, error)
+}
+
+// probeLoopStatus resolves executionID's live loop status through prober,
+// returning "" when no loop is registered under executionID in this process
+// (a resting Execution, or one started by a separate forge execute
+// invocation — steering.Registry's doc comment covers this same-process-only
+// reach) or when it is registered with no executeloop.Session tracked.
+// printStatus omits its loop status line on an empty result rather than
+// printing an error, matching forge steer's existing cross-process
+// limitation.
+func probeLoopStatus(prober loopStatusProber, executionID string) string {
+	status, err := prober.Status(executionID)
+	if err != nil {
+		return ""
+	}
+	return string(status)
+}
 
 // runStatus implements `forge status [execution-id] [issue-id]`: a pure
 // read of whatever `forge execute` (or any other Engine caller) already
@@ -96,7 +123,13 @@ func runStatus(args []string) int {
 		return 1
 	}
 
-	printStatus(os.Stdout, report)
+	// executionID doubles as the loop-id ExecuteInExecution registers into
+	// steering.DefaultRegistry for the loop's duration (see steering.
+	// Registry's doc comment), so probing it here reaches a same-process
+	// running loop's live status the same way `forge steer` reaches its
+	// Queue.
+	loopStatus := probeLoopStatus(steering.DefaultRegistry, executionID)
+	printStatus(os.Stdout, report, loopStatus)
 	return 0
 }
 
@@ -145,10 +178,18 @@ func printExecutionSummaries(w io.Writer, summaries []engine.ExecutionSummary) {
 	}
 }
 
-func printStatus(w io.Writer, report engine.StatusReport) {
+// printStatus renders report. loopStatus is the Execution's live
+// running/needs_info status (TKT-009), resolved by probeLoopStatus; an empty
+// loopStatus omits the loop status line entirely rather than printing a
+// guessed or blank value, but a known needs_info is always printed
+// explicitly, never inferred from Issue state or omitted.
+func printStatus(w io.Writer, report engine.StatusReport, loopStatus string) {
 	fmt.Fprintf(w, "execution %s\n", report.Execution.ID)
 	fmt.Fprintf(w, "  base:       %s\n", report.Execution.BaseRevision)
 	fmt.Fprintf(w, "  started_at: %s\n", report.Execution.StartedAt.Format("2006-01-02T15:04:05Z07:00"))
+	if loopStatus != "" {
+		fmt.Fprintf(w, "  loop status: %s\n", loopStatus)
+	}
 	fmt.Fprintf(w, "telemetry:\n")
 	fmt.Fprintf(w, "  issues completed:  %d\n", report.Telemetry.Summary.IssuesCompleted)
 	fmt.Fprintf(w, "  agent invocations: %d\n", report.Telemetry.Summary.AgentInvocations)

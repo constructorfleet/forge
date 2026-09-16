@@ -87,7 +87,7 @@ func TestDoRunSteer_UnknownLoop_ReportsError(t *testing.T) {
 func TestDoRunSteer_ReturnsWithoutWaitingForStepCompletion(t *testing.T) {
 	registry := steering.NewRegistry()
 	queue := steering.NewQueue()
-	registry.Register("loop-1", queue)
+	registry.Register("loop-1", queue, nil)
 
 	stepDone := make(chan struct{})
 	stepStarted := make(chan struct{})

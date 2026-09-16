@@ -9,6 +9,7 @@ import (
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/executeloop"
+	"github.com/Teagan42/forge/internal/steering"
 	"github.com/Teagan42/forge/internal/storage"
 	"github.com/Teagan42/forge/internal/tracker"
 )
@@ -179,6 +180,54 @@ func TestHandleNeedsInfo_SetsSessionStatusNeedsInfo(t *testing.T) {
 
 	if got := session.Status(); got != executeloop.StatusNeedsInfo {
 		t.Errorf("Session.Status() = %q, want %q", got, executeloop.StatusNeedsInfo)
+	}
+}
+
+// TestHandleNeedsInfo_SteeringRegistryStatusReflectsTransition proves
+// TKT-009's end-to-end acceptance criterion at the Engine layer: a caller
+// resolving loop-id through the same SteeringRegistry ExecuteInExecution
+// registers into (steering.Registry, constructorfleet/forge#739) sees the
+// status reported by that Registry change from running to needs_info once
+// handleNeedsInfo runs, and back to running once the Session is restored
+// (waitForSteeringAndReclaim's own transition, exercised directly here since
+// this white-box test calls handleNeedsInfo without a full Execute run).
+func TestHandleNeedsInfo_SteeringRegistryStatusReflectsTransition(t *testing.T) {
+	store := &inMemoryStore{}
+	session := executeloop.NewSession()
+	registry := steering.NewRegistry()
+	queue := steering.NewQueue()
+	loopID := "exec-5"
+	registry.Register(loopID, queue, session)
+	defer registry.Unregister(loopID)
+
+	e := &Engine{
+		Store:            store,
+		Config:           config.Default(),
+		Now:              time.Now,
+		Session:          session,
+		SteeringRegistry: registry,
+	}
+
+	if got, err := registry.Status(loopID); err != nil || got != executeloop.StatusRunning {
+		t.Fatalf("Status() before handleNeedsInfo = (%q, %v), want (%q, nil)", got, err, executeloop.StatusRunning)
+	}
+
+	result := agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which config flag?"},
+	}
+	if _, err := e.handleNeedsInfo(context.Background(), loopID, "11", "worker-1", result); err != nil {
+		t.Fatalf("handleNeedsInfo: %v", err)
+	}
+
+	if got, err := registry.Status(loopID); err != nil || got != executeloop.StatusNeedsInfo {
+		t.Fatalf("Status() after handleNeedsInfo = (%q, %v), want (%q, nil)", got, err, executeloop.StatusNeedsInfo)
+	}
+
+	session.SetStatus(executeloop.StatusRunning)
+
+	if got, err := registry.Status(loopID); err != nil || got != executeloop.StatusRunning {
+		t.Fatalf("Status() after resume = (%q, %v), want (%q, nil)", got, err, executeloop.StatusRunning)
 	}
 }
 
