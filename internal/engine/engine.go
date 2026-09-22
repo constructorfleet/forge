@@ -205,6 +205,9 @@ type Engine struct {
 
 	steeringMu    sync.Mutex
 	steeringLoops map[string]*steeringLoop
+	// steeringLegacyUsed records whether the configured queue served one
+	// execution. Later executions always receive a new queue.
+	steeringLegacyUsed bool
 
 	// Session is the executeloop.Session tracking this Engine's execute
 	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
@@ -388,8 +391,9 @@ func (e *Engine) acquireSteering(executionID string) *steering.Queue {
 		return loop.queue
 	}
 	queue := steering.NewQueue()
-	if len(e.steeringLoops) == 0 {
+	if !e.steeringLegacyUsed {
 		queue = e.Steering
+		e.steeringLegacyUsed = true
 	}
 	e.steeringLoops[executionID] = &steeringLoop{queue: queue, count: 1}
 	return queue
@@ -1029,9 +1033,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains e.Steering (if configured) and returns one
+// drainSteeringFeedback drains the queue associated with executionID and returns one
 // Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
-// nil if e.Steering is unset or was empty at the time of the call. A run's
+// nil if that queue is unset or was empty at the time of the call. A run's
 // Messages are joined into one Feedback.Message with a newline between each,
 // matching Queue.DrainAll's join, and its Source names the Kind
 // (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.

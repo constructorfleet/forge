@@ -135,8 +135,8 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 	return issue, nil
 }
 
-// waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on
-// e.Steering until a Message is enqueued (a NEEDS_INFO answer or a
+// waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on the
+// queue associated with executionID until a Message is enqueued (a NEEDS_INFO answer or a
 // free-form steering message — both travel the same Enqueue/DrainAll path,
 // no separate reply channel or correlation ID), then drains the queue,
 // restores the loop's status to running, and reclaims the Issue through the
@@ -149,8 +149,8 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 // same process has already exited NEEDS_INFO as a resting state. Here the
 // process, Workspace, and ExecutionEnvironment are all still alive, so
 // executeAgent's own loop (see its doc comment) continues in place rather
-// than ending it. Callers only reach this once e.Steering is known to be
-// non-nil.
+// than ending it. Callers only reach this once the execution queue is known
+// to be non-nil.
 func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, issueID string) (domain.Issue, []agent.Feedback, error) {
 	queue := e.steeringQueue(executionID)
 	queue.Wait(ctx)
