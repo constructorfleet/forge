@@ -21,7 +21,8 @@ type Retrier interface {
 	Retry(executionID, issueID string) (RetryResult, error)
 }
 
-// Resumer is the narrow seam for resuming an execution after an answer.
+// Resumer is the narrow seam for starting a resume for a NEEDS_INFO execution.
+// The operator controls answer-before-resume sequencing in the TUI.
 type Resumer interface {
 	Resume(executionID string) (RetryResult, error)
 }

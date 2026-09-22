@@ -224,7 +224,7 @@ func doRunWatch(args []string) int {
 	operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 	retrier := resolveRetrier(resolvedConfigPath, resolvedDBPath)
 	resumer := resolveResumer(resolvedConfigPath, resolvedDBPath)
-	if err := runLiveRoster(ctx, store, target.id, operationalEngine, retrier, resumer, operationalEngine, answerer); err != nil {
+	if err := runLiveRoster(ctx, store, target.id, liveControls{canceller: operationalEngine, retrier: retrier, resumer: resumer, approver: operationalEngine, answerer: answerer}); err != nil {
 		fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 		return 1
 	}

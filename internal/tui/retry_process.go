@@ -38,6 +38,33 @@ type ProcessRetrier struct {
 	Executable string
 }
 
+type detachedProcessConfig struct {
+	repoRoot   string
+	configPath string
+	dbPath     string
+	executable string
+}
+
+func (p ProcessRetrier) processConfig() detachedProcessConfig {
+	return detachedProcessConfig{repoRoot: p.RepoRoot, configPath: p.ConfigPath, dbPath: p.DBPath, executable: p.Executable}
+}
+
+func (p ProcessResumer) processConfig() detachedProcessConfig {
+	return detachedProcessConfig{repoRoot: p.RepoRoot, configPath: p.ConfigPath, dbPath: p.DBPath, executable: p.Executable}
+}
+
+func (c detachedProcessConfig) command(args ...string) *exec.Cmd {
+	executable := c.executable
+	if executable == "" {
+		executable = clicommon.SelfExecutable()
+	}
+	args = append(args, "--config", c.configPath, "--db", c.dbPath)
+	cmd := exec.CommandContext(context.Background(), executable, args...)
+	cmd.Dir = c.repoRoot
+	clicommon.ConfigureProcessGroup(cmd)
+	return cmd
+}
+
 // ProcessResumer is the production Resumer. It starts a detached forge
 // resume child, so the full execution can continue after the TUI exits.
 type ProcessResumer struct {
@@ -50,36 +77,12 @@ type ProcessResumer struct {
 // Resume starts forge resume for an execution and captures the child's
 // bounded stderr tail. The child owns all engineering work.
 func (p ProcessResumer) Resume(executionID string) (RetryResult, error) {
-	cmd := p.Command(executionID)
-	stderr := textcap.NewTailWriter(clicommon.MaxCapturedOutputLen)
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		return RetryResult{}, fmt.Errorf("tui: spawn resume child: %w", err)
-	}
-	waitErr := cmd.Wait()
-	result := RetryResult{Stderr: stderr.String()}
-	if waitErr == nil {
-		return result, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(waitErr, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		return result, fmt.Errorf("resume child exited %d: %s", result.ExitCode, result.Stderr)
-	}
-	return result, fmt.Errorf("tui: wait for resume child: %w", waitErr)
+	return runDetached("resume", p.Command(executionID))
 }
 
 // Command builds, but does not start, the detached resume child.
 func (p ProcessResumer) Command(executionID string) *exec.Cmd {
-	executable := p.Executable
-	if executable == "" {
-		executable = clicommon.SelfExecutable()
-	}
-	cmd := exec.CommandContext(context.Background(), executable, "resume", executionID,
-		"--config", p.ConfigPath, "--db", p.DBPath)
-	cmd.Dir = p.RepoRoot
-	clicommon.ConfigureProcessGroup(cmd)
-	return cmd
+	return p.processConfig().command("resume", executionID)
 }
 
 // Retry spawns the detached child and waits for it to finish, capturing its
@@ -88,12 +91,15 @@ func (p ProcessResumer) Command(executionID string) *exec.Cmd {
 // error means the spawn never started or the child exited non-zero;
 // RetryResult still carries whatever stderr the child produced.
 func (p ProcessRetrier) Retry(executionID, issueID string) (RetryResult, error) {
-	cmd := p.Command(executionID, issueID)
+	return runDetached("retry", p.Command(executionID, issueID))
+}
+
+func runDetached(action string, cmd *exec.Cmd) (RetryResult, error) {
 	stderr := textcap.NewTailWriter(clicommon.MaxCapturedOutputLen)
 	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
-		return RetryResult{}, fmt.Errorf("tui: spawn retry child: %w", err)
+		return RetryResult{}, fmt.Errorf("tui: spawn %s child: %w", action, err)
 	}
 	waitErr := cmd.Wait()
 	result := RetryResult{Stderr: stderr.String()}
@@ -103,9 +109,9 @@ func (p ProcessRetrier) Retry(executionID, issueID string) (RetryResult, error) 
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
 		result.ExitCode = exitErr.ExitCode()
-		return result, fmt.Errorf("retry child exited %d: %s", result.ExitCode, result.Stderr)
+		return result, fmt.Errorf("%s child exited %d: %s", action, result.ExitCode, result.Stderr)
 	}
-	return result, fmt.Errorf("tui: wait for retry child: %w", waitErr)
+	return result, fmt.Errorf("tui: wait for %s child: %w", action, waitErr)
 }
 
 // Command builds, but does not start, the detached retry child's exec.Cmd.
@@ -119,13 +125,5 @@ func (p ProcessRetrier) Retry(executionID, issueID string) (RetryResult, error) 
 // the TUI's own context instead would kill the child the moment the TUI
 // quit, which defeats the entire point of detaching it.
 func (p ProcessRetrier) Command(executionID, issueID string) *exec.Cmd {
-	executable := p.Executable
-	if executable == "" {
-		executable = clicommon.SelfExecutable()
-	}
-	cmd := exec.CommandContext(context.Background(), executable, "retry", executionID+"/"+issueID,
-		"--config", p.ConfigPath, "--db", p.DBPath)
-	cmd.Dir = p.RepoRoot
-	clicommon.ConfigureProcessGroup(cmd)
-	return cmd
+	return p.processConfig().command("retry", executionID+"/"+issueID)
 }
