@@ -433,7 +433,11 @@ func diffTitle(vm ViewModel) string {
 	if vm.Diff == nil {
 		return "DIFF"
 	}
-	return fmt.Sprintf("DIFF (%d files)", len(vm.Diff.Files))
+	title := fmt.Sprintf("DIFF (%d files)", len(vm.Diff.Files))
+	if vm.Diff.Truncated {
+		title += " …"
+	}
+	return title
 }
 
 // diffLines draws the diff pane's body: one row per changed file with its
@@ -464,7 +468,7 @@ func diffLines(vm ViewModel, inner, rows int) []string {
 		start = 0
 	}
 	for _, line := range vm.Diff.Lines[start:] {
-		text := fitLine(line.Text, inner)
+		text := diffWindow(line.Text, vm.DiffHorizontal, inner)
 		switch line.Kind {
 		case '+':
 			text = vm.Style.Added.Render(text)
@@ -479,6 +483,16 @@ func diffLines(vm ViewModel, inner, rows int) []string {
 		}
 	}
 	return lines
+}
+
+// diffWindow clips a hunk line to the horizontal viewport. Diff lines are
+// plain text before colour is applied, so the offset stays stable while the
+// operator moves left and right.
+func diffWindow(line string, offset, width int) string {
+	if offset > 0 {
+		line = ansi.TruncateLeft(line, offset, "")
+	}
+	return fitLine(line, width)
 }
 
 // stripLine picks the detail strip for the focused pane: the diff's totals,
@@ -555,8 +569,9 @@ func frameKeys(vm ViewModel) []KeyBinding {
 		if vm.Diff != nil && len(vm.Diff.Files) > 0 {
 			keys = append(keys, KeyBinding{Key: "enter", Label: "open in $PAGER"})
 		}
-		if vm.Diff != nil && len(vm.Diff.Files) > 1 {
-			keys = append(keys, KeyBinding{Key: "j/k", Label: "scroll"})
+		if vm.Diff != nil && len(vm.Diff.Lines) > 1 {
+			keys = append(keys, KeyBinding{Key: "j/k", Label: "scroll hunk"})
+			keys = append(keys, KeyBinding{Key: "h/l", Label: "scroll columns"})
 		}
 		keys = append(keys, KeyBinding{Key: "tab", Label: "next pane"})
 	default:

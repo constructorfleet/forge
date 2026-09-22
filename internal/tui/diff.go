@@ -1,10 +1,7 @@
 package tui
 
-// diff.go defers the one heavy artifact, a Review diff, out of the frame to
-// $PAGER. Forge stores exactly one copy of a diff, review_runs.diff (migration
-// 0004), and the TUI reads it from there: the live diff producer is a git
-// operation, which the store-only read path forbids. The frame holds no diff
-// text, so it needs no lexing, no pagination, and no navigation mode.
+// diff.go owns the full Review diff escape hatch. The in-frame pane renders a
+// bounded summary and hunk view; $PAGER remains available for the full body.
 
 import (
 	"context"

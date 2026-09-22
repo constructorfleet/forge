@@ -305,6 +305,28 @@ func TestRenderDiffPaneWithoutSummaryExplainsItself(t *testing.T) {
 	}
 }
 
+func TestRenderDiffPaneSupportsHorizontalHunkScroll(t *testing.T) {
+	vm := tui.ViewModel{
+		Workers:  []tui.WorkerRow{{IssueID: "#1", State: domain.StateReviewing, HasDiff: true}},
+		DiffOpen: true,
+		Diff: &tui.DiffSummary{
+			Files: []tui.DiffFile{{Path: "a.go", Additions: 1}},
+			Lines: []tui.DiffLine{{Kind: '+', Text: "+0123456789"}},
+		},
+		Width: 100,
+		Focus: tui.PaneDiff,
+	}
+	left := tui.Render(vm)
+	if !strings.Contains(left, "+0123456789") {
+		t.Fatalf("left view omits the hunk line: %s", left)
+	}
+	vm.DiffHorizontal = 5
+	shifted := tui.Render(vm)
+	if strings.Contains(shifted, "+01234") || !strings.Contains(shifted, "56789") {
+		t.Fatalf("horizontal offset did not move the hunk line: %s", shifted)
+	}
+}
+
 // TestRenderFocusedPaneUsesDoubleBorder proves the focused region reads apart
 // from the others without colour: it alone draws a double-line border.
 func TestRenderFocusedPaneUsesDoubleBorder(t *testing.T) {

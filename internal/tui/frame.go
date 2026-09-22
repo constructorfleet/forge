@@ -142,8 +142,7 @@ type WorkerRow struct {
 	Verdict string
 
 	// HasDiff records that the last Review stored a diff, so the frame can
-	// offer the pager key. The diff itself never enters the view-model: it is
-	// a heavy artifact, read on request and handed to $PAGER.
+	// offer the in-frame hunk view and the full-diff pager key.
 	HasDiff bool
 
 	// Agents lists the agents that worked the Issue: the implementation Agent
@@ -183,10 +182,12 @@ type ViewModel struct {
 	AgentSelection int
 
 	// DiffOpen shows the diff pane. Diff is its loaded summary; nil while the
-	// read is in flight. DiffScroll is the first file row the pane shows.
-	DiffOpen   bool
-	Diff       *DiffSummary
-	DiffScroll int
+	// read is in flight. DiffScroll is the first hunk line the pane shows.
+	// DiffHorizontal is the first column shown for long hunk lines.
+	DiffOpen       bool
+	Diff           *DiffSummary
+	DiffScroll     int
+	DiffHorizontal int
 
 	// Width is the terminal width in cells. Render sizes the three body panes
 	// from it. Zero means the runtime has sent no size yet, and Render uses
