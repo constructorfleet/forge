@@ -166,3 +166,50 @@ func scanTranscriptEvents(rows *sql.Rows, contextMsg string) ([]TranscriptEvent,
 	}
 	return events, nil
 }
+
+// transcriptAgentTextPrefix bounds the text a TranscriptAgents row carries
+// for its last event. The TUI shows one line of latest output, so the poll
+// pass reads a prefix and never a whole message body.
+const transcriptAgentTextPrefix = 200
+
+// TranscriptAgents returns one summary per AgentRun that recorded at least one
+// TranscriptEvent for the Issue, in AgentRun order. Each summary carries the
+// run's phase and subagent (from its last event), its event count, and its
+// last event with a bounded text prefix and no tool input. The live TUI polls
+// it each pass to list the Issue's agents and their latest output, so it
+// reads no event body beyond that prefix.
+func (s *SQLiteStore) TranscriptAgents(ctx context.Context, executionID, issueID string) ([]TranscriptAgent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.agent_run_id, e.phase, e.subagent,
+		       (SELECT COUNT(*) FROM transcript_events c WHERE c.agent_run_id = e.agent_run_id),
+		       e.seq, e.type, e.role, substr(e.text, 1, ?), e.tool_name, substr(e.tool_output, 1, ?), e.tool_call_id, e.occurred_at
+		FROM transcript_events e
+		WHERE e.execution_id = ? AND e.issue_id = ?
+		  AND e.seq = (SELECT MAX(m.seq) FROM transcript_events m WHERE m.agent_run_id = e.agent_run_id)
+		ORDER BY e.agent_run_id`,
+		transcriptAgentTextPrefix, transcriptAgentTextPrefix, executionID, issueID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("storage: transcript agents for issue %s/%s: %w", executionID, issueID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var agents []TranscriptAgent
+	for rows.Next() {
+		var a TranscriptAgent
+		if err := rows.Scan(
+			&a.AgentRunID, &a.Phase, &a.Subagent, &a.Events,
+			&a.Last.Seq, &a.Last.Type, &a.Last.Role, &a.Last.Text, &a.Last.ToolName, &a.Last.ToolOutput, &a.Last.ToolCallID, &a.Last.OccurredAt,
+		); err != nil {
+			return nil, fmt.Errorf("storage: transcript agents for issue %s/%s: scan: %w", executionID, issueID, err)
+		}
+		a.Last.ExecutionID, a.Last.IssueID, a.Last.AgentRunID = executionID, issueID, a.AgentRunID
+		a.Last.Phase, a.Last.Subagent = a.Phase, a.Subagent
+		a.Last.OccurredAt = a.Last.OccurredAt.UTC()
+		agents = append(agents, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: transcript agents for issue %s/%s: %w", executionID, issueID, err)
+	}
+	return agents, nil
+}
