@@ -18,7 +18,8 @@ type liveStore interface {
 	tui.TranscriptFeedStore
 }
 
-// runLiveRoster drives the live Bubble Tea roster for executionID until it
+// runLiveRoster drives the live Bubble Tea roster for executionID, or discovers
+// every live Execution when executionID is empty, until it
 // quits. Bubble Tea runs in raw mode and catches panics by default, restoring
 // the terminal, so an observer crash cannot leave the shell crosstalk-broken.
 // An empty executionID enables live discovery on every poll. A non-empty ID

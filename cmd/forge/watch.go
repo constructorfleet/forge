@@ -16,9 +16,9 @@ import (
 const watchUsage = `Usage: forge watch [execution-id]
 
 Attach the live roster to one Execution when you give an id. Without an id,
-attach to every Execution with a live Worker heartbeat. When an id is supplied, it is resolved by probing, in order, the
-executions table, the planning_executions table, and Feature ids (via
-agent_runs). It never probes the filesystem.
+attach to every Execution with a live Worker heartbeat. When you give an id,
+Forge probes the executions table, the planning_executions table, and Feature
+ids through agent_runs. It never probes the filesystem.
 
   --db      path to the SQLite state database (default .forge/forge.db)
   --config  path to .forge.yaml (passed to the operational Engine constructor; unused by the current cancel action)

@@ -1,10 +1,41 @@
 package tui
 
 import (
+	"context"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+type diffIdentityStore struct {
+	RosterStore
+	executionID string
+}
+
+func (s *diffIdentityStore) LatestReviewDiff(_ context.Context, executionID, _ string) (string, error) {
+	s.executionID = executionID
+	return "diff", nil
+}
+
+func TestOpenSelectedDiffCapturesExecutionIdentity(t *testing.T) {
+	store := &diffIdentityStore{}
+	m := NewLiveModel(NewRoster(store, nil), "", 0)
+	m.vm.Workers = []WorkerRow{
+		{ExecutionID: "ex-a", IssueID: "#1", HasDiff: true},
+		{ExecutionID: "ex-b", IssueID: "#1", HasDiff: true},
+	}
+	m.vm.Selection = 0
+	cmd := m.openSelectedDiff()
+	if cmd == nil {
+		t.Fatal("openSelectedDiff returned nil")
+	}
+	// A poll or key press can move selection while the diff read is in flight.
+	m.vm.Selection = 1
+	cmd()
+	if store.executionID != "ex-a" {
+		t.Fatalf("diff execution id = %q, want ex-a", store.executionID)
+	}
+}
 
 func TestMaxDiffHorizontalOffsetUsesVisiblePaneWidth(t *testing.T) {
 	lines := []DiffLine{{Text: "1234567890"}}

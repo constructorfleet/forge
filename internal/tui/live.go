@@ -55,8 +55,8 @@ type transcriptReadMsg struct {
 	read FeedRead
 }
 
-// LiveModel is the Bubble Tea model driving the live roster for one
-// Execution: it polls the Roster each tick and renders the frame. It is an
+// LiveModel is the Bubble Tea model driving the live roster for one or more
+// Executions: it polls the Roster each tick and renders the frame. It is an
 // observer, never an owner (ADR-0031): it has no path to write engineering
 // state, so quitting (q / Ctrl+C) can never stop the work being watched. The
 // pure frame Render turns the polled ViewModel into the view.
@@ -725,10 +725,11 @@ func (m *LiveModel) openSelectedDiff() tea.Cmd {
 		return nil
 	}
 	issueID := row.IssueID
+	executionID := row.ExecutionID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		diff, err := LatestDiff(ctx, m.Roster.Store, m.selectedExecutionID(), issueID)
+		diff, err := LatestDiff(ctx, m.Roster.Store, executionID, issueID)
 		if err != nil {
 			if errors.Is(err, ErrNoDiff) {
 				return diffNoticeMsg{text: fmt.Sprintf("no diff for %s yet", issueID)}
