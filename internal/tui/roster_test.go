@@ -112,6 +112,58 @@ func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.Execut
 	return f.state, nil
 }
 
+func TestRosterFetchManyMergesExecutions(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{states: map[string]storage.ExecutionState{
+		"ex-1": {Execution: domain.Execution{ID: "ex-1"}, Issues: []domain.Issue{{ID: "#1", Title: "first"}}},
+		"ex-2": {Execution: domain.Execution{ID: "ex-2"}, Issues: []domain.Issue{{ID: "#2", Title: "second"}}},
+	}}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	vm, err := roster.FetchMany(context.Background(), []string{"ex-1", "ex-2"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	if len(vm.Workers) != 2 {
+		t.Fatalf("len(Workers) = %d, want 2", len(vm.Workers))
+	}
+	if vm.Workers[0].ExecutionID != "ex-1" || vm.Workers[1].ExecutionID != "ex-2" {
+		t.Fatalf("execution ids = %q, %q", vm.Workers[0].ExecutionID, vm.Workers[1].ExecutionID)
+	}
+}
+
+type multiRosterStore struct {
+	states map[string]storage.ExecutionState
+}
+
+func (s *multiRosterStore) LoadExecution(_ context.Context, id string) (storage.ExecutionState, error) {
+	state, ok := s.states[id]
+	if !ok {
+		return storage.ExecutionState{}, storage.ErrNotFound
+	}
+	return state, nil
+}
+func (s *multiRosterStore) WorkerClaim(context.Context, string, string) (storage.WorkerClaim, error) {
+	return storage.WorkerClaim{}, storage.ErrNotFound
+}
+func (s *multiRosterStore) LatestReviewVerdicts(context.Context, string) (map[string]storage.ReviewOutcome, error) {
+	return nil, nil
+}
+func (s *multiRosterStore) LatestReviewDiff(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (s *multiRosterStore) GetReplanCheckpoint(context.Context, string, string) (storage.ReplanCheckpoint, error) {
+	return storage.ReplanCheckpoint{}, storage.ErrNotFound
+}
+func (s *multiRosterStore) GetNeedsInfoCheckpoint(context.Context, string, string) (storage.NeedsInfoCheckpoint, error) {
+	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
+}
+func (s *multiRosterStore) TranscriptAgents(context.Context, string, string) ([]storage.TranscriptAgent, error) {
+	return nil, nil
+}
+func (s *multiRosterStore) AgentRunsByIssue(context.Context, string, string) ([]storage.AgentRun, error) {
+	return nil, nil
+}
+
 func (f *fakeRosterStore) WorkerClaim(_ context.Context, _, issueID string) (storage.WorkerClaim, error) {
 	if f.claimOK[issueID] {
 		return f.claims[issueID], nil

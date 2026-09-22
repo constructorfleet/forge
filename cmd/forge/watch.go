@@ -15,9 +15,8 @@ import (
 
 const watchUsage = `Usage: forge watch [execution-id]
 
-Attach the live roster to one Execution. Without an id, attaches only when
-exactly one Execution has a live Worker heartbeat; otherwise it lists the
-candidates and exits 2. The id is resolved by probing, in order, the
+Attach the live roster to one Execution. Without an id, attaches to every
+Execution with a live Worker heartbeat. The id is resolved by probing, in order, the
 executions table, the planning_executions table, and Feature ids (via
 agent_runs). It never probes the filesystem.
 
@@ -189,19 +188,12 @@ func doRunWatch(args []string) int {
 			fmt.Fprintf(os.Stderr, "forge watch: %v\n", err)
 			return 1
 		}
-		if len(live) != 1 {
-			if len(live) == 0 {
-				fmt.Fprintln(os.Stderr, "forge watch: no execution has a live worker heartbeat")
-			} else {
-				fmt.Fprintf(os.Stderr, "forge watch: %d executions have a live worker heartbeat; pass one:\n", len(live))
-				for _, e := range live {
-					fmt.Fprintf(os.Stderr, "  %s  base=%s  started=%s  active=%d done=%d failed=%d\n",
-						e.ID, e.Base, e.Started.Format(time.RFC3339), e.Active, e.Done, e.Failed)
-				}
-			}
+		if len(live) == 0 {
+			fmt.Fprintln(os.Stderr, "forge watch: no execution has a live worker heartbeat")
 			return 2
 		}
-		target = watchTarget{id: live[0].ID, kind: watchTargetCoding}
+		// An empty target makes the roster discover every live execution per poll.
+		target = watchTarget{kind: watchTargetCoding}
 	case 1:
 		target, err = resolveWatchTarget(ctx, store, fs.Arg(0))
 		if err != nil {

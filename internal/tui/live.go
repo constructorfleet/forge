@@ -272,7 +272,13 @@ func (m *LiveModel) readRoster(now time.Time) tea.Cmd {
 	m.rosterReading = true
 	roster, ctx, executionID := m.Roster, m.ctx, m.ExecutionID
 	return func() tea.Msg {
-		vm, err := roster.Fetch(ctx, executionID, now)
+		var vm ViewModel
+		var err error
+		if executionID == "" {
+			vm, err = roster.FetchLive(ctx, now)
+		} else {
+			vm, err = roster.Fetch(ctx, executionID, now)
+		}
 		return rosterReadMsg{vm: vm, err: err}
 	}
 }
@@ -582,7 +588,7 @@ func (m *LiveModel) loadDiff(row WorkerRow) tea.Cmd {
 	m.diffLoading = true
 	key := rowDiffKey(row)
 	m.diffKey = key
-	store, executionID, issueID := m.Roster.Store, m.ExecutionID, row.IssueID
+	store, executionID, issueID := m.Roster.Store, m.selectedExecutionID(), row.IssueID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
@@ -686,7 +692,7 @@ func (m *LiveModel) openSelectedDiff() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		diff, err := LatestDiff(ctx, m.Roster.Store, m.ExecutionID, issueID)
+		diff, err := LatestDiff(ctx, m.Roster.Store, m.selectedExecutionID(), issueID)
 		if err != nil {
 			if errors.Is(err, ErrNoDiff) {
 				return diffNoticeMsg{text: fmt.Sprintf("no diff for %s yet", issueID)}
@@ -784,7 +790,7 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 		return nil
 	}
 	m.reading = true
-	feed, ctx, executionID, issueID := m.feed, m.ctx, m.ExecutionID, row.IssueID
+	feed, ctx, executionID, issueID := m.feed, m.ctx, m.selectedExecutionID(), row.IssueID
 	return func() tea.Msg {
 		return transcriptReadMsg{feed: feed, read: feed.Fetch(ctx, executionID, issueID)}
 	}
@@ -868,3 +874,10 @@ func (m *LiveModel) View() tea.View {
 
 // Workers exposes the current roster rows, for the model's own tests.
 func (m *LiveModel) Workers() []WorkerRow { return m.vm.Workers }
+
+func (m *LiveModel) selectedExecutionID() string {
+	if row, ok := selectedWorker(m.vm); ok && row.ExecutionID != "" {
+		return row.ExecutionID
+	}
+	return m.ExecutionID
+}

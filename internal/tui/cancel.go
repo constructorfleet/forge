@@ -36,7 +36,7 @@ func (m *LiveModel) armCancelConfirm() tea.Cmd {
 		return nil
 	}
 	m.confirming = true
-	m.vm.ActionNotice = fmt.Sprintf("cancel execution %s? [y] confirm, any other key cancels", m.ExecutionID)
+	m.vm.ActionNotice = fmt.Sprintf("cancel execution %s? [y] confirm, any other key cancels", m.selectedExecutionID())
 	return nil
 }
 
@@ -64,8 +64,8 @@ func (m *LiveModel) startCancel() tea.Cmd {
 		return nil
 	}
 	m.cancelling = true
-	m.vm.ActionNotice = fmt.Sprintf("cancelling execution %s…", m.ExecutionID)
-	canceller, ctx, executionID := m.Canceller, m.ctx, m.ExecutionID
+	m.vm.ActionNotice = fmt.Sprintf("cancelling execution %s…", m.selectedExecutionID())
+	canceller, ctx, executionID := m.Canceller, m.ctx, m.selectedExecutionID()
 	return func() tea.Msg {
 		_, err := canceller.CancelExecution(ctx, executionID)
 		return cancelResultMsg{err: err}
@@ -84,7 +84,7 @@ type cancelResultMsg struct{ err error }
 func (m *LiveModel) applyCancelResult(msg cancelResultMsg) {
 	m.cancelling = false
 	if msg.err == nil {
-		m.vm.ActionNotice = fmt.Sprintf("cancel requested for %s", m.ExecutionID)
+		m.vm.ActionNotice = fmt.Sprintf("cancel requested for %s", m.selectedExecutionID())
 		return
 	}
 	m.vm.ActionNotice = "cancel: " + msg.err.Error()

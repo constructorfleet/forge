@@ -130,7 +130,7 @@ func (m *LiveModel) openSelectedApprove() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		checkpoint, err := LatestReplanCheckpoint(ctx, m.Roster.Store, m.ExecutionID, issueID)
+		checkpoint, err := LatestReplanCheckpoint(ctx, m.Roster.Store, m.selectedExecutionID(), issueID)
 		if err != nil {
 			return approveNoticeMsg{text: err.Error()}
 		}
@@ -158,7 +158,7 @@ func (m *LiveModel) startApprove() tea.Cmd {
 	}
 	issueID := m.approveFlow.issueID
 	m.vm.ActionNotice = fmt.Sprintf("approving issue %s…", issueID)
-	approver, ctx, executionID := m.Approver, m.ctx, m.ExecutionID
+	approver, ctx, executionID := m.Approver, m.ctx, m.selectedExecutionID()
 	return func() tea.Msg {
 		_, err := approver.ResumeAfterReplan(ctx, executionID, issueID)
 		return approveResultMsg{issueID: issueID, err: err}

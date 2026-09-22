@@ -163,7 +163,7 @@ func (m *LiveModel) openSelectedAnswer() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		checkpoint, err := LatestNeedsInfoCheckpoint(ctx, m.Roster.Store, m.ExecutionID, issueID)
+		checkpoint, err := LatestNeedsInfoCheckpoint(ctx, m.Roster.Store, m.selectedExecutionID(), issueID)
 		if err != nil {
 			return answerNoticeMsg{text: err.Error()}
 		}
