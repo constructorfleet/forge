@@ -115,12 +115,9 @@ func TestCompletionResolver_ExternalDependency_PendingStaysUnsatisfiedAndNeverAd
 	}
 }
 
-func TestCompletionResolver_ExternalDependency_InvalidStaysUnsatisfiedWithoutError(t *testing.T) {
-	// Closed-without-merge (EXTERNAL_INVALID) must not error: the
-	// scheduler's own no-progress detection is what surfaces a
-	// permanently-unsatisfiable dependency, not a special-cased error
-	// here (see scheduler.Run's stall handling, reused rather than
-	// duplicated).
+func TestCompletionResolver_ExternalDependency_ClosedWithoutMergeIsSatisfied(t *testing.T) {
+	// A closed prerequisite is satisfied regardless of how the tracker closed
+	// it. The checker keeps EXTERNAL_INVALID for diagnostics.
 	checker := newStubExternalChecker()
 	checker.states["99"] = tracker.ExternalInvalid
 	r := newCompletionResolver([]string{"2"}, checker, "origin/main")
@@ -129,8 +126,8 @@ func TestCompletionResolver_ExternalDependency_InvalidStaysUnsatisfiedWithoutErr
 	if err != nil {
 		t.Fatalf("expected no error for EXTERNAL_INVALID, got %v", err)
 	}
-	if ok {
-		t.Fatal("expected EXTERNAL_INVALID to be unsatisfied")
+	if !ok {
+		t.Fatal("expected a closed EXTERNAL_INVALID prerequisite to satisfy")
 	}
 }
 

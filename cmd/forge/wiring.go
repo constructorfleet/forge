@@ -563,12 +563,9 @@ var publishReadyStates = map[domain.IssueState]bool{
 // (CONTEXT.md), which does have a real satisfaction signal available today
 // (ticket 27): checker.CheckExternal consults GitHub for a merged,
 // reachable PR. completionResolver reports a Dependency on such a
-// prerequisite satisfied only once CheckExternal reports
-// tracker.ExternalSatisfied; EXTERNAL_PENDING and EXTERNAL_INVALID are
-// both reported unsatisfied (never an error) so a permanently-invalid
-// External Issue surfaces via the scheduler's existing no-progress
-// (stall) detection — reused rather than duplicated — instead of a
-// special-cased error path.
+// prerequisite satisfied once CheckExternal reports a closed state or a
+// merged-and-reachable PR. EXTERNAL_PENDING remains unsatisfied because the
+// Issue is still open.
 type completionResolver struct {
 	requested  map[string]bool
 	checker    tracker.ExternalChecker
@@ -660,7 +657,7 @@ func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID 
 	r.mu.Lock()
 	if state, ok := r.external[dependsOnID]; ok {
 		r.mu.Unlock()
-		return state == tracker.ExternalSatisfied, nil
+		return state == tracker.ExternalSatisfied || state == tracker.ExternalInvalid, nil
 	}
 	r.mu.Unlock()
 
@@ -678,7 +675,7 @@ func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID 
 		r.external[dependsOnID] = state
 		r.mu.Unlock()
 	}
-	return state == tracker.ExternalSatisfied, nil
+	return state == tracker.ExternalSatisfied || state == tracker.ExternalInvalid, nil
 }
 
 // dependencyBaseResolver is the scheduler.BaseResolver `forge execute`
@@ -686,9 +683,8 @@ func (r *completionResolver) externalSatisfied(ctx context.Context, dependsOnID 
 // Issue's Dependencies within the requested execution set when resolving
 // what base its Workspace should be built on.
 //
-//   - No Dependencies (or only External ones, already required to be
-//     merged-and-reachable from gitBase before they satisfy — see
-//     completionResolver.externalSatisfied): resolves to gitBase's current
+//   - No Dependencies (or only External ones, already closed before they
+//     satisfy — see completionResolver.externalSatisfied): resolves to gitBase's current
 //     tip, exactly as an Issue with no Dependencies always has.
 //   - One Managed Dependency: resolves that Dependency's resulting branch
 //     (workspaces.BranchName via resolver.branchFor) to its current commit

@@ -950,7 +950,8 @@ func (r *fakeExternalResolver) Satisfied(_ context.Context, _, dependsOnID strin
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.states[dependsOnID] == tracker.ExternalSatisfied, nil
+	state := r.states[dependsOnID]
+	return state == tracker.ExternalSatisfied || state == tracker.ExternalInvalid, nil
 }
 
 func (r *fakeExternalResolver) setState(id string, state tracker.ExternalState) {
@@ -967,8 +968,6 @@ func (r *fakeExternalResolver) UnsatisfiedReason(_ context.Context, _, dependsOn
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch r.states[dependsOnID] {
-	case tracker.ExternalInvalid:
-		return fmt.Sprintf("external issue %s is EXTERNAL_INVALID (closed without a merged PR) and is permanently unsatisfiable", dependsOnID)
 	case tracker.ExternalPending:
 		return fmt.Sprintf("external issue %s is EXTERNAL_PENDING; re-run once its PR merges", dependsOnID)
 	default:
@@ -1059,47 +1058,29 @@ func TestRun_ExternalDependencySatisfied_ManagedDependentUnblocks(t *testing.T) 
 	}
 }
 
-// TestRun_ExternalDependencyInvalid_ManagedDependentStaysBlocked is ticket
-// 27's other integration criterion: an External prerequisite that is
-// closed without a merged PR (EXTERNAL_INVALID) never satisfies its
-// dependent. Run must not hang — it reuses the no-progress (stall)
-// detection from ticket 26 to surface an explicit "unsatisfiable
-// dependency" Result instead of polling forever.
-func TestRun_ExternalDependencyInvalid_ManagedDependentStaysBlocked(t *testing.T) {
+// TestRun_ExternalDependencyClosed_ManagedDependentUnblocks verifies that a
+// closed External prerequisite satisfies its dependent even when its closure
+// did not come with a merged PR. The diagnostic state remains
+// EXTERNAL_INVALID, but closure is the dependency contract.
+func TestRun_ExternalDependencyClosed_ManagedDependentUnblocks(t *testing.T) {
 	issues := map[string]domain.Issue{
 		"2": {ID: "2", Dependencies: []domain.Dependency{{IssueID: "2", DependsOnID: "99"}}},
 	}
 	resolver := &fakeExternalResolver{managed: map[string]bool{}, states: map[string]tracker.ExternalState{"99": tracker.ExternalInvalid}}
-	exec := newGatedExecutor()
+	exec := &recordingExecutor{}
 
 	sch := scheduler.New(&stubTracker{issues: issues}, exec, resolver, scheduler.FixedBase("base"), 2)
 	sch.PollInterval = 2 * time.Millisecond
 
-	done := make(chan struct{})
-	var results map[string]scheduler.Result
-	var runErr error
-	go func() {
-		results, runErr = sch.Run(context.Background(), []string{"2"})
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return promptly for an EXTERNAL_INVALID prerequisite (hang)")
+	results, err := sch.Run(context.Background(), []string{"2"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-
-	if runErr == nil || !strings.Contains(runErr.Error(), "unsatisfiable") {
-		t.Fatalf("Run err = %v, want an unsatisfiable-dependency error", runErr)
+	if results["2"].State != domain.StateReviewing {
+		t.Errorf("results[2].State = %s, want REVIEWING", results["2"].State)
 	}
-	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "99") {
-		t.Errorf("results[2].Err = %v, want it to name the invalid external prerequisite 99", results["2"].Err)
-	}
-	if results["2"].Err == nil || !strings.Contains(results["2"].Err.Error(), "EXTERNAL_INVALID") {
-		t.Errorf("results[2].Err = %v, want it to identify EXTERNAL_INVALID as the reason (permanent, not recheckable)", results["2"].Err)
-	}
-	if exec.CallCount("2") != 0 {
-		t.Errorf("CallCount(2) = %d, want 0 (must stay blocked, never dispatched)", exec.CallCount("2"))
+	if got := exec.Order(); len(got) != 1 || got[0] != "2" {
+		t.Errorf("dispatch order = %v, want [2] (closed prerequisite must unblock dependent)", got)
 	}
 }
 

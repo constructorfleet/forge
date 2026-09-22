@@ -51,8 +51,9 @@ var _ tracker.ExternalChecker = (*Client)(nil)
 //     PR at all while the issue remains open -> ExternalPending (may still
 //     become satisfied later; callers should recheck rather than treat
 //     this as final).
-//   - No merged PR while the issue is closed -> ExternalInvalid: closed
-//     does not equal satisfied (CONTEXT.md "External Issue", ADR 0008).
+//   - No merged PR while the issue is closed -> ExternalInvalid. The resolver
+//     treats every closed Issue as satisfied, while preserving this state for
+//     diagnostics.
 //
 // CheckExternal makes no attempt to cache its answer across calls — every
 // call re-queries GitHub and re-checks git reachability, which is what lets

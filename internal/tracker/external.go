@@ -30,12 +30,9 @@ const (
 	// same bar CONTEXT.md's "Dependency" sets for a Managed prerequisite.
 	ExternalSatisfied ExternalState = "EXTERNAL_SATISFIED"
 
-	// ExternalInvalid means the External Issue is closed without ever
-	// having a merged PR reachable from the applicable base. Closed does
-	// not equal satisfied — issues get closed for reasons other than
-	// successful implementation (ADR 0008) — so this is a distinct,
-	// never-satisfied state rather than being folded into
-	// ExternalPending, which a dependent could otherwise wait on forever.
+	// ExternalInvalid means the External Issue is closed without a merged PR
+	// reachable from the applicable base. It remains distinct for diagnostics,
+	// but closed Issues satisfy dependencies regardless of the close reason.
 	ExternalInvalid ExternalState = "EXTERNAL_INVALID"
 )
 
