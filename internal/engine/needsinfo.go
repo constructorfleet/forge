@@ -152,12 +152,13 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 // than ending it. Callers only reach this once e.Steering is known to be
 // non-nil.
 func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, issueID string) (domain.Issue, []agent.Feedback, error) {
-	e.Steering.Wait(ctx)
+	queue := e.steeringQueue(executionID)
+	queue.Wait(ctx)
 	if err := ctx.Err(); err != nil {
 		return domain.Issue{}, nil, err
 	}
 
-	feedback := e.drainSteeringFeedback()
+	feedback := e.drainSteeringFeedback(executionID)
 
 	if e.Session != nil {
 		e.Session.SetStatus(executeloop.StatusRunning)
