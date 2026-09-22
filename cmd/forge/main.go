@@ -36,7 +36,8 @@ Commands:
   watch [execution-id]     Attach the live roster to an active Execution
   cancel <execution-id>    Stop an active Execution and mark running work CANCELLED
   retry <execution>/<issue> Retry a FAILED Issue within its Execution
-  resume <execution-id>    Reconcile and continue an incomplete Execution
+  resume [--tui|--no-tui] <execution-id>
+                           Reconcile and continue an incomplete Execution
   steer [--answer] <loop-id> <message> Queue a steering message or NEEDS_INFO answer for a running loop
   goal init <feature-id>   Create a skeleton .forge/features/<feature-id>/goal.md
   plan <feature-id>        Run the planning compiler pipeline for a Feature

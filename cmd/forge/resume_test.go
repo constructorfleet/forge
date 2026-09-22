@@ -68,7 +68,7 @@ func TestRunResume_ReconcilesReadyExecution(t *testing.T) {
 		t.Fatalf("Chdir: %v", err)
 	}
 
-	if code := runResume([]string{"--config", cfgPath, "--db", dbPath, exec.ID}); code != 0 {
+	if code := runResume([]string{"--no-tui", "--config", cfgPath, "--db", dbPath, exec.ID}); code != 0 {
 		t.Fatalf("runResume = %d, want 0", code)
 	}
 
