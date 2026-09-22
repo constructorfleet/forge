@@ -10,11 +10,11 @@ import (
 	"github.com/Teagan42/forge/internal/steering"
 )
 
-// steerer is the narrow seam doRunSteer enqueues through. steering.Registry
-// satisfies it in production; a test double lets doRunSteer's argument
-// parsing and output be verified without a real running loop.
+// steerer is the command seam doRunSteer enqueues through. Implementations
+// support both steering messages and NEEDS_INFO answers.
 type steerer interface {
 	Steer(loopID, text string) error
+	Answer(loopID, text string) error
 }
 
 // runSteer implements `forge steer <loop-id> <message...>`: it resolves
@@ -34,16 +34,18 @@ func runSteer(args []string) int {
 }
 
 // doRunSteer resolves the running loop named by args' first positional
-// argument and enqueues the remaining arguments (joined with spaces) as one
-// steering Message onto it. The message takes effect only at that loop's
-// next step boundary (internal/engine's runRepairLoop drains its Queue
-// there, between steps, never mid-step), so doRunSteer always reports the
-// message as queued, never applied — even when a step is currently running:
-// Steer returns as soon as the message is enqueued, without waiting for that
+// argument. It enqueues the remaining arguments as one steering Message by
+// default, or as a NEEDS_INFO answer when --answer is set. The selected
+// message takes effect only at that loop's next step boundary
+// (internal/engine's runRepairLoop drains its Queue there, between steps,
+// never mid-step). Therefore, doRunSteer reports the message as queued,
+// never applied, even when a step is currently running. The selected entry
+// point returns as soon as the message is enqueued, without waiting for that
 // step to finish.
 func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forge steer", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	answer := fs.Bool("answer", false, "enqueue a NEEDS_INFO answer instead of a steering message")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -54,7 +56,13 @@ func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 	loopID := fs.Arg(0)
 	text := strings.Join(fs.Args()[1:], " ")
 
-	if err := s.Steer(loopID, text); err != nil {
+	var err error
+	if *answer {
+		err = s.Answer(loopID, text)
+	} else {
+		err = s.Steer(loopID, text)
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "forge steer: %v\n", err)
 		return 1
 	}

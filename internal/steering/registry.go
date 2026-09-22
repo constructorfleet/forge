@@ -109,13 +109,25 @@ func (r *Registry) Unregister(loopID string) {
 // underlying Queue.Enqueue call returns, which itself never blocks on the
 // step-execution goroutine.
 func (r *Registry) Steer(loopID, text string) error {
+	return r.enqueue(loopID, Message{Text: text})
+}
+
+// Answer resolves loopID to its registered Queue and enqueues text as a
+// NEEDS_INFO answer. It returns ErrLoopNotFound if no loop is registered.
+// Answer returns after Queue.Enqueue and does not wait for step completion.
+// The loop processes the answer at its next step boundary.
+func (r *Registry) Answer(loopID, text string) error {
+	return r.enqueue(loopID, Message{Text: text, Kind: KindAnswer})
+}
+
+func (r *Registry) enqueue(loopID string, message Message) error {
 	r.mu.Lock()
 	reg, ok := r.loops[loopID]
 	r.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrLoopNotFound, loopID)
 	}
-	reg.queue.Enqueue(Message{Text: text})
+	reg.queue.Enqueue(message)
 	return nil
 }
 
