@@ -398,6 +398,22 @@ func resolveRetrier(configPath, dbPath string) tui.Retrier {
 	return buildRetrier(repoRoot, absoluteAgainst(cwd, configPath), absoluteAgainst(cwd, dbPath))
 }
 
+func resolveResumer(configPath, dbPath string) tui.Resumer {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	repoRoot, err := discoverRepoRoot()
+	if err != nil {
+		return nil
+	}
+	return tui.ProcessResumer{
+		RepoRoot:   repoRoot,
+		ConfigPath: absoluteAgainst(cwd, configPath),
+		DBPath:     absoluteAgainst(cwd, dbPath),
+	}
+}
+
 // resolveAnswerer wires buildTracker for `forge execute`/`forge watch`,
 // leaving the answer control present but inert (a nil Answerer) when
 // verifyTrackerAuth's preflight fails or the tracker cannot be constructed,

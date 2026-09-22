@@ -107,3 +107,23 @@ func TestProcessRetrierSpawnFailureIsDistinctFromAChildFailure(t *testing.T) {
 		t.Fatalf("err = %v, want a spawn failure, not a child exit", err)
 	}
 }
+
+func TestProcessResumerBuildsDetachedResumeChild(t *testing.T) {
+	cmd := tui.ProcessResumer{
+		RepoRoot:   "/repo/top",
+		ConfigPath: "/repo/top/.forge.yaml",
+		DBPath:     "/repo/top/.forge/forge.db",
+		Executable: "/usr/bin/true",
+	}.Command("ex-1")
+
+	if cmd.Dir != "/repo/top" {
+		t.Fatalf("Dir = %q, want the git top level", cmd.Dir)
+	}
+	want := []string{"/usr/bin/true", "resume", "ex-1", "--config", "/repo/top/.forge.yaml", "--db", "/repo/top/.forge/forge.db"}
+	if strings.Join(cmd.Args, " ") != strings.Join(want, " ") {
+		t.Fatalf("Args = %v, want %v", cmd.Args, want)
+	}
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatalf("SysProcAttr = %+v, want Setpgid true", cmd.SysProcAttr)
+	}
+}

@@ -21,6 +21,11 @@ type Retrier interface {
 	Retry(executionID, issueID string) (RetryResult, error)
 }
 
+// Resumer is the narrow seam for resuming an execution after an answer.
+type Resumer interface {
+	Resume(executionID string) (RetryResult, error)
+}
+
 // RetryResult carries a finished detached retry child's outcome. Stderr is
 // captured (issue #458: some refreshRetryBase failures leave no trace in the
 // store) so a refused or failing retry is diagnosable from the child's own
@@ -76,4 +81,43 @@ func (m *LiveModel) applyRetryResult(msg retryResultMsg) {
 		return
 	}
 	m.vm.ActionNotice = fmt.Sprintf("retry requested for %s", msg.issueID)
+}
+
+func (m *LiveModel) startResume() tea.Cmd {
+	row, ok := selectedWorker(m.vm)
+	if !ok || !IsResumeLegal(row.State) {
+		m.vm.ActionNotice = "no resumable Worker selected"
+		return nil
+	}
+	if m.resuming {
+		m.vm.ActionNotice = "resume already in flight"
+		return nil
+	}
+	if m.Resumer == nil {
+		m.vm.ActionNotice = "resume is not available"
+		return nil
+	}
+	m.resuming = true
+	executionID := row.ExecutionID
+	m.vm.ActionNotice = fmt.Sprintf("resuming execution %s…", executionID)
+	resumer := m.Resumer
+	return func() tea.Msg {
+		result, err := resumer.Resume(executionID)
+		return resumeResultMsg{executionID: executionID, result: result, err: err}
+	}
+}
+
+type resumeResultMsg struct {
+	executionID string
+	result      RetryResult
+	err         error
+}
+
+func (m *LiveModel) applyResumeResult(msg resumeResultMsg) {
+	m.resuming = false
+	if msg.err != nil {
+		m.vm.ActionNotice = fmt.Sprintf("resume %s: %v", msg.executionID, msg.err)
+		return
+	}
+	m.vm.ActionNotice = fmt.Sprintf("resume requested for %s", msg.executionID)
 }

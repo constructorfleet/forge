@@ -279,6 +279,10 @@ func IsApproveLegal(state domain.IssueState) bool { return state == domain.State
 // one definition and cannot drift apart.
 func IsAnswerLegal(state domain.IssueState) bool { return state == domain.StateNeedsInfo }
 
+// IsResumeLegal reports whether a paused Worker can be resumed after an
+// answer. The detached child reconciles the execution and performs the work.
+func IsResumeLegal(state domain.IssueState) bool { return state == domain.StateNeedsInfo }
+
 // LegalKeys returns the keys legal for a Worker in state. Derived here so the
 // footer always mirrors the rows' own view-model and can never advertise a
 // state-illegal key: q is always legal (quit never stops work), c (cancel)
@@ -294,6 +298,9 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	}
 	if IsAnswerLegal(state) {
 		keys = append(keys, KeyBinding{Key: "a", Label: "answer"})
+	}
+	if IsResumeLegal(state) {
+		keys = append(keys, KeyBinding{Key: "R", Label: "resume"})
 	}
 	if IsApproveLegal(state) {
 		keys = append(keys, KeyBinding{Key: "p", Label: "approve"})

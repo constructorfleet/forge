@@ -38,6 +38,50 @@ type ProcessRetrier struct {
 	Executable string
 }
 
+// ProcessResumer is the production Resumer. It starts a detached forge
+// resume child, so the full execution can continue after the TUI exits.
+type ProcessResumer struct {
+	RepoRoot   string
+	ConfigPath string
+	DBPath     string
+	Executable string
+}
+
+// Resume starts forge resume for an execution and captures the child's
+// bounded stderr tail. The child owns all engineering work.
+func (p ProcessResumer) Resume(executionID string) (RetryResult, error) {
+	cmd := p.Command(executionID)
+	stderr := textcap.NewTailWriter(clicommon.MaxCapturedOutputLen)
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return RetryResult{}, fmt.Errorf("tui: spawn resume child: %w", err)
+	}
+	waitErr := cmd.Wait()
+	result := RetryResult{Stderr: stderr.String()}
+	if waitErr == nil {
+		return result, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		result.ExitCode = exitErr.ExitCode()
+		return result, fmt.Errorf("resume child exited %d: %s", result.ExitCode, result.Stderr)
+	}
+	return result, fmt.Errorf("tui: wait for resume child: %w", waitErr)
+}
+
+// Command builds, but does not start, the detached resume child.
+func (p ProcessResumer) Command(executionID string) *exec.Cmd {
+	executable := p.Executable
+	if executable == "" {
+		executable = clicommon.SelfExecutable()
+	}
+	cmd := exec.CommandContext(context.Background(), executable, "resume", executionID,
+		"--config", p.ConfigPath, "--db", p.DBPath)
+	cmd.Dir = p.RepoRoot
+	clicommon.ConfigureProcessGroup(cmd)
+	return cmd
+}
+
 // Retry spawns the detached child and waits for it to finish, capturing its
 // stderr (issue #458: some refreshRetryBase failures leave no trace in the
 // store, so the raw stderr is the only diagnostic for those). A non-nil

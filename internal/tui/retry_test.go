@@ -44,6 +44,17 @@ type fakeRetrier struct {
 	entered chan struct{}
 }
 
+type fakeResumer struct {
+	calls  []string
+	result tui.RetryResult
+	err    error
+}
+
+func (f *fakeResumer) Resume(executionID string) (tui.RetryResult, error) {
+	f.calls = append(f.calls, executionID)
+	return f.result, f.err
+}
+
 func (f *fakeRetrier) Retry(executionID, issueID string) (tui.RetryResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, [2]string{executionID, issueID})
@@ -168,5 +179,24 @@ func TestLiveModelRetryWithoutARetrierExplains(t *testing.T) {
 
 	if !strings.Contains(got, "not available") {
 		t.Fatalf("frame = %q, want a notice that retry is unavailable", got)
+	}
+}
+
+func TestLiveModelResumeKeyStartsDetachedResume(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{state: storage.ExecutionState{
+		Execution: domain.Execution{ID: "ex-1"},
+		Issues:    []domain.Issue{{ID: "#1", Title: "Answer", State: domain.StateNeedsInfo, StateChangedAt: now}},
+	}}
+	m := tui.NewLiveModel(tui.NewRoster(store, func() time.Time { return now }), "ex-1", time.Millisecond)
+	nextPollTick(t, m)
+	resumer := &fakeResumer{}
+	m.Resumer = resumer
+	got := pressAndRunCmd(t, m, "R")
+	if len(resumer.calls) != 1 || resumer.calls[0] != "ex-1" {
+		t.Fatalf("Resume calls = %v, want [ex-1]", resumer.calls)
+	}
+	if !strings.Contains(got, "resume requested") {
+		t.Fatalf("frame = %q, want resume acknowledgement", got)
 	}
 }
