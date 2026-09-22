@@ -105,6 +105,7 @@ func (r *Roster) FetchLive(ctx context.Context, now time.Time) (ViewModel, error
 // FetchMany merges the Issues from several Executions into one roster.
 func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.Time) (ViewModel, error) {
 	vm := ViewModel{}
+	executionIDs = stableExecutionIDs(executionIDs)
 	loadedRequested := false
 	requestedNotFound := false
 	var failures []string
@@ -146,6 +147,15 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 			vm.Notice = "no live executions"
 		}
 	}
+	if len(vm.ExecutionIDs) == 1 {
+		vm.ExecutionID = vm.ExecutionIDs[0]
+	}
+	sort.SliceStable(vm.Workers, func(i, j int) bool {
+		if vm.Workers[i].ExecutionID != vm.Workers[j].ExecutionID {
+			return vm.Workers[i].ExecutionID < vm.Workers[j].ExecutionID
+		}
+		return vm.Workers[i].IssueID < vm.Workers[j].IssueID
+	})
 	if len(failures) > 0 {
 		failureNotice := "failed to load executions: " + strings.Join(failures, "; ")
 		if vm.Notice != "" {
@@ -155,6 +165,22 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 		}
 	}
 	return vm, nil
+}
+
+func stableExecutionIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	out := sorted[:0]
+	for _, id := range sorted {
+		if id == "" || (len(out) > 0 && out[len(out)-1] == id) {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // row resolves one Issue into a WorkerRow. A heartbeat missing or stale is

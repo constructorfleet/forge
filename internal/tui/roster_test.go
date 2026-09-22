@@ -136,6 +136,29 @@ func TestRosterFetchManyMergesExecutions(t *testing.T) {
 	}
 }
 
+func TestRosterFetchManySortsExecutionsAndIssues(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{states: map[string]storage.ExecutionState{
+		"ex-b": {Execution: domain.Execution{ID: "ex-b"}, Issues: []domain.Issue{{ID: "#2"}, {ID: "#1"}}},
+		"ex-a": {Execution: domain.Execution{ID: "ex-a"}, Issues: []domain.Issue{{ID: "#3"}, {ID: "#1"}}},
+	}}
+	vm, err := tui.NewRoster(store, nil).FetchMany(context.Background(), []string{"ex-b", "ex-a", "ex-b"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	got := make([]string, 0, len(vm.Workers))
+	for _, row := range vm.Workers {
+		got = append(got, row.ExecutionID+"/"+row.IssueID)
+	}
+	want := []string{"ex-a/#1", "ex-a/#3", "ex-b/#1", "ex-b/#2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("workers = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(vm.ExecutionIDs, []string{"ex-a", "ex-b"}) {
+		t.Fatalf("execution ids = %v, want [ex-a ex-b]", vm.ExecutionIDs)
+	}
+}
+
 func TestRosterFetchManyRetainsRowsWhenOneExecutionFails(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := &multiRosterStore{

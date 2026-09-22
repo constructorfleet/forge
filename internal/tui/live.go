@@ -98,6 +98,9 @@ type LiveModel struct {
 	// confirming records that a cancel key armed the UI-only confirmation and
 	// awaits the operator's next key to fire or abandon it.
 	confirming bool
+	// cancelExecutionID keeps the identity captured when confirmation started.
+	// A poll can change the selected row before the operator presses y.
+	cancelExecutionID string
 	// cancelling records a CancelExecution call in flight, so a second cancel
 	// key press on the same call cannot double-issue it.
 	cancelling bool
@@ -357,9 +360,9 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		vm.AgentSelection = clampSelection(vm.AgentSelection, len(row.Agents))
 	}
 	vm.DiffOpen, vm.Diff, vm.DiffScroll, vm.DiffHorizontal = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal
-	vm.Width, vm.ExecutionID = m.vm.Width, m.vm.ExecutionID
-	if len(vm.ExecutionIDs) == 0 {
-		vm.ExecutionIDs = m.vm.ExecutionIDs
+	vm.Width = m.vm.Width
+	if m.ExecutionID != "" {
+		vm.ExecutionID = m.ExecutionID
 	}
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.

@@ -15,8 +15,8 @@ import (
 
 const watchUsage = `Usage: forge watch [execution-id]
 
-Attach the live roster to one or more Executions. With an id, attach to that
-Execution. Without an id, attach to every Execution with a live Worker heartbeat. When an id is supplied, it is resolved by probing, in order, the
+Attach the live roster to one Execution when you give an id. Without an id,
+attach to every Execution with a live Worker heartbeat. When an id is supplied, it is resolved by probing, in order, the
 executions table, the planning_executions table, and Feature ids (via
 agent_runs). It never probes the filesystem.
 

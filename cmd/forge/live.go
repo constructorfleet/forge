@@ -21,8 +21,9 @@ type liveStore interface {
 // runLiveRoster drives the live Bubble Tea roster for executionID until it
 // quits. Bubble Tea runs in raw mode and catches panics by default, restoring
 // the terminal, so an observer crash cannot leave the shell crosstalk-broken.
-// The program takes its own context so the caller can cancel the read loop
-// without touching the store. canceller wires the cancel key and approver
+// An empty executionID enables live discovery on every poll. A non-empty ID
+// pins the roster to that Execution. The program takes its own context.
+// The caller can cancel the read loop without touching the store. canceller wires the cancel key and approver
 // wires the approve key to the in-process operational Engine (ADR 0031); a
 // nil canceller or approver leaves the control present but inert, and the key
 // explains itself instead of quietly doing nothing. retrier wires the retry
