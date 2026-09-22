@@ -200,6 +200,17 @@ func (p *TranscriptPane) SetWidth(w int) { p.width = w }
 // yet reported a terminal size.
 func (p *TranscriptPane) SetHeight(h int) { p.height = h }
 
+// Rows reports the rows the current entries need without the height clamp.
+// The live feed uses this value to fit an event window to the pane budget.
+func (p *TranscriptPane) Rows() int {
+	groups, _ := transcriptGroups(p)
+	rows := 0
+	for _, group := range groups {
+		rows += len(group)
+	}
+	return rows
+}
+
 // SetGates replaces the quality-gate rows the pane interleaves into the event
 // timeline by finish time. The call rebuilds the entries through rebuild, the
 // pane's one rebuild path, so selection and expansion follow the same

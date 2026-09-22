@@ -98,6 +98,17 @@ func TestRenderTranscriptWrapsLongLines(t *testing.T) {
 	}
 }
 
+func TestTranscriptPaneRowsIgnoresHeightClamp(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "first"), prose(1, "second"),
+	}})
+	pane.SetHeight(1)
+	if got := pane.Rows(); got != 2 {
+		t.Fatalf("Rows() = %d, want 2", got)
+	}
+}
+
 // TestRenderTranscriptWrapsStyledLines proves a styled header line (the
 // default colour scheme renders a tool call in Faint) that is longer than the
 // pane's set width still wraps into rows of at most the set width in visible

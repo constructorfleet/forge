@@ -877,12 +877,9 @@ func (m *LiveModel) transcriptLagAge(now time.Time) time.Duration {
 	return now.Sub(m.lastCommit)
 }
 
-// applyTranscriptHeight sizes the tailer's event window from the transcript row
-// budget. The two units differ: the tailer counts events and the budget counts
-// rows, and one event can draw several rows. So this is an upper bound on how
-// much history to read, and Render owns the exact clip to the terminal. It runs
-// on a resize, on each poll (the roster row count is part of the chrome), and
-// when a feed is attached.
+// applyTranscriptHeight sizes the transcript row budget and pane width. The
+// feed measures entry rows and fits its event window to that budget. It runs on
+// a resize, on each poll, and when a feed is attached.
 func (m *LiveModel) applyTranscriptHeight() {
 	m.vm.Height = m.winHeight
 	width := 0

@@ -453,6 +453,24 @@ func TestFeedSetHeightWindowsTheTailer(t *testing.T) {
 	}
 }
 
+func TestFeedFitsEventWindowToWrappedRows(t *testing.T) {
+	feed := tui.NewTranscriptFeed(feedFixture())
+	feed.SetWidth(20)
+	feed.SetHeight(3)
+
+	pane, err := feed.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	got := tui.RenderTranscript(pane)
+	if strings.Contains(got, "starting work") {
+		t.Errorf("fit kept an event whose rows do not fit:\n%s", got)
+	}
+	if !strings.Contains(got, "bash") {
+		t.Errorf("fit dropped the newest event:\n%s", got)
+	}
+}
+
 // TestFeedSetWidthReachesTheHeldPane proves the feed passes the terminal width
 // to a pane it already holds, so a long line wraps to the rows it draws.
 func TestFeedSetWidthReachesTheHeldPane(t *testing.T) {
