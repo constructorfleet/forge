@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -505,7 +506,7 @@ func (m *LiveModel) scrollDiffHorizontal(delta int) {
 func maxDiffWidth(lines []DiffLine) int {
 	max := 0
 	for _, line := range lines {
-		if n := len([]rune(line.Text)); n > max {
+		if n := lipgloss.Width(line.Text); n > max {
 			max = n
 		}
 	}

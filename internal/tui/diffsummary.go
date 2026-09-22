@@ -6,7 +6,7 @@ package tui
 import "strings"
 
 // BoundDiff limits the body shown in the TUI. It keeps complete lines until
-// either limit is reached. A pager remains available for the complete diff.
+// either limit is reached. It omits a line that exceeds the byte limit.
 func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
 	if maxBytes <= 0 && maxLines <= 0 {
 		return diff, false
@@ -20,11 +20,7 @@ func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
 			break
 		}
 		if maxBytes > 0 && b.Len()+len(line) > maxBytes {
-			remaining := maxBytes - b.Len()
-			if remaining > 0 {
-				b.WriteString(line[:remaining])
-			}
-			truncated = len(line) > remaining || b.Len() < len(diff)
+			truncated = true
 			break
 		}
 		b.WriteString(line)

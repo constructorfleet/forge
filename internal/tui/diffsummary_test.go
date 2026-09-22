@@ -3,6 +3,7 @@ package tui_test
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Teagan42/forge/internal/tui"
 )
@@ -79,5 +80,19 @@ func TestBoundDiffLimitsBytesAndLines(t *testing.T) {
 	}
 	if lines := strings.Count(got, "\n"); lines > 3 {
 		t.Fatalf("BoundDiff returned %d lines, want at most 3", lines)
+	}
+}
+
+func TestBoundDiffStopsBeforeAnOversizedUTF8Line(t *testing.T) {
+	input := "+界界\n+ok\n"
+	got, truncated := tui.BoundDiff(input, len([]byte("+界")), 0)
+	if !truncated {
+		t.Fatal("BoundDiff reported no truncation")
+	}
+	if got != "" {
+		t.Fatalf("BoundDiff returned a partial line %q, want no oversized line", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("BoundDiff returned invalid UTF-8")
 	}
 }
