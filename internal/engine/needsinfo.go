@@ -128,8 +128,8 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 	// doc comment above), so this is the single place that needs to set
 	// the loop's status — at most one outstanding NEEDS_INFO is ever
 	// tracked, since Session.status is a scalar, not a list keyed by ID.
-	if e.Session != nil {
-		e.Session.SetStatus(executeloop.StatusNeedsInfo)
+	if session := e.steeringSession(executionID); session != nil {
+		session.SetStatus(executeloop.StatusNeedsInfo)
 	}
 
 	return issue, nil
@@ -164,8 +164,8 @@ func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, iss
 
 	feedback := e.drainSteeringFeedback(executionID)
 
-	if e.Session != nil {
-		e.Session.SetStatus(executeloop.StatusRunning)
+	if session := e.steeringSession(executionID); session != nil {
+		session.SetStatus(executeloop.StatusRunning)
 	}
 
 	if _, err := e.transition(ctx, executionID, issueID, domain.StateReady); err != nil {

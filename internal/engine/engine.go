@@ -372,8 +372,9 @@ type Engine struct {
 }
 
 type steeringExecution struct {
-	queue *steering.Queue
-	count int
+	queue   *steering.Queue
+	session *executeloop.Session
+	count   int
 }
 
 // IssueLocker serializes work scoped to one (executionID, issueID) pair
@@ -552,12 +553,17 @@ func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func
 		return active.queue, e.releaseSteeringQueue(executionID)
 	}
 	queue := e.Steering
+	session := e.Session
 	if e.steeringCompatibilityClaimed || len(e.steeringQueues) > 0 {
 		queue = steering.NewQueue()
+		session = executeloop.NewSession()
 	} else {
 		e.steeringCompatibilityClaimed = true
+		if session == nil {
+			session = executeloop.NewSession()
+		}
 	}
-	e.steeringQueues[executionID] = steeringExecution{queue: queue, count: 1}
+	e.steeringQueues[executionID] = steeringExecution{queue: queue, session: session, count: 1}
 	e.steeringMu.Unlock()
 	return queue, e.releaseSteeringQueue(executionID)
 }
@@ -585,7 +591,7 @@ func (e *Engine) acquireSteeringExecution(executionID string) (*steering.Queue, 
 	if queue == nil || e.SteeringRegistry == nil {
 		return queue, releaseQueue
 	}
-	e.SteeringRegistry.Register(executionID, queue, e.Session)
+	e.SteeringRegistry.Register(executionID, queue, e.steeringSession(executionID))
 	return queue, func() {
 		e.SteeringRegistry.Unregister(executionID)
 		releaseQueue()
@@ -597,6 +603,17 @@ func (e *Engine) steeringQueue(executionID string) *steering.Queue {
 	active := e.steeringQueues[executionID]
 	e.steeringMu.Unlock()
 	return active.queue
+}
+
+// steeringSession returns the session owned by one active execution.
+func (e *Engine) steeringSession(executionID string) *executeloop.Session {
+	e.steeringMu.Lock()
+	active := e.steeringQueues[executionID]
+	e.steeringMu.Unlock()
+	if active.session != nil {
+		return active.session
+	}
+	return e.Session
 }
 
 // ExecuteInExecution drives one Issue through the execution pipeline inside

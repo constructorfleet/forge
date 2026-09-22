@@ -3,8 +3,30 @@ package engine
 import (
 	"testing"
 
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/steering"
 )
+
+func TestSteeringSessionIsScopedToExecution(t *testing.T) {
+	e := &Engine{Steering: steering.NewQueue(), Session: executeloop.NewSession()}
+	_, releaseFirst := e.acquireSteeringExecution("execution-1")
+	defer releaseFirst()
+	_, releaseSecond := e.acquireSteeringExecution("execution-2")
+	defer releaseSecond()
+
+	first := e.steeringSession("execution-1")
+	second := e.steeringSession("execution-2")
+	if first == nil || second == nil {
+		t.Fatal("each execution must have a steering session")
+	}
+	if first == second {
+		t.Fatal("concurrent executions must not share a steering session")
+	}
+	first.SetStatus(executeloop.StatusNeedsInfo)
+	if got := second.Status(); got != executeloop.StatusRunning {
+		t.Fatalf("second execution status = %q, want %q", got, executeloop.StatusRunning)
+	}
+}
 
 func TestSteeringQueueIsScopedToExecution(t *testing.T) {
 	configured := steering.NewQueue()
