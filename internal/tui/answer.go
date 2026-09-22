@@ -206,5 +206,17 @@ func (m *LiveModel) startAnswer(answer string) tea.Cmd {
 // notice (in memory only; there is no durable outbox, see
 // docs/specs/live-agent-tui.md "Out of scope").
 func (m *LiveModel) applyAnswerResult(msg answerResultMsg) {
+	executionID := m.answerFlow.executionID
 	m.answerFlow.applyResult(&m.vm.ActionNotice, msg.issueID, msg.err, "answer", "answer posted for %s")
+	if msg.err == nil {
+		if m.answered == nil {
+			m.answered = make(map[string]bool)
+		}
+		m.answered[controlKey(executionID, msg.issueID)] = true
+		for i := range m.vm.Workers {
+			if m.vm.Workers[i].ExecutionID == executionID && m.vm.Workers[i].IssueID == msg.issueID {
+				m.vm.Workers[i].ResumeLegal = true
+			}
+		}
+	}
 }

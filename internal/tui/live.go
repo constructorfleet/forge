@@ -108,10 +108,14 @@ type LiveModel struct {
 	// Retrier spawns a detached forge retry child. Nil disables the control:
 	// the retry key then explains itself instead of silently doing nothing.
 	Retrier Retrier
+	// Resumer starts a detached forge resume child after a human answer.
+	Resumer Resumer
 
 	// retrying records a Retry call in flight, so a second retry key press on
 	// the same call cannot double-issue it.
 	retrying bool
+	resuming map[string]bool
+	answered map[string]bool
 
 	// OpenApprove defers a replan-checkpoint artifact to $PAGER, writing it
 	// under the given directory. Injected so a test drives the whole key path
@@ -228,6 +232,8 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyCancelResult(msg)
 	case retryResultMsg:
 		m.applyRetryResult(msg)
+	case resumeResultMsg:
+		m.applyResumeResult(msg)
 	case approveNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case approveReadyMsg:
@@ -315,6 +321,9 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		return
 	}
 	vm := msg.vm
+	for i := range vm.Workers {
+		vm.Workers[i].ResumeLegal = m.answered[controlKey(vm.Workers[i].ExecutionID, vm.Workers[i].IssueID)]
+	}
 	selectedExecutionID, selectedIssueID := "", ""
 	if row, ok := selectedWorker(m.vm); ok {
 		selectedExecutionID, selectedIssueID = row.ExecutionID, row.IssueID
@@ -370,6 +379,8 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	m.vm = vm
 }
 
+func controlKey(executionID, issueID string) string { return executionID + "\x00" + issueID }
+
 // handleKey applies one non-quit key against the focused pane. The diff
 // toggle and pane navigation act from every pane; every other key acts on
 // the pane that holds focus alone, so a roster key and a pane key can share
@@ -406,6 +417,8 @@ func (m *LiveModel) handleRosterKey(key uv.Key) tea.Cmd {
 		return m.armCancelConfirm()
 	case key.MatchString("r"):
 		return m.startRetry()
+	case key.MatchString("R"):
+		return m.startResume()
 	case key.MatchString("p"):
 		return m.openSelectedApprove()
 	case key.MatchString("a"):

@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Teagan42/forge/internal/scheduler"
-	"github.com/Teagan42/forge/internal/tui"
 )
 
 // runExecute implements `forge execute <issue-number> [<issue-number> ...]`
@@ -125,8 +124,9 @@ func doRunExecute(args []string) int {
 		// separate detached forge child.
 		operationalEngine := buildOperationalEngine(store, cfg, repoRoot)
 		retrier := resolveRetrier(resolvedConfigPath, resolvedDBPath)
+		resumer := resolveResumer(resolvedConfigPath, resolvedDBPath)
 		answerer := resolveAnswerer(ctx, cfg, repoRoot)
-		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, operationalEngine, retrier, operationalEngine, answerer)
+		return runExecuteTUI(ctx, runtime, store, executionID, issueIDs, liveControls{canceller: operationalEngine, retrier: retrier, resumer: resumer, approver: operationalEngine, answerer: answerer})
 	}
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)
@@ -137,12 +137,12 @@ func doRunExecute(args []string) int {
 // in the background. The roster is the observer: quitting it early (q/Ctrl+C)
 // never cancels the run; when Scheduler.Run returns, the roster is stopped and
 // the final per-Issue states are printed.
-func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver, answerer tui.Answerer) int {
+func runExecuteTUI(ctx context.Context, runtime *executeRuntime, store liveStore, executionID string, issueIDs []string, controls liveControls) int {
 	rosterCtx, cancelRoster := context.WithCancel(context.Background())
 	defer cancelRoster()
 	rosterDone := make(chan error, 1)
 	go func() {
-		rosterDone <- runLiveRoster(rosterCtx, store, executionID, canceller, retrier, approver, answerer)
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID, controls)
 	}()
 
 	results, runErr := runtime.Scheduler.Run(ctx, issueIDs)

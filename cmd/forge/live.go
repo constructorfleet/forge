@@ -18,30 +18,38 @@ type liveStore interface {
 	tui.TranscriptFeedStore
 }
 
+type liveControls struct {
+	canceller tui.Canceller
+	retrier   tui.Retrier
+	resumer   tui.Resumer
+	approver  tui.Approver
+	answerer  tui.Answerer
+}
+
 // runLiveRoster drives the live Bubble Tea roster for executionID, or discovers
 // every live Execution when executionID is empty, until it
 // quits. Bubble Tea runs in raw mode and catches panics by default, restoring
 // the terminal, so an observer crash cannot leave the shell crosstalk-broken.
 // An empty executionID enables live discovery on every poll. A non-empty ID
 // pins the roster to that Execution. The program takes its own context.
-// The caller can cancel the read loop without touching the store. canceller wires the cancel key and approver
-// wires the approve key to the in-process operational Engine (ADR 0031); a
-// nil canceller or approver leaves the control present but inert, and the key
-// explains itself instead of quietly doing nothing. retrier wires the retry
-// key to a detached forge child (ADR 0031, issue #503); a nil retrier leaves
-// that control present but inert too. answerer wires the answer key to a
+// The caller can cancel the read loop without touching the store. Canceller
+// wires cancel and approver wires approve to the in-process operational Engine
+// (ADR 0031). A nil seam leaves its control inert, and the key explains itself.
+// Retrier and resumer wire retry and resume to detached forge children. A nil
+// seam leaves that control inert too. Answerer wires the answer key to a
 // Tracker's AddComment (issue #505); a nil answerer — from
 // resolveAnswerer's up-front auth preflight failing — leaves the answer
 // control present but inert, with no offline fallback.
-func runLiveRoster(ctx context.Context, store liveStore, executionID string, canceller tui.Canceller, retrier tui.Retrier, approver tui.Approver, answerer tui.Answerer) error {
+func runLiveRoster(ctx context.Context, store liveStore, executionID string, controls liveControls) error {
 	roster := tui.NewRoster(store, time.Now)
 	model := tui.NewLiveModel(roster, executionID, 0)
 	model.SetContext(ctx)
 	model.SetFeed(tui.NewTranscriptFeed(store))
-	model.Canceller = canceller
-	model.Retrier = retrier
-	model.Approver = approver
-	model.Answerer = answerer
+	model.Canceller = controls.canceller
+	model.Retrier = controls.retrier
+	model.Resumer = controls.resumer
+	model.Approver = controls.approver
+	model.Answerer = controls.answerer
 
 	// A quit key removes the diff artifacts itself; this covers every other
 	// exit path (cancellation, signal, panic).

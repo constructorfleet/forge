@@ -1,6 +1,6 @@
 package tui
 
-// retry.go issues the one out-of-process control (ADR 0031): RetryIssue ends
+// retry.go issues the out-of-process controls (ADR 0031): RetryIssue ends
 // in resumeIssue — full re-entry into workspace setup, rebase, the coding
 // agent, the repair loop, gates, commit, and PR, the very orchestrator this
 // TUI observes — so an in-process call would re-enter it. Retry instead
@@ -21,14 +21,23 @@ type Retrier interface {
 	Retry(executionID, issueID string) (RetryResult, error)
 }
 
-// RetryResult carries a finished detached retry child's outcome. Stderr is
+// Resumer is the narrow seam for starting a resume for a NEEDS_INFO execution.
+// The operator controls answer-before-resume sequencing in the TUI.
+type Resumer interface {
+	Resume(executionID string) (DetachedResult, error)
+}
+
+// DetachedResult carries a finished detached child's outcome. Stderr is
 // captured (issue #458: some refreshRetryBase failures leave no trace in the
 // store) so a refused or failing retry is diagnosable from the child's own
 // output, not only from the store.
-type RetryResult struct {
+type DetachedResult struct {
 	Stderr   string
 	ExitCode int
 }
+
+// RetryResult is kept as an alias for callers of the retry seam.
+type RetryResult = DetachedResult
 
 // startRetry returns the command that spawns a detached retry child off the
 // update goroutine, so a slow spawn cannot delay a key press. It marks the
@@ -76,4 +85,46 @@ func (m *LiveModel) applyRetryResult(msg retryResultMsg) {
 		return
 	}
 	m.vm.ActionNotice = fmt.Sprintf("retry requested for %s", msg.issueID)
+}
+
+func (m *LiveModel) startResume() tea.Cmd {
+	row, ok := selectedWorker(m.vm)
+	if !ok || !IsResumeLegalForRow(row) {
+		m.vm.ActionNotice = "no resumable Worker selected"
+		return nil
+	}
+	executionID := row.ExecutionID
+	if m.resuming == nil {
+		m.resuming = make(map[string]bool)
+	}
+	if m.resuming[executionID] {
+		m.vm.ActionNotice = "resume already in flight"
+		return nil
+	}
+	if m.Resumer == nil {
+		m.vm.ActionNotice = "resume is not available"
+		return nil
+	}
+	m.resuming[executionID] = true
+	m.vm.ActionNotice = fmt.Sprintf("resuming execution %s…", executionID)
+	resumer := m.Resumer
+	return func() tea.Msg {
+		result, err := resumer.Resume(executionID)
+		return resumeResultMsg{executionID: executionID, result: result, err: err}
+	}
+}
+
+type resumeResultMsg struct {
+	executionID string
+	result      DetachedResult
+	err         error
+}
+
+func (m *LiveModel) applyResumeResult(msg resumeResultMsg) {
+	delete(m.resuming, msg.executionID)
+	if msg.err != nil {
+		m.vm.ActionNotice = fmt.Sprintf("resume %s: %v", msg.executionID, msg.err)
+		return
+	}
+	m.vm.ActionNotice = fmt.Sprintf("resume requested for %s", msg.executionID)
 }

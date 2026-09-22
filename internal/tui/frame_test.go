@@ -173,6 +173,17 @@ func TestLegalKeys(t *testing.T) {
 	}
 }
 
+func TestLegalKeysForRowRequiresPostedAnswerForResume(t *testing.T) {
+	without := tui.LegalKeysForRow(tui.WorkerRow{State: domain.StateNeedsInfo})
+	with := tui.LegalKeysForRow(tui.WorkerRow{State: domain.StateNeedsInfo, ResumeLegal: true})
+	if strings.Contains(footerFor(without), "[R] resume") {
+		t.Fatal("unanswered NEEDS_INFO row advertises resume")
+	}
+	if !strings.Contains(footerFor(with), "[R] resume") {
+		t.Fatal("answered NEEDS_INFO row does not advertise resume")
+	}
+}
+
 // layoutFixture builds a frame with two Workers, three agents on the selected
 // one, a short transcript, and an open diff, so the layout tests can prove
 // every region renders from the one view-model.
@@ -466,7 +477,11 @@ func TestRenderFooterLeadsWithLegalKeys(t *testing.T) {
 		vm := tui.ViewModel{Workers: []tui.WorkerRow{{IssueID: "#1", Title: "t", State: s}}}
 		lines := splitLines(tui.Render(vm))
 		footer := lines[len(lines)-1]
-		if want := footerFor(tui.LegalKeys(s)); !strings.HasPrefix(footer, want) {
+		keys := tui.LegalKeys(s)
+		if s == domain.StateNeedsInfo {
+			keys = keys[:len(keys)-1]
+		}
+		if want := footerFor(keys); !strings.HasPrefix(footer, want) {
 			t.Errorf("state %s: footer %q does not lead with %q", s, footer, want)
 		}
 		for _, illegal := range []string{"[c] cancel", "[r] retry", "[a] answer", "[p] approve"} {

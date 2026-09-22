@@ -117,6 +117,8 @@ type WorkerRow struct {
 	IssueID     string
 	Title       string
 	State       domain.IssueState
+	// ResumeLegal is true after this session posts an answer for the row.
+	ResumeLegal bool
 
 	// Elapsed is time spent in the current state (execution_issues.state_changed_at).
 	Elapsed time.Duration
@@ -279,11 +281,21 @@ func IsApproveLegal(state domain.IssueState) bool { return state == domain.State
 // one definition and cannot drift apart.
 func IsAnswerLegal(state domain.IssueState) bool { return state == domain.StateNeedsInfo }
 
+// IsResumeLegal reports whether a Worker state can support a resume. The row
+// view adds the session answer check before it exposes the control.
+func IsResumeLegal(state domain.IssueState) bool { return state == domain.StateNeedsInfo }
+
+// IsResumeLegalForRow reports whether this session posted an answer.
+func IsResumeLegalForRow(row WorkerRow) bool {
+	return IsResumeLegal(row.State) && row.ResumeLegal
+}
+
 // LegalKeys returns the keys legal for a Worker in state. Derived here so the
 // footer always mirrors the rows' own view-model and can never advertise a
 // state-illegal key: q is always legal (quit never stops work), c (cancel)
 // from any non-terminal state, r (retry) from FAILED, a (answer) while parked
-// on NEEDS_INFO, p (approve) while parked on NEEDS_REPLAN.
+// on NEEDS_INFO, R (resume) after an answer, and p (approve) while parked on
+// NEEDS_REPLAN.
 func LegalKeys(state domain.IssueState) []KeyBinding {
 	keys := []KeyBinding{{Key: "q", Label: "quit"}}
 	if IsCancelLegal(state) {
@@ -297,6 +309,15 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	}
 	if IsApproveLegal(state) {
 		keys = append(keys, KeyBinding{Key: "p", Label: "approve"})
+	}
+	return keys
+}
+
+// LegalKeysForRow returns controls legal for one fully resolved row.
+func LegalKeysForRow(row WorkerRow) []KeyBinding {
+	keys := LegalKeys(row.State)
+	if IsResumeLegalForRow(row) {
+		keys = append(keys, KeyBinding{Key: "R", Label: "resume"})
 	}
 	return keys
 }
