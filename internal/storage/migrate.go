@@ -58,6 +58,28 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// VerifySchema checks that every embedded migration is recorded. It never
+// creates tables or applies DDL, so observers can call it on an open store.
+func (s *SQLiteStore) VerifySchema(ctx context.Context) error {
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("storage: read embedded migrations: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		applied, err := migrationApplied(ctx, s.db, entry.Name())
+		if err != nil {
+			return fmt.Errorf("storage: verify migration %s: %w", entry.Name(), err)
+		}
+		if !applied {
+			return fmt.Errorf("storage: schema is behind; migration %s is not applied", entry.Name())
+		}
+	}
+	return nil
+}
+
 func migrationApplied(ctx context.Context, db *sql.DB, name string) (bool, error) {
 	var count int
 	row := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, name)
