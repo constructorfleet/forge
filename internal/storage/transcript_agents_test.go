@@ -123,3 +123,35 @@ func TestTranscriptAgents_IncludesStartedRunWithoutEvents(t *testing.T) {
 		t.Fatalf("agent = %+v, want run %d reviewing/bugs with zero events", got, runID)
 	}
 }
+
+func TestTranscriptAgents_IgnoresEventsFromAnotherScope(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-scope", "issue-scope")
+	seedIssueForAgentRun(t, store, "exec-other", "issue-other")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-scope",
+		IssueID:     "issue-scope",
+		Backend:     "claude-code",
+		StartedAt:   time.Now().UTC(),
+		Phase:       "REVIEWING",
+		Subagent:    "bugs",
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+	if err := store.RecordTranscriptEvents(ctx, "exec-other", "issue-other", runID, []storage.TranscriptEvent{{
+		Seq: 0, Type: "MESSAGE", Text: "wrong scope", OccurredAt: time.Now().UTC(),
+	}}); err != nil {
+		t.Fatalf("RecordTranscriptEvents: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-scope", "issue-scope")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Events != 0 || agents[0].Last.Text != "" {
+		t.Fatalf("agents = %+v, want one empty run summary", agents)
+	}
+}
