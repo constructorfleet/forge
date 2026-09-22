@@ -131,8 +131,8 @@ type LiveModel struct {
 	// same row cannot double-post it.
 	answerFlow actionFlow
 
-	// diffKey identifies the Review the open diff pane summarizes: the Issue,
-	// its verdict, and whether it stored a diff. A roster pass whose selected
+	// diffKey identifies the Review the open diff pane summarizes: the Execution,
+	// Issue, verdict, and whether it stored a diff. A roster pass whose selected
 	// row yields another key reloads the pane; an unchanged key reads nothing,
 	// so an open pane costs no blob read per poll.
 	diffKey string
@@ -295,6 +295,10 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		return
 	}
 	vm := msg.vm
+	selectedExecutionID, selectedIssueID := "", ""
+	if row, ok := selectedWorker(m.vm); ok {
+		selectedExecutionID, selectedIssueID = row.ExecutionID, row.IssueID
+	}
 	// The roster refresh keeps the operator's pane, focus, and chosen row: a
 	// sequential run's later Issues would otherwise vanish behind the first
 	// row every time a poll pass replaced the view-model.
@@ -311,12 +315,21 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	// the new row count: a fresh ViewModel's Selection is always the zero
 	// value, and copying it over would silently snap the pane back to the
 	// first row on every poll.
-	vm.Selection = m.vm.Selection
-	if last := len(vm.Workers) - 1; vm.Selection > last {
-		vm.Selection = last
-	}
-	if vm.Selection < 0 {
-		vm.Selection = 0
+	vm.Selection = 0
+	if selectedExecutionID != "" || selectedIssueID != "" {
+		found := false
+		for i, row := range vm.Workers {
+			if row.ExecutionID == selectedExecutionID && row.IssueID == selectedIssueID {
+				vm.Selection = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
+		}
+	} else {
+		vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
 	}
 	// The agent selection, the diff pane, the terminal width, and the
 	// Execution name are all operator or runtime state a fresh view-model
@@ -575,7 +588,7 @@ type diffLoadedMsg struct {
 
 // rowDiffKey names the Review a row's diff pane would summarize.
 func rowDiffKey(row WorkerRow) string {
-	return fmt.Sprintf("%s|%s|%t", row.IssueID, row.Verdict, row.HasDiff)
+	return fmt.Sprintf("%s|%s|%s|%t", row.ExecutionID, row.IssueID, row.Verdict, row.HasDiff)
 }
 
 // loadDiff returns the command that reads row's diff and summarizes it. The
@@ -803,11 +816,11 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 // starts a fresh read for the Worker now selected, so a stale read can never
 // paint the wrong Worker's transcript into the pane.
 func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	want := ""
+	wantExecutionID, wantIssueID := "", ""
 	if row, ok := selectedWorker(m.vm); ok {
-		want = row.IssueID
+		wantExecutionID, wantIssueID = row.ExecutionID, row.IssueID
 	}
-	cmd, committed := m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, wantExecutionID, wantIssueID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 	if committed {
 		m.lastCommit = m.Roster.Now()
 		// The feed may have built the pane this pass, so it takes the

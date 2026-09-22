@@ -3,6 +3,7 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -131,8 +132,36 @@ func TestRosterFetchManyMergesExecutions(t *testing.T) {
 	}
 }
 
+func TestRosterFetchLiveSortsExecutionIDs(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &liveRosterStore{
+		multiRosterStore: &multiRosterStore{states: map[string]storage.ExecutionState{
+			"ex-1": {Execution: domain.Execution{ID: "ex-1"}, Issues: []domain.Issue{{ID: "#1"}}},
+			"ex-2": {Execution: domain.Execution{ID: "ex-2"}, Issues: []domain.Issue{{ID: "#2"}}},
+		}},
+		ids: []string{"ex-2", "ex-1"},
+	}
+	vm, err := tui.NewRoster(store, func() time.Time { return now }).FetchLive(context.Background(), now)
+	if err != nil {
+		t.Fatalf("FetchLive: %v", err)
+	}
+	got := []string{vm.Workers[0].ExecutionID, vm.Workers[1].ExecutionID}
+	if want := []string{"ex-1", "ex-2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("execution ids = %v, want %v", got, want)
+	}
+}
+
 type multiRosterStore struct {
 	states map[string]storage.ExecutionState
+}
+
+type liveRosterStore struct {
+	*multiRosterStore
+	ids []string
+}
+
+func (s *liveRosterStore) LiveWorkerExecutionIDs(context.Context, time.Time) ([]string, error) {
+	return s.ids, nil
 }
 
 func (s *multiRosterStore) LoadExecution(_ context.Context, id string) (storage.ExecutionState, error) {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -95,19 +96,29 @@ func (r *Roster) FetchLive(ctx context.Context, now time.Time) (ViewModel, error
 	if err != nil {
 		return ViewModel{}, fmt.Errorf("tui: list live executions: %w", err)
 	}
-	return r.FetchMany(ctx, ids, now)
+	sortedIDs := append([]string(nil), ids...)
+	sort.Strings(sortedIDs)
+	return r.FetchMany(ctx, sortedIDs, now)
 }
 
 // FetchMany merges the Issues from several Executions into one roster.
 func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.Time) (ViewModel, error) {
 	vm := ViewModel{}
+	loadedRequested := false
+	requestedNotFound := false
 	for _, executionID := range executionIDs {
 		state, err := r.Store.LoadExecution(ctx, executionID)
 		if errors.Is(err, storage.ErrNotFound) {
+			if len(executionIDs) == 1 {
+				requestedNotFound = true
+			}
 			continue
 		}
 		if err != nil {
 			return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
+		}
+		if len(executionIDs) == 1 {
+			loadedRequested = true
 		}
 		verdicts, err := r.Store.LatestReviewVerdicts(ctx, state.Execution.ID)
 		if err != nil {
@@ -119,7 +130,7 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 	}
 	if len(vm.Workers) == 0 {
 		if len(executionIDs) == 1 {
-			if _, err := r.Store.LoadExecution(ctx, executionIDs[0]); errors.Is(err, storage.ErrNotFound) {
+			if requestedNotFound && !loadedRequested {
 				vm.Notice = "waiting for the execution to start…"
 			} else {
 				vm.Notice = "no issues in this execution"

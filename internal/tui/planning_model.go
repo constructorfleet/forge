@@ -307,7 +307,7 @@ func (m *PlanningModel) readTranscript() tea.Cmd {
 // Execution and the Issue, so the read a Feature ever gets back always
 // answers that same FeatureID: it is never stale.
 func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	cmd, committed := m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, m.FeatureID, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 	if committed {
 		m.lastCommit = m.Roster.Now()
 	}
