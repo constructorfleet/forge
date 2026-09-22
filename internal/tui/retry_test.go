@@ -182,7 +182,7 @@ func TestLiveModelRetryWithoutARetrierExplains(t *testing.T) {
 	}
 }
 
-func TestLiveModelResumeKeyStartsDetachedResume(t *testing.T) {
+func TestLiveModelResumeKeyRequiresPostedAnswer(t *testing.T) {
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	store := &fakeRosterStore{state: storage.ExecutionState{
 		Execution: domain.Execution{ID: "ex-1"},
@@ -193,10 +193,10 @@ func TestLiveModelResumeKeyStartsDetachedResume(t *testing.T) {
 	resumer := &fakeResumer{}
 	m.Resumer = resumer
 	got := pressAndRunCmd(t, m, "R")
-	if len(resumer.calls) != 1 || resumer.calls[0] != "ex-1" {
-		t.Fatalf("Resume calls = %v, want [ex-1]", resumer.calls)
+	if len(resumer.calls) != 0 {
+		t.Fatalf("Resume calls = %v, want no call before an answer", resumer.calls)
 	}
-	if !strings.Contains(got, "resume requested") {
-		t.Fatalf("frame = %q, want resume acknowledgement", got)
+	if !strings.Contains(got, "no resumable Worker") {
+		t.Fatalf("frame = %q, want resume refusal before an answer", got)
 	}
 }

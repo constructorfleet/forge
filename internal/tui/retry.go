@@ -1,6 +1,6 @@
 package tui
 
-// retry.go issues the one out-of-process control (ADR 0031): RetryIssue ends
+// retry.go issues the out-of-process controls (ADR 0031): RetryIssue ends
 // in resumeIssue — full re-entry into workspace setup, rebase, the coding
 // agent, the repair loop, gates, commit, and PR, the very orchestrator this
 // TUI observes — so an in-process call would re-enter it. Retry instead
@@ -24,17 +24,20 @@ type Retrier interface {
 // Resumer is the narrow seam for starting a resume for a NEEDS_INFO execution.
 // The operator controls answer-before-resume sequencing in the TUI.
 type Resumer interface {
-	Resume(executionID string) (RetryResult, error)
+	Resume(executionID string) (DetachedResult, error)
 }
 
-// RetryResult carries a finished detached retry child's outcome. Stderr is
+// DetachedResult carries a finished detached child's outcome. Stderr is
 // captured (issue #458: some refreshRetryBase failures leave no trace in the
 // store) so a refused or failing retry is diagnosable from the child's own
 // output, not only from the store.
-type RetryResult struct {
+type DetachedResult struct {
 	Stderr   string
 	ExitCode int
 }
+
+// RetryResult is kept as an alias for callers of the retry seam.
+type RetryResult = DetachedResult
 
 // startRetry returns the command that spawns a detached retry child off the
 // update goroutine, so a slow spawn cannot delay a key press. It marks the
@@ -86,7 +89,7 @@ func (m *LiveModel) applyRetryResult(msg retryResultMsg) {
 
 func (m *LiveModel) startResume() tea.Cmd {
 	row, ok := selectedWorker(m.vm)
-	if !ok || !IsResumeLegal(row.State) {
+	if !ok || !IsResumeLegalForRow(row) {
 		m.vm.ActionNotice = "no resumable Worker selected"
 		return nil
 	}
@@ -110,7 +113,7 @@ func (m *LiveModel) startResume() tea.Cmd {
 
 type resumeResultMsg struct {
 	executionID string
-	result      RetryResult
+	result      DetachedResult
 	err         error
 }
 

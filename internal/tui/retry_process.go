@@ -46,11 +46,15 @@ type detachedProcessConfig struct {
 }
 
 func (p ProcessRetrier) processConfig() detachedProcessConfig {
-	return detachedProcessConfig{repoRoot: p.RepoRoot, configPath: p.ConfigPath, dbPath: p.DBPath, executable: p.Executable}
+	return newDetachedProcessConfig(p.RepoRoot, p.ConfigPath, p.DBPath, p.Executable)
 }
 
 func (p ProcessResumer) processConfig() detachedProcessConfig {
-	return detachedProcessConfig{repoRoot: p.RepoRoot, configPath: p.ConfigPath, dbPath: p.DBPath, executable: p.Executable}
+	return newDetachedProcessConfig(p.RepoRoot, p.ConfigPath, p.DBPath, p.Executable)
+}
+
+func newDetachedProcessConfig(repoRoot, configPath, dbPath, executable string) detachedProcessConfig {
+	return detachedProcessConfig{repoRoot: repoRoot, configPath: configPath, dbPath: dbPath, executable: executable}
 }
 
 func (c detachedProcessConfig) command(args ...string) *exec.Cmd {
@@ -76,7 +80,7 @@ type ProcessResumer struct {
 
 // Resume starts forge resume for an execution and captures the child's
 // bounded stderr tail. The child owns all engineering work.
-func (p ProcessResumer) Resume(executionID string) (RetryResult, error) {
+func (p ProcessResumer) Resume(executionID string) (DetachedResult, error) {
 	return runDetached("resume", p.Command(executionID))
 }
 
@@ -94,15 +98,15 @@ func (p ProcessRetrier) Retry(executionID, issueID string) (RetryResult, error) 
 	return runDetached("retry", p.Command(executionID, issueID))
 }
 
-func runDetached(action string, cmd *exec.Cmd) (RetryResult, error) {
+func runDetached(action string, cmd *exec.Cmd) (DetachedResult, error) {
 	stderr := textcap.NewTailWriter(clicommon.MaxCapturedOutputLen)
 	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
-		return RetryResult{}, fmt.Errorf("tui: spawn %s child: %w", action, err)
+		return DetachedResult{}, fmt.Errorf("tui: spawn %s child: %w", action, err)
 	}
 	waitErr := cmd.Wait()
-	result := RetryResult{Stderr: stderr.String()}
+	result := DetachedResult{Stderr: stderr.String()}
 	if waitErr == nil {
 		return result, nil
 	}

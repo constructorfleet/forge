@@ -115,6 +115,7 @@ type LiveModel struct {
 	// the same call cannot double-issue it.
 	retrying bool
 	resuming bool
+	answered map[string]bool
 
 	// OpenApprove defers a replan-checkpoint artifact to $PAGER, writing it
 	// under the given directory. Injected so a test drives the whole key path
@@ -320,6 +321,9 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		return
 	}
 	vm := msg.vm
+	for i := range vm.Workers {
+		vm.Workers[i].ResumeLegal = m.answered[controlKey(vm.Workers[i].ExecutionID, vm.Workers[i].IssueID)]
+	}
 	selectedExecutionID, selectedIssueID := "", ""
 	if row, ok := selectedWorker(m.vm); ok {
 		selectedExecutionID, selectedIssueID = row.ExecutionID, row.IssueID
@@ -374,6 +378,8 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	vm.Style = m.vm.Style
 	m.vm = vm
 }
+
+func controlKey(executionID, issueID string) string { return executionID + "\x00" + issueID }
 
 // handleKey applies one non-quit key against the focused pane. The diff
 // toggle and pane navigation act from every pane; every other key acts on

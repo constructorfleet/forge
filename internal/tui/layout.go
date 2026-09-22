@@ -585,7 +585,7 @@ func frameKeys(vm ViewModel) []KeyBinding {
 		}
 		keys = append(keys, KeyBinding{Key: "tab", Label: "next pane"})
 	default:
-		keys = LegalKeys(row.State)
+		keys = LegalKeysForRow(row)
 		if len(vm.Workers) > 1 {
 			keys = append(keys, KeyBinding{Key: "j/k", Label: "switch worker"})
 		}

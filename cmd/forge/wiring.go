@@ -387,30 +387,38 @@ func absoluteAgainst(base, path string) string {
 // process working directory. The child still runs from the discovered git
 // root, separate from where its --config and --db flags point.
 func resolveRetrier(configPath, dbPath string) tui.Retrier {
+	paths, ok := resolveDetachedPaths(configPath, dbPath)
+	if !ok {
+		return nil
+	}
+	return buildRetrier(paths.repoRoot, paths.configPath, paths.dbPath)
+}
+
+type detachedPaths struct {
+	repoRoot, configPath, dbPath string
+}
+
+func resolveDetachedPaths(configPath, dbPath string) (detachedPaths, bool) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil
+		return detachedPaths{}, false
 	}
 	repoRoot, err := discoverRepoRoot()
 	if err != nil {
-		return nil
+		return detachedPaths{}, false
 	}
-	return buildRetrier(repoRoot, absoluteAgainst(cwd, configPath), absoluteAgainst(cwd, dbPath))
+	return detachedPaths{repoRoot: repoRoot, configPath: absoluteAgainst(cwd, configPath), dbPath: absoluteAgainst(cwd, dbPath)}, true
 }
 
 func resolveResumer(configPath, dbPath string) tui.Resumer {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil
-	}
-	repoRoot, err := discoverRepoRoot()
-	if err != nil {
+	paths, ok := resolveDetachedPaths(configPath, dbPath)
+	if !ok {
 		return nil
 	}
 	return tui.ProcessResumer{
-		RepoRoot:   repoRoot,
-		ConfigPath: absoluteAgainst(cwd, configPath),
-		DBPath:     absoluteAgainst(cwd, dbPath),
+		RepoRoot:   paths.repoRoot,
+		ConfigPath: paths.configPath,
+		DBPath:     paths.dbPath,
 	}
 }
 
