@@ -93,3 +93,89 @@ func TestTranscriptAgents_NoEventsReturnsEmpty(t *testing.T) {
 		t.Fatalf("got %d agents, want 0", len(got))
 	}
 }
+
+func TestTranscriptAgents_IncludesStartedRunWithoutEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-started", "issue-started")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-started",
+		IssueID:     "issue-started",
+		Backend:     "claude-code",
+		StartedAt:   time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
+		Phase:       "REVIEWING",
+		Subagent:    "bugs",
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-started", "issue-started")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want one: %+v", len(agents), agents)
+	}
+	got := agents[0]
+	if got.AgentRunID != runID || got.Phase != "REVIEWING" || got.Subagent != "bugs" || got.Events != 0 {
+		t.Fatalf("agent = %+v, want run %d reviewing/bugs with zero events", got, runID)
+	}
+}
+
+func TestTranscriptAgents_IncludesUnattributedRunWithoutEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-empty", "issue-empty")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-empty",
+		IssueID:     "issue-empty",
+		Backend:     "claude-code",
+		StartedAt:   time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-empty", "issue-empty")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].AgentRunID != runID || agents[0].Phase != "" || agents[0].Subagent != "" || agents[0].Events != 0 {
+		t.Fatalf("agents = %+v, want one empty run summary", agents)
+	}
+}
+
+func TestTranscriptAgents_IgnoresEventsFromAnotherScope(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-scope", "issue-scope")
+	seedIssueForAgentRun(t, store, "exec-other", "issue-other")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-scope",
+		IssueID:     "issue-scope",
+		Backend:     "claude-code",
+		StartedAt:   time.Now().UTC(),
+		Phase:       "REVIEWING",
+		Subagent:    "bugs",
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+	if err := store.RecordTranscriptEvents(ctx, "exec-other", "issue-other", runID, []storage.TranscriptEvent{{
+		Seq: 0, Type: "MESSAGE", Text: "wrong scope", OccurredAt: time.Now().UTC(),
+	}}); err != nil {
+		t.Fatalf("RecordTranscriptEvents: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-scope", "issue-scope")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].Events != 0 || agents[0].Last.Text != "" {
+		t.Fatalf("agents = %+v, want one empty run summary", agents)
+	}
+}

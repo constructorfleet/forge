@@ -84,7 +84,8 @@ type GateRun struct {
 	AgentRunID *int64
 }
 
-// AgentRun is one persisted implementation-agent invocation for an Issue.
+// AgentRun is one persisted agent invocation for an Issue. Phase and Subagent
+// identify the invocation before its transcript emits an event.
 // Review remains a separate first-class record via ReviewRun. ID is the
 // storage-assigned agent_runs row id, populated by AgentRunsByExecution/
 // AgentRunsByIssue so a run is addressable by an exposed id (ADR 0030);
@@ -101,6 +102,8 @@ type AgentRun struct {
 	ContextBytes int
 	InputTokens  *int
 	OutputTokens *int
+	Phase        string
+	Subagent     string
 }
 
 // TranscriptAgent summarizes one AgentRun's transcript for the live TUI: the

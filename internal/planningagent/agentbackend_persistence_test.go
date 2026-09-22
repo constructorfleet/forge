@@ -108,6 +108,12 @@ func TestPersistingAgentBackendInvoke_RecordsTranscriptEvents(t *testing.T) {
 	if runs[0].ContextBytes <= 0 {
 		t.Fatalf("agent run ContextBytes = %d, want positive", runs[0].ContextBytes)
 	}
+	if runs[0].Phase != TranscriptPhase {
+		t.Fatalf("agent run Phase = %q, want %q", runs[0].Phase, TranscriptPhase)
+	}
+	if runs[0].Subagent != "specification-review" {
+		t.Fatalf("agent run Subagent = %q, want the InvokeRequest.Key", runs[0].Subagent)
+	}
 }
 
 // A transcript is only durable if it survives the failure it is most needed

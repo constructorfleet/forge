@@ -172,21 +172,22 @@ func scanTranscriptEvents(rows *sql.Rows, contextMsg string) ([]TranscriptEvent,
 // pass reads a prefix and never a whole message body.
 const transcriptAgentTextPrefix = 200
 
-// TranscriptAgents returns one summary per AgentRun that recorded at least one
-// TranscriptEvent for the Issue, in AgentRun order. Each summary carries the
-// run's phase and subagent (from its last event), its event count, and its
-// last event with a bounded text prefix and no tool input. The live TUI polls
-// it each pass to list the Issue's agents and their latest output, so it
-// reads no event body beyond that prefix.
+// TranscriptAgents returns one summary per AgentRun for the Issue, in
+// AgentRun order. Each summary carries the run's phase and subagent, its event
+// count, and its last event with a bounded text prefix and no tool input. A
+// run with no events still appears with an empty last event.
 func (s *SQLiteStore) TranscriptAgents(ctx context.Context, executionID, issueID string) ([]TranscriptAgent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT e.agent_run_id, e.phase, e.subagent,
-		       (SELECT COUNT(*) FROM transcript_events c WHERE c.agent_run_id = e.agent_run_id),
-		       e.seq, e.type, e.role, substr(e.text, 1, ?), e.tool_name, substr(e.tool_output, 1, ?), e.tool_call_id, e.occurred_at
-		FROM transcript_events e
-		WHERE e.execution_id = ? AND e.issue_id = ?
-		  AND e.seq = (SELECT MAX(m.seq) FROM transcript_events m WHERE m.agent_run_id = e.agent_run_id)
-		ORDER BY e.agent_run_id`,
+		SELECT r.id, COALESCE(NULLIF(r.phase, ''), e.phase, ''), COALESCE(NULLIF(r.subagent, ''), e.subagent, ''),
+		       (SELECT COUNT(*) FROM transcript_events c WHERE c.execution_id = r.execution_id AND c.issue_id = r.issue_id AND c.agent_run_id = r.id),
+		       COALESCE(e.seq, 0), COALESCE(e.type, ''), COALESCE(e.role, ''), substr(COALESCE(e.text, ''), 1, ?),
+		       COALESCE(e.tool_name, ''), substr(COALESCE(e.tool_output, ''), 1, ?), COALESCE(e.tool_call_id, ''), e.occurred_at
+		FROM agent_runs r
+		LEFT JOIN transcript_events e ON e.agent_run_id = r.id
+		  AND e.execution_id = r.execution_id AND e.issue_id = r.issue_id
+		  AND e.seq = (SELECT MAX(m.seq) FROM transcript_events m WHERE m.execution_id = r.execution_id AND m.issue_id = r.issue_id AND m.agent_run_id = r.id)
+		WHERE r.execution_id = ? AND r.issue_id = ?
+		ORDER BY r.id`,
 		transcriptAgentTextPrefix, transcriptAgentTextPrefix, executionID, issueID,
 	)
 	if err != nil {
@@ -197,15 +198,18 @@ func (s *SQLiteStore) TranscriptAgents(ctx context.Context, executionID, issueID
 	var agents []TranscriptAgent
 	for rows.Next() {
 		var a TranscriptAgent
+		var occurredAt sql.NullTime
 		if err := rows.Scan(
 			&a.AgentRunID, &a.Phase, &a.Subagent, &a.Events,
-			&a.Last.Seq, &a.Last.Type, &a.Last.Role, &a.Last.Text, &a.Last.ToolName, &a.Last.ToolOutput, &a.Last.ToolCallID, &a.Last.OccurredAt,
+			&a.Last.Seq, &a.Last.Type, &a.Last.Role, &a.Last.Text, &a.Last.ToolName, &a.Last.ToolOutput, &a.Last.ToolCallID, &occurredAt,
 		); err != nil {
 			return nil, fmt.Errorf("storage: transcript agents for issue %s/%s: scan: %w", executionID, issueID, err)
 		}
 		a.Last.ExecutionID, a.Last.IssueID, a.Last.AgentRunID = executionID, issueID, a.AgentRunID
 		a.Last.Phase, a.Last.Subagent = a.Phase, a.Subagent
-		a.Last.OccurredAt = a.Last.OccurredAt.UTC()
+		if occurredAt.Valid {
+			a.Last.OccurredAt = occurredAt.Time.UTC()
+		}
 		agents = append(agents, a)
 	}
 	if err := rows.Err(); err != nil {

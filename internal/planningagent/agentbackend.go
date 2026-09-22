@@ -145,6 +145,8 @@ func (b *AgentBackend) startRun(ctx context.Context, agentReq agent.AgentRequest
 		Backend:      TranscriptBackendName,
 		StartedAt:    started,
 		ContextBytes: contextBytes,
+		Phase:        TranscriptPhase,
+		Subagent:     agentReq.Issue.ID,
 	})
 	if err != nil {
 		return 0, started, false

@@ -1345,6 +1345,7 @@ func (e *Engine) executeAgentStep(ctx context.Context, executionID, issueID stri
 		Backend:      e.Config.Agent.Provider,
 		StartedAt:    started,
 		ContextBytes: contextBytes,
+		Phase:        string(domain.StateImplementing),
 	})
 	if startErr != nil {
 		return domain.Issue{}, false, false, fmt.Errorf("engine: start agent run for issue %s: %w", issueID, startErr)
@@ -1699,6 +1700,8 @@ func (c *reviewTranscriptCoordinator) sinkFor(subagent string) agent.TranscriptS
 		IssueID:     c.issueID,
 		Backend:     c.backend,
 		StartedAt:   started,
+		Phase:       string(domain.StateReviewing),
+		Subagent:    subagent,
 	})
 	if err != nil {
 		return noopTranscriptSink{}
