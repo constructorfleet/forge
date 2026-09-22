@@ -569,8 +569,10 @@ func frameKeys(vm ViewModel) []KeyBinding {
 		if vm.Diff != nil && len(vm.Diff.Files) > 0 {
 			keys = append(keys, KeyBinding{Key: "enter", Label: "open in $PAGER"})
 		}
-		if vm.Diff != nil && len(vm.Diff.Lines) > 0 && maxDiffHorizontalOffset(vm.Diff.Lines, diffViewportWidth(vm)) > 0 {
+		if vm.Diff != nil && len(vm.Diff.Lines) > 1 {
 			keys = append(keys, KeyBinding{Key: "j/k", Label: "scroll hunk"})
+		}
+		if vm.Diff != nil && len(vm.Diff.Lines) > 0 && maxDiffHorizontalOffset(vm.Diff.Lines, diffViewportWidth(vm)) > 0 {
 			keys = append(keys, KeyBinding{Key: "h/l", Label: "scroll columns"})
 		}
 		keys = append(keys, KeyBinding{Key: "tab", Label: "next pane"})
