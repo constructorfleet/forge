@@ -21,6 +21,7 @@ import (
 	"github.com/Teagan42/forge/internal/agent/pi"
 	"github.com/Teagan42/forge/internal/config"
 	"github.com/Teagan42/forge/internal/domain"
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/execution"
 	"github.com/Teagan42/forge/internal/execution/container"
 	"github.com/Teagan42/forge/internal/execution/localhost"
@@ -824,6 +825,38 @@ func TestBuildEngine_WiresSteeringQueueAndRegistry(t *testing.T) {
 	}
 	if eng.SteeringRegistry == nil {
 		t.Error("eng.SteeringRegistry is nil, want a Registry so the loop can register its Queue under its Execution ID")
+	}
+}
+
+// TestBuildEngine_WiresSession proves TKT-009's (constructorfleet/forge#739)
+// wiring gap: buildEngine gives every Engine it builds a live
+// executeloop.Session, so handleNeedsInfo's status transitions
+// (internal/engine/needsinfo.go) and SteeringRegistry's Status lookup
+// (internal/steering/registry.go) are backed by a real Session in a real
+// `forge execute` run, not only in tests that set eng.Session by hand.
+func TestBuildEngine_WiresSession(t *testing.T) {
+	root, _ := newTempRepo(t)
+	runGit(t, root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
+
+	dbPath := filepath.Join(t.TempDir(), "forge.db")
+	store, err := openStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	cfg := config.Default()
+	cfg.Agent.Provider = "fake"
+
+	eng, err := buildEngine(store, cfg, root)
+	if err != nil {
+		t.Fatalf("buildEngine: %v", err)
+	}
+	if eng.Session == nil {
+		t.Fatal("eng.Session is nil, want a live executeloop.Session so the loop's status is queryable")
+	}
+	if got := eng.Session.Status(); got != executeloop.StatusRunning {
+		t.Errorf("eng.Session.Status() = %q, want %q", got, executeloop.StatusRunning)
 	}
 }
 

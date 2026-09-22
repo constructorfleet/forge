@@ -532,7 +532,7 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 	// (constructorfleet/forge#746), for this loop's whole duration — every
 	// return path below, success or failure, unregisters it via defer.
 	if e.Steering != nil && e.SteeringRegistry != nil {
-		e.SteeringRegistry.Register(execution.ID, e.Steering)
+		e.SteeringRegistry.Register(execution.ID, e.Steering, e.Session)
 		defer e.SteeringRegistry.Unregister(execution.ID)
 	}
 

@@ -5,13 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Teagan42/forge/internal/executeloop"
 	"github.com/Teagan42/forge/internal/steering"
 )
 
 func TestRegistry_SteerEnqueuesOntoRegisteredQueue(t *testing.T) {
 	r := steering.NewRegistry()
 	q := steering.NewQueue()
-	r.Register("loop-1", q)
+	r.Register("loop-1", q, nil)
 
 	if err := r.Steer("loop-1", "steer this way"); err != nil {
 		t.Fatalf("Steer() error = %v, want nil", err)
@@ -37,7 +38,7 @@ func TestRegistry_SteerOnUnknownLoopReturnsErrLoopNotFound(t *testing.T) {
 func TestRegistry_UnregisterRemovesLoop(t *testing.T) {
 	r := steering.NewRegistry()
 	q := steering.NewQueue()
-	r.Register("loop-1", q)
+	r.Register("loop-1", q, nil)
 
 	r.Unregister("loop-1")
 
@@ -55,8 +56,8 @@ func TestRegistry_UnregisterRemovesLoop(t *testing.T) {
 func TestRegistry_UnregisterKeepsLoopWhileOtherRegistrationOutstanding(t *testing.T) {
 	r := steering.NewRegistry()
 	q := steering.NewQueue()
-	r.Register("loop-1", q)
-	r.Register("loop-1", q)
+	r.Register("loop-1", q, nil)
+	r.Register("loop-1", q, nil)
 
 	r.Unregister("loop-1")
 
@@ -80,7 +81,7 @@ func TestRegistry_UnregisterKeepsLoopWhileOtherRegistrationOutstanding(t *testin
 func TestRegistry_SteerDuringInProgressStepReturnsWithoutWaiting(t *testing.T) {
 	r := steering.NewRegistry()
 	q := steering.NewQueue()
-	r.Register("loop-1", q)
+	r.Register("loop-1", q, nil)
 
 	stepDone := make(chan struct{})
 	stepStarted := make(chan struct{})
@@ -101,5 +102,72 @@ func TestRegistry_SteerDuringInProgressStepReturnsWithoutWaiting(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Steer() blocked instead of returning immediately while the step was in progress")
+	}
+}
+
+// TestRegistry_StatusReflectsRegisteredSessionTransitions proves TKT-009's
+// acceptance criterion: a caller resolves a running loop's status through the
+// same Registry `forge steer` already resolves loop-ids through, and that
+// status changes from running to needs_info and back as the underlying
+// executeloop.Session transitions.
+func TestRegistry_StatusReflectsRegisteredSessionTransitions(t *testing.T) {
+	r := steering.NewRegistry()
+	q := steering.NewQueue()
+	session := executeloop.NewSession()
+	r.Register("loop-1", q, session)
+
+	got, err := r.Status("loop-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v, want nil", err)
+	}
+	if got != executeloop.StatusRunning {
+		t.Fatalf("Status() = %q, want %q", got, executeloop.StatusRunning)
+	}
+
+	session.SetStatus(executeloop.StatusNeedsInfo)
+
+	got, err = r.Status("loop-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v, want nil", err)
+	}
+	if got != executeloop.StatusNeedsInfo {
+		t.Fatalf("Status() = %q, want %q", got, executeloop.StatusNeedsInfo)
+	}
+
+	session.SetStatus(executeloop.StatusRunning)
+
+	got, err = r.Status("loop-1")
+	if err != nil {
+		t.Fatalf("Status() error = %v, want nil", err)
+	}
+	if got != executeloop.StatusRunning {
+		t.Fatalf("Status() = %q, want %q", got, executeloop.StatusRunning)
+	}
+}
+
+func TestRegistry_StatusOnUnknownLoopReturnsErrLoopNotFound(t *testing.T) {
+	r := steering.NewRegistry()
+
+	_, err := r.Status("no-such-loop")
+
+	if !errors.Is(err, steering.ErrLoopNotFound) {
+		t.Fatalf("Status() error = %v, want wrapping ErrLoopNotFound", err)
+	}
+}
+
+// TestRegistry_StatusOnQueueOnlyRegistrationReturnsErrStatusUnavailable
+// covers a Register call made with a nil Session (an Engine with no
+// executeloop.Session wired, e.g. Steering configured but Session not yet
+// set): Status must distinguish "no such loop" from "loop known, but its
+// live status isn't tracked" rather than conflating the two.
+func TestRegistry_StatusOnQueueOnlyRegistrationReturnsErrStatusUnavailable(t *testing.T) {
+	r := steering.NewRegistry()
+	q := steering.NewQueue()
+	r.Register("loop-1", q, nil)
+
+	_, err := r.Status("loop-1")
+
+	if !errors.Is(err, steering.ErrStatusUnavailable) {
+		t.Fatalf("Status() error = %v, want wrapping ErrStatusUnavailable", err)
 	}
 }
