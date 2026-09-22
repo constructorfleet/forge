@@ -89,7 +89,7 @@ func runResume(args []string) int {
 		}
 		var state storage.ExecutionState
 		if useTUI {
-			state, err = runResumeTUI(ctx, store, executionID, eng, resolveRetrier(resolvedConfigPath, resolvedDBPath), resolveAnswerer(ctx, cfg, repoRoot))
+			state, err = runResumeTUI(ctx, store, executionID, eng, resolveRetrier(resolvedConfigPath, resolvedDBPath), resolveResumer(resolvedConfigPath, resolvedDBPath), resolveAnswerer(ctx, cfg, repoRoot))
 		} else {
 			state, err = eng.ResumeExecution(ctx, executionID)
 		}
@@ -142,7 +142,7 @@ func runResume(args []string) int {
 // runResumeTUI mirrors execute's observer lifecycle: the live roster renders
 // the persisted Execution while ResumeExecution performs the actual recovery.
 // Quitting the roster only detaches the observer; it never cancels recovery.
-func runResumeTUI(ctx context.Context, store liveStore, executionID string, eng *engine.Engine, retrier tui.Retrier, answerer tui.Answerer) (storage.ExecutionState, error) {
+func runResumeTUI(ctx context.Context, store liveStore, executionID string, eng *engine.Engine, retrier tui.Retrier, resumer tui.Resumer, answerer tui.Answerer) (storage.ExecutionState, error) {
 	rosterCtx, cancelRoster := context.WithCancel(context.Background())
 	defer cancelRoster()
 
@@ -158,7 +158,7 @@ func runResumeTUI(ctx context.Context, store liveStore, executionID string, eng 
 
 	rosterDone := make(chan error, 1)
 	go func() {
-		rosterDone <- runLiveRoster(rosterCtx, store, executionID, eng, retrier, eng, answerer)
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID, liveControls{canceller: eng, retrier: retrier, resumer: resumer, approver: eng, answerer: answerer})
 	}()
 
 	result := <-resumed
