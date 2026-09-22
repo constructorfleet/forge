@@ -151,7 +151,7 @@ func TestLegalKeys(t *testing.T) {
 		// r (retry) is the manual retry out of the terminal FAILED state.
 		{domain.StateFailed, []string{"[q] quit", "[r] retry"}},
 		// a (answer) is legal only while parked on a NEEDS_INFO decision.
-		{domain.StateNeedsInfo, []string{"[q] quit", "[c] cancel", "[a] answer", "[R] resume"}},
+		{domain.StateNeedsInfo, []string{"[q] quit", "[c] cancel", "[a] answer"}},
 		// p (approve) is legal only while parked on NEEDS_REPLAN.
 		{domain.StateNeedsReplan, []string{"[q] quit", "[c] cancel", "[p] approve"}},
 		// Terminal states carry only q: no further transitions.

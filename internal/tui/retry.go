@@ -93,7 +93,11 @@ func (m *LiveModel) startResume() tea.Cmd {
 		m.vm.ActionNotice = "no resumable Worker selected"
 		return nil
 	}
-	if m.resuming {
+	executionID := row.ExecutionID
+	if m.resuming == nil {
+		m.resuming = make(map[string]bool)
+	}
+	if m.resuming[executionID] {
 		m.vm.ActionNotice = "resume already in flight"
 		return nil
 	}
@@ -101,8 +105,7 @@ func (m *LiveModel) startResume() tea.Cmd {
 		m.vm.ActionNotice = "resume is not available"
 		return nil
 	}
-	m.resuming = true
-	executionID := row.ExecutionID
+	m.resuming[executionID] = true
 	m.vm.ActionNotice = fmt.Sprintf("resuming execution %s…", executionID)
 	resumer := m.Resumer
 	return func() tea.Msg {
@@ -118,7 +121,7 @@ type resumeResultMsg struct {
 }
 
 func (m *LiveModel) applyResumeResult(msg resumeResultMsg) {
-	m.resuming = false
+	delete(m.resuming, msg.executionID)
 	if msg.err != nil {
 		m.vm.ActionNotice = fmt.Sprintf("resume %s: %v", msg.executionID, msg.err)
 		return

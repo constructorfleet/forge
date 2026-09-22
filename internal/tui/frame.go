@@ -307,9 +307,6 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	if IsAnswerLegal(state) {
 		keys = append(keys, KeyBinding{Key: "a", Label: "answer"})
 	}
-	if IsResumeLegal(state) {
-		keys = append(keys, KeyBinding{Key: "R", Label: "resume"})
-	}
 	if IsApproveLegal(state) {
 		keys = append(keys, KeyBinding{Key: "p", Label: "approve"})
 	}
@@ -319,13 +316,8 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 // LegalKeysForRow returns controls legal for one fully resolved row.
 func LegalKeysForRow(row WorkerRow) []KeyBinding {
 	keys := LegalKeys(row.State)
-	if !IsResumeLegalForRow(row) {
-		for i, key := range keys {
-			if key.Key == "R" {
-				keys = append(keys[:i], keys[i+1:]...)
-				break
-			}
-		}
+	if IsResumeLegalForRow(row) {
+		keys = append(keys, KeyBinding{Key: "R", Label: "resume"})
 	}
 	return keys
 }

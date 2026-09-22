@@ -114,7 +114,7 @@ type LiveModel struct {
 	// retrying records a Retry call in flight, so a second retry key press on
 	// the same call cannot double-issue it.
 	retrying bool
-	resuming bool
+	resuming map[string]bool
 	answered map[string]bool
 
 	// OpenApprove defers a replan-checkpoint artifact to $PAGER, writing it
