@@ -1,7 +1,9 @@
 package tui_test
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Teagan42/forge/internal/tui"
 )
@@ -64,5 +66,44 @@ func TestSummarizeDiffIgnoresHeaderMarkers(t *testing.T) {
 	}
 	if empty := tui.SummarizeDiff(""); len(empty.Files) != 0 || empty.Additions != 0 {
 		t.Fatalf("SummarizeDiff(empty) = %+v, want no files", empty)
+	}
+}
+
+func TestBoundDiffLimitsBytesAndLines(t *testing.T) {
+	input := strings.Repeat("+123456789\n", 10)
+	got, truncated := tui.BoundDiff(input, 24, 3)
+	if !truncated {
+		t.Fatal("BoundDiff reported no truncation")
+	}
+	if len([]byte(got)) > 24 {
+		t.Fatalf("BoundDiff returned %d bytes, want at most 24", len([]byte(got)))
+	}
+	if lines := strings.Count(got, "\n"); lines > 3 {
+		t.Fatalf("BoundDiff returned %d lines, want at most 3", lines)
+	}
+}
+
+func TestBoundDiffStopsBeforeAnOversizedUTF8Line(t *testing.T) {
+	input := "+界界\n+ok\n"
+	got, truncated := tui.BoundDiff(input, len([]byte("+界")), 0)
+	if !truncated {
+		t.Fatal("BoundDiff reported no truncation")
+	}
+	if got != "" {
+		t.Fatalf("BoundDiff returned a partial line %q, want no oversized line", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("BoundDiff returned invalid UTF-8")
+	}
+}
+
+func TestBoundDiffKeepsTheLastCompleteLineWithoutSplitting(t *testing.T) {
+	input := "+one\n+two\npartial"
+	got, truncated := tui.BoundDiff(input, len([]byte("+one\n+two\npartial"))-1, 0)
+	if !truncated {
+		t.Fatal("BoundDiff reported no truncation")
+	}
+	if got != "+one\n+two\n" {
+		t.Fatalf("BoundDiff = %q, want complete lines only", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -17,6 +18,13 @@ const pollInterval = 1 * time.Second
 // diffReadTimeout bounds the on-demand diff read. The diff column can hold a
 // large blob, and the read runs on the event loop.
 const diffReadTimeout = 2 * time.Second
+
+// These bounds keep the in-frame hunk view responsive. Enter still opens the
+// complete stored diff in the pager.
+const (
+	maxInlineDiffBytes = 256 * 1024
+	maxInlineDiffLines = 4000
+)
 
 // pollTickMsg carries the clock time at which a poll pass ran. The time is
 // baked into the message so the whole pass is deterministic whatever the wall
@@ -180,6 +188,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.winHeight = msg.Height
 		m.winWidth = msg.Width
 		m.vm.Width = msg.Width
+		m.clampDiffHorizontal()
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		return m, m.applyTranscript(msg)
@@ -311,7 +320,7 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	if row, ok := selectedWorker(vm); ok {
 		vm.AgentSelection = clampSelection(vm.AgentSelection, len(row.Agents))
 	}
-	vm.DiffOpen, vm.Diff, vm.DiffScroll = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll
+	vm.DiffOpen, vm.Diff, vm.DiffScroll, vm.DiffHorizontal = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal
 	vm.Width, vm.ExecutionID = m.vm.Width, m.vm.ExecutionID
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
@@ -381,14 +390,18 @@ func (m *LiveModel) handleAgentsKey(key uv.Key) tea.Cmd {
 	return nil
 }
 
-// handleDiffKey applies the diff pane's keys: file-list scrolling and enter
-// to hand the whole diff to $PAGER.
+// handleDiffKey applies the diff pane's vertical and horizontal hunk scrolling
+// keys. Enter hands the complete diff to $PAGER.
 func (m *LiveModel) handleDiffKey(key uv.Key) tea.Cmd {
 	switch {
 	case key.MatchString("j", "down"):
 		m.scrollDiff(1)
 	case key.MatchString("k", "up"):
 		m.scrollDiff(-1)
+	case key.MatchString("l", "right"):
+		m.scrollDiffHorizontal(4)
+	case key.MatchString("h", "left"):
+		m.scrollDiffHorizontal(-4)
 	case key.MatchString("enter"):
 		return m.openSelectedDiff()
 	}
@@ -476,13 +489,46 @@ func (m *LiveModel) syncAgentFilter() {
 	}
 }
 
-// scrollDiff moves the diff pane's first visible file by delta, clamped to
-// the file list.
+// scrollDiff moves the diff pane's first visible hunk line by delta.
 func (m *LiveModel) scrollDiff(delta int) {
 	if m.vm.Diff == nil {
 		return
 	}
 	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll+delta, len(m.vm.Diff.Lines))
+}
+
+func (m *LiveModel) scrollDiffHorizontal(delta int) {
+	if m.vm.Diff == nil {
+		return
+	}
+	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal+delta, maxDiffHorizontalOffset(m.vm.Diff.Lines, diffViewportWidth(m.vm)))
+}
+
+func diffViewportWidth(vm ViewModel) int {
+	_, _, diffW := paneWidths(vm, frameWidth(vm))
+	return max(0, diffW-2)
+}
+
+func maxDiffHorizontalOffset(lines []DiffLine, viewportWidth int) int {
+	return max(0, maxDiffWidth(lines)-viewportWidth)
+}
+
+func (m *LiveModel) clampDiffHorizontal() {
+	if m.vm.Diff == nil {
+		m.vm.DiffHorizontal = 0
+		return
+	}
+	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal, maxDiffHorizontalOffset(m.vm.Diff.Lines, diffViewportWidth(m.vm)))
+}
+
+func maxDiffWidth(lines []DiffLine) int {
+	max := 0
+	for _, line := range lines {
+		if n := lipgloss.Width(line.Text); n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 // toggleDiff opens or closes the diff pane for the selected Worker. Opening
@@ -491,7 +537,7 @@ func (m *LiveModel) scrollDiff(delta int) {
 // itself instead of opening an empty pane.
 func (m *LiveModel) toggleDiff() tea.Cmd {
 	if m.vm.DiffOpen {
-		m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll = false, nil, 0
+		m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal = false, nil, 0, 0
 		m.diffKey = ""
 		if m.vm.Focus == PaneDiff {
 			m.vm.Focus = PaneRoster
@@ -507,7 +553,7 @@ func (m *LiveModel) toggleDiff() tea.Cmd {
 		m.vm.ActionNotice = fmt.Sprintf("no diff for %s yet", row.IssueID)
 		return nil
 	}
-	m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll = true, nil, 0
+	m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal = true, nil, 0, 0
 	// Opening the pane moves focus to it, matching the operator's intent and
 	// keeping the close control visible in the footer.
 	m.vm.Focus = PaneDiff
@@ -544,7 +590,10 @@ func (m *LiveModel) loadDiff(row WorkerRow) tea.Cmd {
 		if err != nil {
 			return diffLoadedMsg{key: key, err: err}
 		}
-		return diffLoadedMsg{key: key, summary: SummarizeDiff(diff)}
+		bounded, truncated := BoundDiff(diff, maxInlineDiffBytes, maxInlineDiffLines)
+		summary := SummarizeDiff(bounded)
+		summary.Truncated = truncated
+		return diffLoadedMsg{key: key, summary: summary}
 	}
 }
 
@@ -567,6 +616,7 @@ func (m *LiveModel) applyDiffLoaded(msg diffLoadedMsg) {
 	summary := msg.summary
 	m.vm.Diff = &summary
 	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll, len(summary.Lines))
+	m.clampDiffHorizontal()
 }
 
 // refreshDiff reloads the open diff pane when the selected row's Review
@@ -616,9 +666,9 @@ func clampSelection(sel, n int) int {
 	return sel
 }
 
-// openSelectedDiff reads the selected Worker's stored Review diff and defers it
-// to $PAGER. It returns no command when the store holds no diff, and reports
-// that on the notice rather than opening an empty pager.
+// openSelectedDiff reads the selected Worker's complete Review diff and defers
+// it to $PAGER. Read errors report asynchronously through diffNoticeMsg.
+// It returns no command only when no Worker is selected or artifact setup fails.
 func (m *LiveModel) openSelectedDiff() tea.Cmd {
 	row, ok := selectedWorker(m.vm)
 	if !ok {
@@ -707,7 +757,7 @@ func (m *LiveModel) moveRosterSelection(key uv.Key) (tea.Cmd, bool) {
 	// Another Worker has its own agents and its own diff, so the agent
 	// selection and the file scroll start over. The diff pane, if open,
 	// reloads for the new row.
-	m.vm.AgentSelection, m.vm.DiffScroll = 0, 0
+	m.vm.AgentSelection, m.vm.DiffScroll, m.vm.DiffHorizontal = 0, 0, 0
 	// The selection just moved to another Issue: the transcript pane must
 	// follow at once rather than waiting up to a full poll interval to show
 	// the newly selected Worker's own context.

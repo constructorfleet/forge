@@ -305,6 +305,50 @@ func TestRenderDiffPaneWithoutSummaryExplainsItself(t *testing.T) {
 	}
 }
 
+func TestRenderDiffPaneSupportsHorizontalHunkScroll(t *testing.T) {
+	vm := tui.ViewModel{
+		Workers:  []tui.WorkerRow{{IssueID: "#1", State: domain.StateReviewing, HasDiff: true}},
+		DiffOpen: true,
+		Diff: &tui.DiffSummary{
+			Files: []tui.DiffFile{{Path: "a.go", Additions: 1}},
+			Lines: []tui.DiffLine{{Kind: '+', Text: "+0123456789"}},
+		},
+		Width: 100,
+		Focus: tui.PaneDiff,
+	}
+	left := tui.Render(vm)
+	if !strings.Contains(left, "+0123456789") {
+		t.Fatalf("left view omits the hunk line: %s", left)
+	}
+	vm.DiffHorizontal = 5
+	shifted := tui.Render(vm)
+	if strings.Contains(shifted, "+01234") || !strings.Contains(shifted, "56789") {
+		t.Fatalf("horizontal offset did not move the hunk line: %s", shifted)
+	}
+}
+
+func TestRenderDiffFooterAdvertisesEachAvailableScrollDirection(t *testing.T) {
+	base := tui.ViewModel{
+		Workers:  []tui.WorkerRow{{IssueID: "#1", State: domain.StateReviewing, HasDiff: true}},
+		DiffOpen: true,
+		Diff: &tui.DiffSummary{
+			Files: []tui.DiffFile{{Path: "a.go", Additions: 1}},
+			Lines: []tui.DiffLine{{Kind: '+', Text: "+short"}, {Kind: ' ', Text: " context"}},
+		},
+		Width:  100,
+		Height: 12,
+		Focus:  tui.PaneDiff,
+	}
+	if got := tui.Render(base); !strings.Contains(got, "[j/k] scroll hunk") {
+		t.Fatalf("footer omits vertical diff scrolling for multiple lines: %s", got)
+	}
+
+	base.Diff.Lines = []tui.DiffLine{{Kind: '+', Text: "+" + strings.Repeat("x", 80)}}
+	if got := tui.Render(base); !strings.Contains(got, "[h/l] scroll columns") {
+		t.Fatalf("footer omits horizontal diff scrolling for one long line: %s", got)
+	}
+}
+
 // TestRenderFocusedPaneUsesDoubleBorder proves the focused region reads apart
 // from the others without colour: it alone draws a double-line border.
 func TestRenderFocusedPaneUsesDoubleBorder(t *testing.T) {
@@ -370,6 +414,23 @@ func TestRenderFooterPerPane(t *testing.T) {
 				t.Errorf("focus %v: footer %q must not offer %q", tc.focus, footer, o)
 			}
 		}
+	}
+}
+
+func TestRenderDiffFooterOffersHorizontalScrollForOneLongLine(t *testing.T) {
+	vm := tui.ViewModel{
+		Workers:  []tui.WorkerRow{{IssueID: "#1", State: domain.StateReviewing, HasDiff: true}},
+		DiffOpen: true,
+		Diff: &tui.DiffSummary{
+			Files: []tui.DiffFile{{Path: "a.go", Additions: 1}},
+			Lines: []tui.DiffLine{{Kind: '+', Text: "+" + strings.Repeat("x", 40)}},
+		},
+		Focus: tui.PaneDiff,
+	}
+	lines := splitLines(tui.Render(vm))
+	footer := lines[len(lines)-1]
+	if !strings.Contains(footer, "[h/l] scroll columns") {
+		t.Fatalf("footer %q omits horizontal scrolling for one long line", footer)
 	}
 }
 

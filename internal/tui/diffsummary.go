@@ -1,10 +1,45 @@
 package tui
 
-// diffsummary.go reduces a stored unified diff to the file list the diff pane
-// shows: one entry per changed file with its additions and deletions. The
-// diff body itself still defers to $PAGER.
+// diffsummary.go reduces a stored unified diff to the file list and hunk lines
+// the bounded in-frame diff pane shows.
 
 import "strings"
+
+// BoundDiff limits the body shown in the TUI. It keeps complete lines until
+// either positive limit is reached. A non-positive limit disables that bound.
+// It omits a line that exceeds the byte limit.
+func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
+	if maxBytes <= 0 && maxLines <= 0 {
+		return diff, false
+	}
+	var b strings.Builder
+	truncated := false
+	lines := 0
+	for start := 0; start < len(diff); {
+		end := strings.IndexByte(diff[start:], '\n')
+		if end >= 0 {
+			end += start + 1
+		} else {
+			end = len(diff)
+		}
+		line := diff[start:end]
+		if maxLines > 0 && lines >= maxLines {
+			truncated = true
+			break
+		}
+		if maxBytes > 0 && b.Len()+len(line) > maxBytes {
+			truncated = true
+			break
+		}
+		b.WriteString(line)
+		lines++
+		start = end
+	}
+	if b.Len() < len(diff) {
+		truncated = true
+	}
+	return b.String(), truncated
+}
 
 // DiffFile is one changed file in a Review diff.
 type DiffFile struct {
@@ -20,6 +55,7 @@ type DiffSummary struct {
 	Additions int
 	Deletions int
 	Lines     []DiffLine
+	Truncated bool
 }
 
 // DiffLine is one display line from a unified diff.
