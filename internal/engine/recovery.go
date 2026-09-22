@@ -68,6 +68,9 @@ func (e *Engine) ResumeExecution(ctx context.Context, executionID string) (stora
 // uses to carry the human's answer forward (see resumeNeedsInfoIssue and
 // BuildResumedFeedback). Every other caller passes nil.
 func (e *Engine) resumeIssue(ctx context.Context, exec domain.Execution, issue domain.Issue, feedback []agent.Feedback) (_ domain.Issue, retErr error) {
+	_, releaseQueue := e.acquireSteeringExecution(exec.ID)
+	defer releaseQueue()
+
 	if issue.State.IsTerminal() {
 		return issue, nil
 	}

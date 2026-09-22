@@ -172,9 +172,10 @@ type Engine struct {
 	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
 	ReplanDecisions ReplanDecisionRecorder
 
-	// Steering is the steering.Queue holding free-form steering messages and
-	// NEEDS_INFO answers enqueued for this Engine's execute loop (TKT-001/
-	// TKT-002, constructorfleet/forge#732). runRepairLoop drains it once per
+	// Steering enables steering support for execute loops. The Engine creates
+	// one queue per Execution ID. It holds
+	// free-form steering messages and NEEDS_INFO answers (TKT-001/TKT-002,
+	// constructorfleet/forge#732). runRepairLoop drains the active queue once per
 	// iteration, at the top of the loop — after the previous step fully
 	// completed and before the next step starts. Drained text is folded into
 	// that step's Agent Feedback only when the iteration proceeds into a
@@ -183,6 +184,15 @@ type Engine struct {
 	// discarded. Optional: nil disables draining entirely, leaving loop
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
+	// SteeringFactory creates an execution-scoped queue. It is optional and
+	// defaults to steering.NewQueue when Steering is configured.
+	SteeringFactory func() *steering.Queue
+	// SessionFactory creates an execution-scoped loop session. It is optional
+	// and defaults to executeloop.NewSession when Steering is configured.
+	SessionFactory func() *executeloop.Session
+
+	steeringMu     sync.Mutex
+	steeringQueues map[string]steeringExecution
 
 	// SteeringRegistry resolves a loop-id (an Execution's ID) to that
 	// Execution's Steering Queue for the `forge steer` CLI entry point
@@ -202,12 +212,6 @@ type Engine struct {
 	// independently without one Worker's finish evicting the loop-id while
 	// sibling Workers under the same Execution are still running.
 	SteeringRegistry *steering.Registry
-
-	steeringMu    sync.Mutex
-	steeringLoops map[string]*steeringLoop
-	// steeringLegacyUsed records whether the configured queue served one
-	// execution. Later executions always receive a new queue.
-	steeringLegacyUsed bool
 
 	// Session is the executeloop.Session tracking this Engine's execute
 	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
@@ -372,53 +376,10 @@ type Engine struct {
 	ownerTokenDone  bool
 }
 
-type steeringLoop struct {
-	queue *steering.Queue
-	count int
-}
-
-func (e *Engine) acquireSteering(executionID string) *steering.Queue {
-	if e.Steering == nil {
-		return nil
-	}
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	if e.steeringLoops == nil {
-		e.steeringLoops = make(map[string]*steeringLoop)
-	}
-	if loop, ok := e.steeringLoops[executionID]; ok {
-		loop.count++
-		return loop.queue
-	}
-	queue := steering.NewQueue()
-	if !e.steeringLegacyUsed {
-		queue = e.Steering
-		e.steeringLegacyUsed = true
-	}
-	e.steeringLoops[executionID] = &steeringLoop{queue: queue, count: 1}
-	return queue
-}
-
-func (e *Engine) releaseSteering(executionID string) {
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	loop, ok := e.steeringLoops[executionID]
-	if !ok {
-		return
-	}
-	loop.count--
-	if loop.count == 0 {
-		delete(e.steeringLoops, executionID)
-	}
-}
-
-func (e *Engine) steeringQueue(executionID string) *steering.Queue {
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	if loop := e.steeringLoops[executionID]; loop != nil {
-		return loop.queue
-	}
-	return nil
+type steeringExecution struct {
+	queue   *steering.Queue
+	session *executeloop.Session
+	count   int
 }
 
 // IssueLocker serializes work scoped to one (executionID, issueID) pair
@@ -578,22 +539,101 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	return e.ExecuteInExecution(ctx, execution, issueID, baseRevision)
 }
 
+// acquireSteeringQueue returns the queue for one active execution. Each
+// execution receives an independent queue, including sequential executions.
+func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func()) {
+	if e.Steering == nil && e.SteeringFactory == nil {
+		return nil, func() {}
+	}
+	e.steeringMu.Lock()
+	if e.steeringQueues == nil {
+		e.steeringQueues = make(map[string]steeringExecution)
+	}
+	if active, ok := e.steeringQueues[executionID]; ok {
+		active.count++
+		e.steeringQueues[executionID] = active
+		e.steeringMu.Unlock()
+		return active.queue, e.releaseSteeringQueue(executionID)
+	}
+	newQueue := e.SteeringFactory
+	if newQueue == nil {
+		newQueue = steering.NewQueue
+	}
+	newSession := e.SessionFactory
+	if newSession == nil {
+		newSession = executeloop.NewSession
+	}
+	e.steeringQueues[executionID] = steeringExecution{
+		queue:   newQueue(),
+		session: newSession(),
+		count:   1,
+	}
+	queue := e.steeringQueues[executionID].queue
+	e.steeringMu.Unlock()
+	return queue, e.releaseSteeringQueue(executionID)
+}
+
+func (e *Engine) releaseSteeringQueue(executionID string) func() {
+	return func() {
+		e.steeringMu.Lock()
+		active, ok := e.steeringQueues[executionID]
+		if ok {
+			active.count--
+			if active.count == 0 {
+				delete(e.steeringQueues, executionID)
+			} else {
+				e.steeringQueues[executionID] = active
+			}
+		}
+		e.steeringMu.Unlock()
+	}
+}
+
+// acquireSteeringExecution acquires and registers one execution queue.
+// The returned function unregisters and releases the queue.
+func (e *Engine) acquireSteeringExecution(executionID string) (*steering.Queue, func()) {
+	queue, releaseQueue := e.acquireSteeringQueue(executionID)
+	if queue == nil || e.SteeringRegistry == nil {
+		return queue, releaseQueue
+	}
+	e.SteeringRegistry.Register(executionID, queue, e.steeringSession(executionID))
+	return queue, func() {
+		e.SteeringRegistry.Unregister(executionID)
+		releaseQueue()
+	}
+}
+
+func (e *Engine) steeringQueue(executionID string) *steering.Queue {
+	e.steeringMu.Lock()
+	active := e.steeringQueues[executionID]
+	e.steeringMu.Unlock()
+	return active.queue
+}
+
+// steeringSession returns the session owned by one active execution.
+func (e *Engine) steeringSession(executionID string) *executeloop.Session {
+	e.steeringMu.Lock()
+	active, ok := e.steeringQueues[executionID]
+	e.steeringMu.Unlock()
+	if ok {
+		return active.session
+	}
+	// Keep the legacy Session seam for callers that do not configure
+	// execution-scoped steering. Never use it for an unknown execution when
+	// steering is enabled, because that would share status across executions.
+	if e.Steering != nil || e.SteeringFactory != nil {
+		return nil
+	}
+	return e.Session
+}
+
 // ExecuteInExecution drives one Issue through the execution pipeline inside
 // an already-created Execution. workerBase is the per-Worker base captured
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
 func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
-	queue := e.acquireSteering(execution.ID)
-	if queue != nil {
-		defer e.releaseSteering(execution.ID)
-	}
-	// Register this Execution's ID as the loop-id `forge steer` resolves
-	// (constructorfleet/forge#746), for this loop's whole duration — every
-	// return path below, success or failure, unregisters it via defer.
-	if queue != nil && e.SteeringRegistry != nil {
-		e.SteeringRegistry.Register(execution.ID, queue, e.Session)
-		defer e.SteeringRegistry.Unregister(execution.ID)
-	}
+	_, releaseQueue := e.acquireSteeringExecution(execution.ID)
+	defer releaseQueue()
 
 	issue, err := e.Tracker.GetIssue(ctx, issueID)
 	if err != nil {
@@ -779,6 +819,9 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 // decrements the independent CI retry budget, and re-enters the existing
 // implementation -> validate -> review -> commit/push flow in place.
 func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
+	_, releaseQueue := e.acquireSteeringExecution(executionID)
+	defer releaseQueue()
+
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: load execution %s: %w", executionID, err)
@@ -1033,9 +1076,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains the queue associated with executionID and returns one
+// drainSteeringFeedback drains the execution queue (if configured) and returns one
 // Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
-// nil if that queue is unset or was empty at the time of the call. A run's
+// nil if the queue is unset or was empty at the time of the call. A run's
 // Messages are joined into one Feedback.Message with a newline between each,
 // matching Queue.DrainAll's join, and its Source names the Kind
 // (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.

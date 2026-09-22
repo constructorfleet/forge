@@ -48,6 +48,7 @@ func TestRunRepairLoop_DrainsQueueOnlyBetweenSteps(t *testing.T) {
 
 	queue := steering.NewQueue()
 	te.eng.Steering = queue
+	te.eng.SteeringFactory = func() *steering.Queue { return queue }
 	wrapped := &enqueueOnFirstCallAgent{
 		inner: te.eng.Agent,
 		queue: queue,
@@ -106,6 +107,7 @@ func TestRunRepairLoop_EmptyQueueLeavesFeedbackUnchanged(t *testing.T) {
 	runner := &flakyRunner{failUntil: 1}
 	te.gates.Set(runner)
 	te.eng.Steering = steering.NewQueue()
+	te.eng.SteeringFactory = func() *steering.Queue { return te.eng.Steering }
 
 	ctx := context.Background()
 	result, err := te.eng.Execute(ctx, "51", te.base)
@@ -141,6 +143,7 @@ func TestRunRepairLoop_PersistsSteeringMessageToTranscript(t *testing.T) {
 
 	queue := steering.NewQueue()
 	te.eng.Steering = queue
+	te.eng.SteeringFactory = func() *steering.Queue { return queue }
 	wrapped := &enqueueOnFirstCallAgent{
 		inner: te.eng.Agent,
 		queue: queue,
@@ -191,6 +194,7 @@ func TestRunRepairLoop_PersistsNeedsInfoAnswerToTranscriptWithDistinctTag(t *tes
 
 	queue := steering.NewQueue()
 	te.eng.Steering = queue
+	te.eng.SteeringFactory = func() *steering.Queue { return queue }
 	wrapped := &enqueueOnFirstCallAgent{
 		inner: te.eng.Agent,
 		queue: queue,

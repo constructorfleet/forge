@@ -128,17 +128,18 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 	// doc comment above), so this is the single place that needs to set
 	// the loop's status — at most one outstanding NEEDS_INFO is ever
 	// tracked, since Session.status is a scalar, not a list keyed by ID.
-	if e.Session != nil {
-		e.Session.SetStatus(executeloop.StatusNeedsInfo)
+	if session := e.steeringSession(executionID); session != nil {
+		session.SetStatus(executeloop.StatusNeedsInfo)
 	}
 
 	return issue, nil
 }
 
-// waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on the
-// queue associated with executionID until a Message is enqueued (a NEEDS_INFO answer or a
-// free-form steering message — both travel the same Enqueue/DrainAll path,
-// no separate reply channel or correlation ID), then drains the queue,
+// waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on
+// the execution queue until a Message is enqueued (a NEEDS_INFO answer or a
+// free-form steering message — both use the same Enqueue/Drain path while
+// preserving their message kinds, with no separate reply channel or
+// correlation ID), then drains the queue,
 // restores the loop's status to running, and reclaims the Issue through the
 // same legal edges `forge resume` takes: NEEDS_INFO -> READY (Resume,
 // resume.go) and READY -> CLAIMED -> PREPARING (reclaimAndPrepare, shared
@@ -149,10 +150,13 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 // same process has already exited NEEDS_INFO as a resting state. Here the
 // process, Workspace, and ExecutionEnvironment are all still alive, so
 // executeAgent's own loop (see its doc comment) continues in place rather
-// than ending it. Callers only reach this once the execution queue is known
-// to be non-nil.
+// than ending it. Callers only reach this once e.Steering is known to be
+// non-nil.
 func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, issueID string) (domain.Issue, []agent.Feedback, error) {
 	queue := e.steeringQueue(executionID)
+	if queue == nil {
+		return domain.Issue{}, nil, fmt.Errorf("engine: steering queue unavailable for execution %s", executionID)
+	}
 	queue.Wait(ctx)
 	if err := ctx.Err(); err != nil {
 		return domain.Issue{}, nil, err
@@ -160,8 +164,8 @@ func (e *Engine) waitForSteeringAndReclaim(ctx context.Context, executionID, iss
 
 	feedback := e.drainSteeringFeedback(executionID)
 
-	if e.Session != nil {
-		e.Session.SetStatus(executeloop.StatusRunning)
+	if session := e.steeringSession(executionID); session != nil {
+		session.SetStatus(executeloop.StatusRunning)
 	}
 
 	if _, err := e.transition(ctx, executionID, issueID, domain.StateReady); err != nil {
