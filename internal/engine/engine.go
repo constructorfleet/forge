@@ -613,10 +613,16 @@ func (e *Engine) steeringQueue(executionID string) *steering.Queue {
 // steeringSession returns the session owned by one active execution.
 func (e *Engine) steeringSession(executionID string) *executeloop.Session {
 	e.steeringMu.Lock()
-	active := e.steeringQueues[executionID]
+	active, ok := e.steeringQueues[executionID]
 	e.steeringMu.Unlock()
-	if active.session != nil {
+	if ok {
 		return active.session
+	}
+	// Keep the legacy Session seam for callers that do not configure
+	// execution-scoped steering. Never use it for an unknown execution when
+	// steering is enabled, because that would share status across executions.
+	if e.Steering != nil || e.SteeringFactory != nil {
+		return nil
 	}
 	return e.Session
 }

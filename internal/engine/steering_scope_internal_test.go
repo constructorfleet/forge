@@ -71,3 +71,12 @@ func TestSteeringQueueLookupDoesNotFallbackToCompatibilityQueue(t *testing.T) {
 		t.Fatalf("unknown execution must not resolve the compatibility queue, got %p", got)
 	}
 }
+
+func TestSteeringSessionLookupDoesNotFallbackAcrossExecutions(t *testing.T) {
+	configured := steering.NewQueue()
+	e := &Engine{Steering: configured, Session: executeloop.NewSession()}
+
+	if got := e.steeringSession("unknown-execution"); got != nil {
+		t.Fatalf("unknown execution must not resolve the compatibility session, got %p", got)
+	}
+}
