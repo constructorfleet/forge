@@ -20,6 +20,16 @@ type ResumeTracker interface {
 	GetComments(ctx context.Context, id string) ([]tracker.Comment, error)
 }
 
+// MissingResumeTrackerError reports that a NEEDS_INFO Issue cannot resume
+// because the configured tracker does not provide comment reads.
+type MissingResumeTrackerError struct {
+	IssueID string
+}
+
+func (e *MissingResumeTrackerError) Error() string {
+	return fmt.Sprintf("engine: resume issue %s: NeedsInfoTracker does not implement ResumeTracker", e.IssueID)
+}
+
 // ResumeStore is the subset of storage.Store `forge resume` needs. A
 // narrower interface than storage.Store, for the same reason StatusStore
 // is narrower (see status.go).
