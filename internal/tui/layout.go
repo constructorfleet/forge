@@ -233,7 +233,7 @@ func outputTitle(vm ViewModel) string {
 func executionPanel(vm ViewModel, width int) []string {
 	inner := width - 2
 	title := titleExecutions
-	if len(vm.ExecutionIDs) > 1 {
+	if len(vm.ExecutionIDs) > 0 {
 		title += " (" + strings.Join(vm.ExecutionIDs, ", ") + ")"
 	}
 	start, end := executionWindow(vm.Selection, len(vm.Workers))

@@ -41,6 +41,16 @@ func TestRenderMultiExecutionRosterShowsExecutionIdentity(t *testing.T) {
 	}
 }
 
+func TestRenderSingleExecutionRosterShowsExecutionIdentity(t *testing.T) {
+	out := tui.Render(tui.ViewModel{
+		ExecutionIDs: []string{"ex-a"},
+		Workers:      []tui.WorkerRow{{ExecutionID: "ex-a", IssueID: "#1", Title: "same"}},
+	})
+	if !strings.Contains(out, "ex-a") {
+		t.Fatalf("render = %q, want the execution identity in the header", out)
+	}
+}
+
 func TestLivenessGlyph(t *testing.T) {
 	cases := []struct {
 		name string
