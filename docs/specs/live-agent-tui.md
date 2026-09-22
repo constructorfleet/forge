@@ -95,23 +95,50 @@ mismatch). Grounds for the choice (a quantified bake-off, [#445] then [#450]):
 - **Gate on `isatty` yourself** (Bubble Tea *proceeds* on non-TTY by opening
   `/dev/tty`). This is the first terminal detection in the tree.
 
-**Layout and IA** (from the prototype, [#450], extended by [#480]):
+**Layout and IA** (from the prototype, [#450], extended by [#480], re-laid out
+by [#756]):
 
-- **One line per Worker plus a detail strip** for the selection. Row: attention
-  glyph, coarse state, Issue id, Issue title (title gets leftover width), tax.
-  Strip: verbatim `IssueState`, elapsed from `state_changed_at`, heartbeat age
-  from `workers.last_heartbeat` (**never conflated**), attempt number against
-  the retry budget, current tool name.
+- **Three regions.** The execution list is on top. Under it, three body panes
+  sit side by side: the agents pane on the left, the live output pane in the
+  centre, and the diff pane on the right. The detail strip and the footer
+  close the frame. Each region has a border and a section header. The focused
+  region draws a double-line border, so focus reads without colour.
+- **The execution list** is a table with one row per Worker: the attention and
+  liveness glyphs, the Issue id, the name, the verbatim state, the elapsed
+  time, the agent count, and the newest output line. It shows at most three
+  rows and scrolls to keep the selection visible; its header then names the
+  visible range. The state column is colour-coded by its coarse group:
+  running, passed, failed, and warning. Colour is not load-bearing.
+- **The agents pane** lists the agents that worked the selected Issue: the
+  implementation Agent first, then one row per review subagent, in first-seen
+  order. The selected agent is highlighted. The rows derive from the store's
+  per-run summary (`TranscriptAgents`), which reads no event body.
+- **The output pane** shows the selected agent's transcript alone. The tailer
+  keeps every event and filters the window, so a switch between agents needs
+  no re-read. Gate rows show only with the implementation Agent.
+- **The diff pane** opens and closes with `d`. It shows the stored unified diff
+  inline, with file headers, hunk headers, additions, and deletions styled by
+  kind. Its header names the changed-file count. The summary loads off the
+  update goroutine, once per Review; an open pane reloads only when the
+  selected row's Review changes. `enter` in the pane still hands the whole
+  diff to `$PAGER` for detailed inspection.
+- **The detail strip** describes the focused pane's selection: the Worker's
+  verbatim `IssueState`, elapsed from `state_changed_at`, heartbeat age from
+  `workers.last_heartbeat` (**never conflated**), attempt number against the
+  retry budget, current tool name, and Review verdict; or the selected agent;
+  or the selected transcript entry; or the diff totals.
 - **Two separate glyph columns**: attention (`!` attention / `*` running a tool)
   and liveness (`•` live / `×` no beat ≤15s / blank for planning). One glyph
   with a precedence order cannot say "needs an answer **and** its orchestrator
-  is gone". Colour is not load-bearing (frame survives no-colour). Prose
-  carries no glyph.
+  is gone". Prose carries no glyph.
 - **Contextual footer** naming only the keys legal right now, derived from the
-  same view-model as the row, so it can never advertise an illegal key.
+  same view-model as the row, so it can never advertise an illegal key. `tab`
+  and `shift+tab` cycle the panes; `j`/`k` move the execution, agent, or diff
+  selection of the focused pane; `enter` inspects the output pane from the list
+  or the agents pane; `d` toggles the diff pane from every pane.
 - **The frame is a pure function from a plain view-model struct to a string**
-  (`frame.go` has no framework import) — the property that makes the whole view
-  testable headless. [#450]
+  (`frame.go` and `layout.go` have no framework import) — the property that
+  makes the whole view testable headless. [#450]
 
 ### The transcript pane: one interleaved, annotated, linear timeline [#480]
 
@@ -123,9 +150,10 @@ Everything but the diff rides the transcript pane; heavy content defers out.
   output already tail-bounded by source `textcap`; the engine's `gate.run`
   event is lean (name/command/exit_code/passed). The synthetic row expands to
   `stdout`/`stderr` + `exit_code` + `command`. No separate gate strip.
-- **Diffs defer to `$PAGER`** over `review_runs.diff`. There is no `forge diff`
-  subcommand (it is the live `gitDiffProducer`, forbidden by the store-only read
-  path); `review_runs.diff` is the only store-side copy (migration 0004). Same
+- **Diff bodies render in the pane and defer to `$PAGER`** over
+  `review_runs.diff`. There is no `forge diff` subcommand (it is the live
+  `gitDiffProducer`, forbidden by the store-only read path); `review_runs.diff`
+  is the only store-side copy (migration 0004). Same
   suspend-and-return mechanic as #447's artifact view. No inline diff/lexing/
   navigation machinery.
 - **Multi-attempt history** is one continuous scrollback with inline
@@ -133,12 +161,12 @@ Everything but the diff rides the transcript pane; heavy content defers out.
   insertion `id`); retries accumulate rows. "Attempt" is a derived grouping of
   adjacent runs for one Issue — a pure view-model transform, no navigation mode.
   #450's strip already labels "attempt N against the retry budget".
-- **Concurrent per-axis review streams** interleave in one pane, each event
-  inline-labelled by its axis read straight off `transcript_events.subagent`
-  (`bugs` / `quality` / `docs`, agentreviewer.go:154-156). A Worker in
+- **Concurrent per-axis review streams** each get a row in the agents pane,
+  read straight off `transcript_events.subagent` (`bugs` / `quality` / `docs`,
+  agentreviewer.go:154-156); the output pane shows one agent at a time
+  ([#756]). Every event still carries its inline axis label. A Worker in
   REVIEWING holds up to 3 concurrent `agent_runs` rows; the aggregate
-  `review_runs` verdict on the strip carries the outcome. No tabs, no sibling
-  panes.
+  `review_runs` verdict on the strip carries the outcome.
 - Gate rows are synthetic — **no extension of the four `TranscriptEvent` types.**
 - Glyphs: `▸` call, `└` result, `░` truncation and ring eviction (distinct
   wording: one is Forge's 5000-event window, the other the renderer's buffer),

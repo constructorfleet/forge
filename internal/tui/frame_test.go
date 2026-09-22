@@ -1,6 +1,9 @@
 package tui_test
 
 import (
+	"fmt"
+
+	"charm.land/lipgloss/v2"
 	"strings"
 	"testing"
 	"time"
@@ -150,133 +153,245 @@ func TestLegalKeys(t *testing.T) {
 	}
 }
 
-func TestRender(t *testing.T) {
-	vm := tui.ViewModel{
-		Selection: 1,
+// layoutFixture builds a frame with two Workers, three agents on the selected
+// one, a short transcript, and an open diff, so the layout tests can prove
+// every region renders from the one view-model.
+func layoutFixture() tui.ViewModel {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{7}, Events: []tui.TranscriptEvent{
+		{AgentRunID: 7, Seq: 0, Type: "MESSAGE", Text: "starting work"},
+		{AgentRunID: 7, Seq: 1, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build ./...", ToolCallID: "t1"},
+	}})
+	at := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	return tui.ViewModel{
+		ExecutionID: "45c7c799-981e-4852-803b-689cf48dd900",
+		Selection:   1,
 		Workers: []tui.WorkerRow{
+			{IssueID: "#1", Title: "Write tests", State: domain.StatePending, Agents: tui.DeriveAgents(nil)},
 			{
-				IssueID: "#1",
-				Title:   "Write tests",
-				State:   domain.StatePending,
-			},
-			{
-				IssueID:      "#2",
-				Title:        "Add roster frame",
-				State:        domain.StateImplementing,
-				Elapsed:      62 * time.Second,
-				HasHeartbeat: true,
-				HeartbeatAge: 3 * time.Second,
-				Attempt:      2,
-				Budget:       3,
-				Tool:         "git status",
+				IssueID: "#2", Title: "Add roster frame", State: domain.StateReviewing,
+				Elapsed: 62 * time.Second, HasHeartbeat: true, HeartbeatAge: 3 * time.Second,
+				Attempt: 2, Budget: 3, Tool: "git status", HasDiff: true, Verdict: "PASS",
+				ProgressDone: 4, ProgressTotal: 5,
+				Agents: []tui.AgentRow{
+					{Label: "implementation", Events: 12, Latest: "Fixed the finding.", LastAt: at},
+					{Label: "review: bugs", Subagent: "bugs", Events: 7, Latest: "▸ Grep", LastAt: at.Add(time.Second)},
+					{Label: "review: docs", Subagent: "docs", Events: 1, Latest: "Docs ok.", LastAt: at.Add(-time.Second)},
+				},
 			},
 		},
-	}
-
-	want := "" +
-		"      pending  #1         Write tests\n" +
-		"> * • working  #2         Add roster frame\n" +
-		"IMPLEMENTING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict —\n" +
-		"[q] quit [c] cancel [j/k] switch worker\n"
-
-	if got := tui.Render(vm); got != want {
-		t.Fatalf("Render mismatch.\n--- got ---\n%s--- want ---\n%s", got, want)
-	}
-}
-
-// TestRenderAdvertisesSwitchKeyWithSeveralWorkers proves the footer tells the
-// operator j/k switch between Workers once there is more than one row to
-// switch to: the roster key exists but must not clutter a single-row footer.
-func TestRenderAdvertisesSwitchKeyWithSeveralWorkers(t *testing.T) {
-	vm := tui.ViewModel{
-		Selection: 0,
-		Workers: []tui.WorkerRow{
-			{IssueID: "#1", Title: "a", State: domain.StateImplementing},
-			{IssueID: "#2", Title: "b", State: domain.StateImplementing},
+		AgentSelection: 1,
+		Transcript:     pane,
+		DiffOpen:       true,
+		Diff: &tui.DiffSummary{
+			Files:     []tui.DiffFile{{Path: "internal/tui/frame.go", Additions: 12, Deletions: 3}, {Path: "docs/spec.md", Additions: 2}},
+			Additions: 14, Deletions: 3,
 		},
 	}
-	if got := tui.Render(vm); !strings.Contains(got, "[j/k] switch worker") {
-		t.Fatalf("footer omits the switch-worker key with several rows:\n%s", got)
-	}
+}
 
-	solo := tui.ViewModel{
-		Selection: 0,
-		Workers:   []tui.WorkerRow{{IssueID: "#1", Title: "a", State: domain.StateImplementing}},
+// TestRenderDrawsEveryRegion proves the frame draws the execution list, the
+// agents pane, the output pane, and the diff pane from one view-model, each
+// under its own bordered header, with the selected Worker and agent marked.
+func TestRenderDrawsEveryRegion(t *testing.T) {
+	got := tui.Render(layoutFixture())
+	for _, want := range []string{
+		"EXECUTIONS",                                                             // region header names the execution list
+		"ID", "NAME", "STATUS", "PROGRESS", "ELAPSED", "AGENTS", "LATEST OUTPUT", // list columns
+		"#1", "Write tests", "PENDING",
+		"> ", "#2", "Add roster frame", "REVIEWING", "4/5 (80%)", "1m2s", "▸ Grep", // the selected row and its newest output
+		"SUBAGENTS", "  implementation", "> review: bugs", "  review: docs",
+		"OUTPUT", "starting work", "▸ bash",
+		"DIFF", "internal/tui/frame.go", "docs/spec.md",
+		"REVIEWING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict PASS",
+		"[q] quit",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("frame omits %q:\n%s", want, got)
+		}
 	}
-	if got := tui.Render(solo); strings.Contains(got, "switch worker") {
-		t.Fatalf("footer advertises switch-worker with only one row:\n%s", got)
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("a zero Style must render no ANSI escape:\n%s", got)
+	}
+	for _, line := range splitLines(got) {
+		if strings.ContainsAny(line, "│║") && !strings.HasSuffix(line, "│") && !strings.HasSuffix(line, "║") {
+			t.Errorf("bordered row does not close its border: %q", line)
+		}
 	}
 }
 
-// TestRenderMarksTranscriptHeaderWhenLagging proves a transcript read older
-// than transcriptLagMultiple poll intervals marks the pane header, so a store
-// slower than the poll cadence is visible rather than merely a thinned refresh
-// rate.
-func TestRenderMarksTranscriptHeaderWhenLagging(t *testing.T) {
-	vm := tui.ViewModel{PollInterval: time.Second, TranscriptLagAge: 4 * time.Second}
-	if got := tui.Render(vm); !strings.Contains(got, "lagging") {
-		t.Fatalf("Render does not mark a lagging transcript:\n%s", got)
+// TestRenderAgentCountColumn proves the execution list counts every agent
+// that worked the row, so the operator sees the review fan-out at a glance.
+func TestRenderAgentCountColumn(t *testing.T) {
+	vm := layoutFixture()
+	vm.DiffOpen = false
+	lines := splitLines(tui.Render(vm))
+	var selected string
+	for _, l := range lines {
+		if strings.Contains(l, "#2") && strings.Contains(l, "Add roster frame") {
+			selected = l
+		}
+	}
+	if selected == "" {
+		t.Fatalf("no execution row for #2:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(selected, " 3 ") {
+		t.Errorf("row does not carry its agent count of 3: %q", selected)
 	}
 }
 
-// TestRenderOmitsLagMarkerUnderThreshold proves the header stays quiet while
-// the last committed read is still within transcriptLagMultiple poll
-// intervals: ordinary poll jitter must not read as a lagging store.
-func TestRenderOmitsLagMarkerUnderThreshold(t *testing.T) {
-	vm := tui.ViewModel{PollInterval: time.Second, TranscriptLagAge: time.Second}
-	if got := tui.Render(vm); strings.Contains(got, "lagging") {
-		t.Fatalf("Render marks lag under the threshold:\n%s", got)
+// TestRenderExecutionListShowsThreeRowsAndScrolls proves the list shows at
+// most three Workers and scrolls to keep the selection visible, naming the
+// visible range in its header.
+func TestRenderExecutionListShowsThreeRowsAndScrolls(t *testing.T) {
+	var rows []tui.WorkerRow
+	for i := 1; i <= 5; i++ {
+		rows = append(rows, tui.WorkerRow{IssueID: fmt.Sprintf("#%d", i), Title: fmt.Sprintf("issue %d", i), State: domain.StateImplementing})
+	}
+	vm := tui.ViewModel{Workers: rows, Selection: 4}
+	got := tui.Render(vm)
+	for _, want := range []string{"issue 3", "issue 4", "issue 5", "3-5 of 5"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("scrolled list omits %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"issue 1", "issue 2"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("scrolled list still shows %q:\n%s", unwanted, got)
+		}
+	}
+	vm.Selection = 0
+	got = tui.Render(vm)
+	if !strings.Contains(got, "issue 1") || strings.Contains(got, "issue 4") || !strings.Contains(got, "1-3 of 5") {
+		t.Errorf("list at the top shows the wrong window:\n%s", got)
+	}
+	if got := tui.Render(tui.ViewModel{Workers: rows[:2]}); strings.Contains(got, " of 2") {
+		t.Errorf("a list that fits still names a range:\n%s", got)
 	}
 }
 
-func TestRenderEmptyRoster(t *testing.T) {
-	// The first frame arrives before any row, so an empty roster must not panic.
-	if got, want := tui.Render(tui.ViewModel{}), "[q] quit\n"; got != want {
-		t.Fatalf("Render(empty) = %q, want %q", got, want)
+// TestRenderDiffPaneClosedByDefault proves the diff pane draws only while
+// open, and the footer offers the toggle only where the store holds a diff.
+func TestRenderDiffPaneClosedByDefault(t *testing.T) {
+	vm := layoutFixture()
+	vm.DiffOpen = false
+	got := tui.Render(vm)
+	if strings.Contains(got, "internal/tui/frame.go") {
+		t.Errorf("closed diff pane still draws its files:\n%s", got)
+	}
+	if !strings.Contains(got, "[d] diff") {
+		t.Errorf("footer omits the diff toggle for a row with a diff:\n%s", got)
+	}
+	if got := tui.Render(layoutFixture()); !strings.Contains(got, "[d] hide diff") {
+		t.Errorf("footer does not offer to hide the open diff:\n%s", got)
+	}
+	vm.Selection = 0
+	if got := tui.Render(vm); strings.Contains(got, "[d]") {
+		t.Errorf("footer offers the diff key for a row with no diff:\n%s", got)
 	}
 }
 
-func TestRenderEmptyRosterShowsNotice(t *testing.T) {
-	vm := tui.ViewModel{Notice: "waiting"}
-	if got, want := tui.Render(vm), "waiting\n[q] quit\n"; got != want {
-		t.Fatalf("Render(notice) = %q, want %q", got, want)
+// TestRenderDiffPaneWithoutSummaryExplainsItself proves an open pane whose
+// diff has not loaded yet says so rather than drawing an empty box.
+func TestRenderDiffPaneWithoutSummaryExplainsItself(t *testing.T) {
+	vm := layoutFixture()
+	vm.Diff = nil
+	if got := tui.Render(vm); !strings.Contains(got, "loading diff") {
+		t.Errorf("open diff pane with no summary is blank:\n%s", got)
+	}
+	vm.Diff = &tui.DiffSummary{}
+	if got := tui.Render(vm); !strings.Contains(got, "no changed files") {
+		t.Errorf("open diff pane with an empty summary is blank:\n%s", got)
 	}
 }
 
-func TestRenderColorNeverLoadBearing(t *testing.T) {
-	// The frame must carry no ANSI colour so it works in a no-colour terminal.
-	vm := tui.ViewModel{
-		Selection: 0,
-		Workers: []tui.WorkerRow{
-			{IssueID: "#1", Title: "t", State: domain.StateImplementing},
-		},
-	}
-	if strings.Contains(tui.Render(vm), "\x1b[") {
-		t.Fatalf("frame must not embed ANSI colour escapes")
+// TestRenderFocusedPaneUsesDoubleBorder proves the focused region reads apart
+// from the others without colour: it alone draws a double-line border.
+func TestRenderFocusedPaneUsesDoubleBorder(t *testing.T) {
+	for _, tc := range []struct {
+		focus tui.Pane
+		title string
+	}{
+		{tui.PaneRoster, "EXECUTIONS"},
+		{tui.PaneAgents, "SUBAGENTS"},
+		{tui.PaneTranscript, "OUTPUT"},
+		{tui.PaneDiff, "DIFF"},
+	} {
+		vm := layoutFixture()
+		vm.Focus = tc.focus
+		lines := splitLines(tui.Render(vm))
+		double, single := 0, 0
+		for _, l := range lines {
+			if strings.Contains(l, "╔") || strings.Contains(l, "╗") {
+				double++
+				if !strings.Contains(l, tc.title) {
+					t.Errorf("focus %v: double border on a line without %q: %q", tc.focus, tc.title, l)
+				}
+			}
+			if strings.Contains(l, "┌") {
+				single++
+			}
+		}
+		if double == 0 {
+			t.Errorf("focus %v: no pane draws the double border:\n%s", tc.focus, strings.Join(lines, "\n"))
+		}
+		if single == 0 {
+			t.Errorf("focus %v: every pane draws the double border:\n%s", tc.focus, strings.Join(lines, "\n"))
+		}
 	}
 }
 
-func TestRenderFooterAlwaysMatchesLegalKeys(t *testing.T) {
-	// The footer must advertise exactly the keys legal for the selected row's
-	// state, derived from the same view-model as the rows it annotates.
+// TestRenderFooterPerPane proves each focused pane advertises its own keys:
+// pane navigation, execution navigation, agent navigation, diff toggling, and
+// inspection.
+func TestRenderFooterPerPane(t *testing.T) {
+	cases := []struct {
+		focus tui.Pane
+		want  []string
+		omit  []string
+	}{
+		{tui.PaneRoster, []string{"[q] quit", "[c] cancel", "[j/k] switch worker", "[enter] inspect", "[tab] next pane", "[d] hide diff"}, []string{"switch agent"}},
+		{tui.PaneAgents, []string{"[q] quit", "[j/k] switch agent", "[enter] inspect", "[tab] next pane", "[d] hide diff"}, []string{"[c] cancel", "switch worker"}},
+		{tui.PaneTranscript, []string{"[q] quit", "[tab] next pane", "[enter] expand", "[d] hide diff"}, []string{"[c] cancel", "switch worker"}},
+		{tui.PaneDiff, []string{"[q] quit", "[enter] open in $PAGER", "[d] hide diff", "[tab] next pane"}, []string{"[c] cancel", "expand"}},
+	}
+	for _, tc := range cases {
+		vm := layoutFixture()
+		vm.Focus = tc.focus
+		lines := splitLines(tui.Render(vm))
+		footer := lines[len(lines)-1]
+		for _, w := range tc.want {
+			if !strings.Contains(footer, w) {
+				t.Errorf("focus %v: footer %q omits %q", tc.focus, footer, w)
+			}
+		}
+		for _, o := range tc.omit {
+			if strings.Contains(footer, o) {
+				t.Errorf("focus %v: footer %q must not offer %q", tc.focus, footer, o)
+			}
+		}
+	}
+}
+
+// TestRenderFooterLeadsWithLegalKeys proves the roster footer starts with
+// exactly the keys legal for the selected row's state, derived from the same
+// view-model as the row, so it can never advertise an illegal action.
+func TestRenderFooterLeadsWithLegalKeys(t *testing.T) {
 	states := []domain.IssueState{
 		domain.StatePending, domain.StateImplementing, domain.StateFailed,
-		domain.StateNeedsInfo, domain.StateDone, domain.StateCancelled,
+		domain.StateNeedsInfo, domain.StateNeedsReplan, domain.StateDone, domain.StateCancelled,
 	}
 	for _, s := range states {
-		vm := tui.ViewModel{
-			Selection: 0,
-			Workers: []tui.WorkerRow{
-				{IssueID: "#1", Title: "t", State: s},
-			},
-		}
-		out := tui.Render(vm)
-		lines := splitLines(out)
+		vm := tui.ViewModel{Workers: []tui.WorkerRow{{IssueID: "#1", Title: "t", State: s}}}
+		lines := splitLines(tui.Render(vm))
 		footer := lines[len(lines)-1]
-		want := footerFor(tui.LegalKeys(s))
-		if footer != want {
-			t.Fatalf("state %s: frame footer %q, want %q (must mirror LegalKeys)",
-				s, footer, want)
+		if want := footerFor(tui.LegalKeys(s)); !strings.HasPrefix(footer, want) {
+			t.Errorf("state %s: footer %q does not lead with %q", s, footer, want)
+		}
+		for _, illegal := range []string{"[c] cancel", "[r] retry", "[a] answer", "[p] approve"} {
+			if strings.Contains(footer, illegal) && !strings.Contains(footerFor(tui.LegalKeys(s)), illegal) {
+				t.Errorf("state %s: footer %q advertises the illegal %q", s, footer, illegal)
+			}
 		}
 	}
 }
@@ -293,82 +408,111 @@ func footerFor(keys []tui.KeyBinding) string {
 	return strings.Join(parts, " ")
 }
 
-// TestTranscriptRowsBudgetsAgainstTheChromeRenderDraws pins the row budget to
-// the chrome Render draws, so the transcript budget cannot drift.
-func TestTranscriptRowsBudgetsAgainstTheChromeRenderDraws(t *testing.T) {
+// TestRenderMarksTranscriptHeaderWhenLagging proves a transcript read older
+// than transcriptLagMultiple poll intervals marks the frame, so a store slower
+// than the poll cadence is visible rather than merely a thinned refresh rate.
+func TestRenderMarksTranscriptHeaderWhenLagging(t *testing.T) {
+	vm := tui.ViewModel{PollInterval: time.Second, TranscriptLagAge: 4 * time.Second}
+	if got := tui.Render(vm); !strings.Contains(got, "lagging") {
+		t.Fatalf("Render does not mark a lagging transcript:\n%s", got)
+	}
+	vm.TranscriptLagAge = time.Second
+	if got := tui.Render(vm); strings.Contains(got, "lagging") {
+		t.Fatalf("Render marks lag under the threshold:\n%s", got)
+	}
+}
+
+// TestRenderEmptyRoster proves the first frame, before any row, draws the
+// chrome with its notice and offers quit alone.
+func TestRenderEmptyRoster(t *testing.T) {
+	got := tui.Render(tui.ViewModel{Notice: "waiting"})
+	if !strings.Contains(got, "waiting") || !strings.Contains(got, "EXECUTIONS") {
+		t.Fatalf("empty frame omits the notice or the list header:\n%s", got)
+	}
+	lines := splitLines(got)
+	if footer := lines[len(lines)-1]; footer != "[q] quit" {
+		t.Fatalf("empty frame footer = %q, want %q", footer, "[q] quit")
+	}
+	if strings.Contains(got, "SUBAGENTS") {
+		t.Fatalf("empty frame draws an agents pane with no Worker:\n%s", got)
+	}
+}
+
+// TestRenderStripFollowsFocus proves the detail strip describes the focused
+// pane's own selection: the Worker, the agent, the transcript entry, or the
+// diff.
+func TestRenderStripFollowsFocus(t *testing.T) {
 	cases := []struct {
-		name   string
-		vm     tui.ViewModel
-		chrome int
-		want   int
+		focus tui.Pane
+		want  string
 	}{
-		{"footer alone", tui.ViewModel{Height: 10}, 1, 9},
-		{
-			"one row, strip, footer",
-			tui.ViewModel{
-				Height:  10,
-				Workers: []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
-			},
-			3, 7,
-		},
-		{
-			"notices add a row each",
-			tui.ViewModel{Height: 10, Notice: "stale", ActionNotice: "declined"},
-			3, 7,
-		},
-		{"a terminal shorter than the chrome floors at one row",
-			tui.ViewModel{Height: 1, Notice: "stale"}, 2, 1},
-		{"an unset height budgets nothing", tui.ViewModel{}, 1, 0},
+		{tui.PaneRoster, "REVIEWING | elapsed 1m2s"},
+		{tui.PaneAgents, "review: bugs | events 7 | last ▸ Grep"},
+		{tui.PaneDiff, "diff #2 | 2 files | +14 -3"},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tui.TranscriptRows(tc.vm); got != tc.want {
-				t.Fatalf("TranscriptRows = %d, want %d", got, tc.want)
-			}
-			// The chrome must be the rows Render actually emits with no pane.
-			if got := len(splitLines(tui.Render(tc.vm))); got != tc.chrome {
-				t.Fatalf("Render emitted %d rows, want %d of chrome", got, tc.chrome)
-			}
-		})
+		vm := layoutFixture()
+		vm.Focus = tc.focus
+		lines := splitLines(tui.Render(vm))
+		if strip := lines[len(lines)-2]; !strings.Contains(strip, tc.want) {
+			t.Errorf("focus %v: strip %q does not carry %q", tc.focus, strip, tc.want)
+		}
 	}
 }
 
-// TestRenderClipsTranscriptToHeight proves the frame never draws past the
-// terminal bottom, whatever number of rows one event renders.
-func TestRenderClipsTranscriptToHeight(t *testing.T) {
+// TestRenderFillsTheTerminalHeight proves a sized frame draws exactly
+// Height rows, with the newest transcript row kept and the footer last, so
+// the frame never draws past the terminal bottom.
+func TestRenderFillsTheTerminalHeight(t *testing.T) {
+	for _, height := range []int{14, 20, 30} {
+		vm := layoutFixture()
+		vm.Height, vm.Width = height, 120
+		lines := splitLines(tui.Render(vm))
+		if len(lines) != height {
+			t.Errorf("height %d: Render emitted %d rows:\n%s", height, len(lines), strings.Join(lines, "\n"))
+		}
+		if !strings.Contains(lines[len(lines)-1], "[q] quit") {
+			t.Errorf("height %d: footer is not the last row: %q", height, lines[len(lines)-1])
+		}
+		if want := tui.TranscriptRows(vm); want < 1 {
+			t.Errorf("height %d: TranscriptRows = %d, want at least one", height, want)
+		}
+	}
+}
+
+// TestRenderClipsTranscriptToItsRows proves the output pane clamps the
+// transcript to the rows the chrome leaves, keeping the newest row.
+func TestRenderClipsTranscriptToItsRows(t *testing.T) {
 	pane := tui.NewTranscriptPane()
-	pane.SetView(tui.TranscriptViewModel{
-		AtTail:  true,
-		Evicted: true,
-		Dropped: 4,
-		Events: []tui.TranscriptEvent{
-			{AgentRunID: 7, Seq: 0, Type: "TOOL_CALL", ToolName: "bash", ToolInput: "go build", ToolCallID: "t1"},
-			{AgentRunID: 7, Seq: 1, Type: "TOOL_RESULT", ToolName: "bash", ToolOutput: "ok", ToolCallID: "t1"},
-		},
-		RunOrder: []int64{7},
-	})
+	var events []tui.TranscriptEvent
+	for i := range 20 {
+		events = append(events, tui.TranscriptEvent{AgentRunID: 7, Seq: i, Type: "MESSAGE", Text: fmt.Sprintf("event %d", i)})
+	}
+	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{7}, Events: events})
 	vm := tui.ViewModel{
-		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing, Agents: tui.DeriveAgents(nil)}},
 		Transcript: pane,
-		Height:     5,
+		Height:     12,
+		Width:      100,
 	}
-
-	// Two events render three rows here: the eviction marker, the call, and its
-	// folded output. The chrome takes three, so two transcript rows remain.
-	got := splitLines(tui.Render(vm))
-	if len(got) != 5 {
-		t.Fatalf("Render emitted %d rows, want 5:\n%s", len(got), strings.Join(got, "\n"))
+	got := tui.Render(vm)
+	lines := splitLines(got)
+	if len(lines) != 12 {
+		t.Fatalf("Render emitted %d rows in a 12-row terminal:\n%s", len(lines), got)
 	}
-	if strings.Contains(got[1], "not retained") {
-		t.Errorf("clipping kept the oldest row instead of the newest:\n%s", strings.Join(got, "\n"))
+	if !strings.Contains(got, "event 19") {
+		t.Errorf("clipping dropped the newest transcript row:\n%s", got)
 	}
-	if !strings.Contains(got[2], "ok") {
-		t.Errorf("clipping dropped the newest transcript row:\n%s", strings.Join(got, "\n"))
+	if strings.Contains(got, "event 0 ") || strings.Contains(got, "event 0│") {
+		t.Errorf("clipping kept the oldest row instead of the newest:\n%s", got)
+	}
+	if rows := tui.TranscriptRows(vm); rows < 1 || rows > 12 {
+		t.Errorf("TranscriptRows = %d, want a positive budget within the terminal", rows)
 	}
 }
 
-// TestRenderTinyHeightKeepsOneTranscriptRow proves a terminal too short for the
-// chrome still shows the newest transcript row.
+// TestRenderTinyHeightKeepsOneTranscriptRow proves a terminal too short for
+// the chrome still shows the newest transcript row and never panics.
 func TestRenderTinyHeightKeepsOneTranscriptRow(t *testing.T) {
 	pane := tui.NewTranscriptPane()
 	pane.SetView(tui.TranscriptViewModel{AtTail: true, RunOrder: []int64{7}, Events: []tui.TranscriptEvent{
@@ -379,8 +523,8 @@ func TestRenderTinyHeightKeepsOneTranscriptRow(t *testing.T) {
 		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
 		Transcript: pane,
 		Height:     1,
+		Width:      80,
 	}
-
 	got := tui.Render(vm)
 	if strings.Contains(got, "starting work") {
 		t.Errorf("a one-row height drew the whole transcript:\n%s", got)
@@ -388,39 +532,8 @@ func TestRenderTinyHeightKeepsOneTranscriptRow(t *testing.T) {
 	if !strings.Contains(got, "still working") {
 		t.Errorf("a one-row height dropped the newest row:\n%s", got)
 	}
-}
-
-// TestRenderKeepsAnExpandedPinnedSelectionOnScreen proves the frame keeps the
-// operator's pinned selection visible, footer and all, even when its own
-// expansion draws far more lines than the terminal has rows. The spec defers
-// heavy content to $PAGER, so the pane must clamp an oversized expansion
-// itself rather than let it push the strip and the footer off screen.
-func TestRenderKeepsAnExpandedPinnedSelectionOnScreen(t *testing.T) {
-	pane := tui.NewTranscriptPane()
-	pane.SetView(tui.TranscriptViewModel{
-		AtTail:   true,
-		RunOrder: []int64{7},
-		Events: []tui.TranscriptEvent{
-			{AgentRunID: 7, Seq: 0, Type: "TOOL_CALL", ToolName: "bash", ToolInput: strings.Repeat("line\n", 50), ToolCallID: "t1"},
-			{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
-		},
-	})
-	pane.Select(0)
-	pane.ToggleExpand()
-
-	vm := tui.ViewModel{
-		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
-		Transcript: pane,
-		Focus:      tui.PaneTranscript,
-		Height:     6,
-	}
-
-	got := splitLines(tui.Render(vm))
-	if len(got) > 6 {
-		t.Fatalf("Render emitted %d rows in a 6-row terminal:\n%s", len(got), strings.Join(got, "\n"))
-	}
-	if !strings.Contains(tui.Render(vm), "[q] quit") {
-		t.Errorf("the expansion pushed the footer off screen:\n%s", tui.Render(vm))
+	if rows := tui.TranscriptRows(vm); rows != 1 {
+		t.Errorf("TranscriptRows = %d, want the floor of 1", rows)
 	}
 }
 
@@ -433,8 +546,62 @@ func TestRenderZeroHeightDrawsTheWholeTranscript(t *testing.T) {
 		{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
 	}})
 	vm := tui.ViewModel{Transcript: pane}
-
 	if got := tui.Render(vm); !strings.Contains(got, "starting work") {
 		t.Errorf("an unset height clipped the transcript:\n%s", got)
+	}
+	if rows := tui.TranscriptRows(vm); rows != 0 {
+		t.Errorf("TranscriptRows = %d with no height, want 0 (no clip)", rows)
+	}
+}
+
+// TestRenderKeepsAnExpandedPinnedSelectionOnScreen proves the frame keeps the
+// operator's pinned selection visible, footer and all, even when its own
+// expansion draws far more lines than the terminal has rows.
+func TestRenderKeepsAnExpandedPinnedSelectionOnScreen(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{
+		AtTail:   true,
+		RunOrder: []int64{7},
+		Events: []tui.TranscriptEvent{
+			{AgentRunID: 7, Seq: 0, Type: "TOOL_CALL", ToolName: "bash", ToolInput: strings.Repeat("line\n", 50), ToolCallID: "t1"},
+			{AgentRunID: 7, Seq: 1, Type: "MESSAGE", Text: "still working"},
+		},
+	})
+	pane.Select(0)
+	pane.ToggleExpand()
+	vm := tui.ViewModel{
+		Workers:    []tui.WorkerRow{{IssueID: "#1", State: domain.StateImplementing}},
+		Transcript: pane,
+		Focus:      tui.PaneTranscript,
+		Height:     12,
+		Width:      100,
+	}
+	got := splitLines(tui.Render(vm))
+	if len(got) > 12 {
+		t.Fatalf("Render emitted %d rows in a 12-row terminal:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	if !strings.Contains(got[len(got)-1], "[q] quit") {
+		t.Errorf("the expansion pushed the footer off screen:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// TestRenderTranscriptWidthLeavesRoomForTheSidePanes proves the output pane's
+// wrap width is the terminal width less the agents pane, the diff pane when
+// open, and the borders, so a wrapped line never breaks the frame.
+func TestRenderTranscriptWidthLeavesRoomForTheSidePanes(t *testing.T) {
+	vm := layoutFixture()
+	vm.Width = 120
+	open := tui.TranscriptWidth(vm)
+	vm.DiffOpen = false
+	closed := tui.TranscriptWidth(vm)
+	if open <= 0 || closed <= open || closed >= 120 {
+		t.Fatalf("TranscriptWidth open %d closed %d, want 0 < open < closed < 120", open, closed)
+	}
+	vm.Width = 120
+	vm.DiffOpen = true
+	for _, line := range splitLines(tui.Render(vm)) {
+		if w := lipgloss.Width(line); w > 120 {
+			t.Errorf("row wider than the terminal (%d): %q", w, line)
+		}
 	}
 }

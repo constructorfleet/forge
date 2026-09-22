@@ -56,7 +56,40 @@ type TranscriptTailer struct {
 	// retention or ring eviction. Distinct from a TRUNCATION marker: storage
 	// never persists TRUNCATION, so a leading seq gap means eviction.
 	evicted bool
+
+	// filter narrows the window to one agent's events. The ring still retains
+	// every event, so a filter change needs no re-read; only the window and
+	// its edges are measured over the matching events.
+	filter AgentFilter
 }
+
+// AgentFilter narrows a transcript window to one agent's events. Disabled
+// shows every event. Enabled with an empty Subagent shows the implementation
+// Agent alone; a review axis name shows that subagent alone.
+type AgentFilter struct {
+	Enabled  bool
+	Subagent string
+}
+
+// Match reports whether e belongs to the filtered agent.
+func (f AgentFilter) Match(e TranscriptEvent) bool {
+	return !f.Enabled || e.Subagent == f.Subagent
+}
+
+// SetAgentFilter narrows the window to one agent's events and returns the
+// scrollback to the tail, so a switch between agents lands on the newest
+// matching event. It reports whether the filter changed.
+func (t *TranscriptTailer) SetAgentFilter(f AgentFilter) bool {
+	if t.filter == f {
+		return false
+	}
+	t.filter = f
+	t.offset = 0
+	return true
+}
+
+// AgentFilter returns the window's current agent filter.
+func (t *TranscriptTailer) AgentFilter() AgentFilter { return t.filter }
 
 // NewTranscriptTailer builds a tailer over store for agentRunID with a ring
 // buffer of the given cap. A cap of zero or less uses defaultTranscriptRing.
@@ -294,7 +327,7 @@ func (t *TranscriptTailer) PageSize() int { return t.height }
 
 // clampOffset keeps the scrollback offset inside the retained window.
 func (t *TranscriptTailer) clampOffset() {
-	max := t.ring.Len() - t.height
+	max := t.retainedCount() - t.height
 	if max < 0 {
 		max = 0
 	}
@@ -375,7 +408,7 @@ func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptVi
 		AtTail:   t.offset == 0,
 		AtStart:  start == 0,
 		Retained: len(retained),
-		RunOrder: t.RunOrder(),
+		RunOrder: t.runOrderOf(retained),
 	}
 	if len(window) > 0 {
 		vm.FirstSeq = window[0].Seq
@@ -388,7 +421,7 @@ func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptVi
 // Ring order is append order, so a late event from an earlier attempt lands at
 // the tail; the sort keeps each attempt contiguous, which the divider needs.
 func (t *TranscriptTailer) orderedWindow() []TranscriptEvent {
-	retained := t.ring.Window()
+	retained := t.filtered(t.ring.Window())
 	rank := t.runRanks()
 	sort.SliceStable(retained, func(i, j int) bool {
 		if rank[retained[i].AgentRunID] != rank[retained[j].AgentRunID] {
@@ -397,6 +430,51 @@ func (t *TranscriptTailer) orderedWindow() []TranscriptEvent {
 		return retained[i].Seq < retained[j].Seq
 	})
 	return retained
+}
+
+// runOrderOf returns the tailed runs in insertion order, narrowed to the
+// runs that have a retained event in the filtered window when the filter is
+// on. So a pane filtered to one agent numbers that agent's own attempts,
+// and a review run never reads as the implementation's "attempt 2".
+func (t *TranscriptTailer) runOrderOf(retained []TranscriptEvent) []int64 {
+	if !t.filter.Enabled {
+		return t.RunOrder()
+	}
+	present := make(map[int64]bool, len(t.runs))
+	for _, e := range retained {
+		present[e.AgentRunID] = true
+	}
+	order := make([]int64, 0, len(t.runs))
+	for _, r := range t.runs {
+		if present[r.id] {
+			order = append(order, r.id)
+		}
+	}
+	return order
+}
+
+// filtered keeps the events the agent filter matches. A disabled filter
+// returns events unchanged.
+func (t *TranscriptTailer) filtered(events []TranscriptEvent) []TranscriptEvent {
+	if !t.filter.Enabled {
+		return events
+	}
+	out := make([]TranscriptEvent, 0, len(events))
+	for _, e := range events {
+		if t.filter.Match(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// retainedCount counts the retained events the filter matches, the length
+// the scrollback offset is clamped against.
+func (t *TranscriptTailer) retainedCount() int {
+	if !t.filter.Enabled {
+		return t.ring.Len()
+	}
+	return len(t.filtered(t.ring.Window()))
 }
 
 // runRanks maps each tailed attempt to its view order rank.

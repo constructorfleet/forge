@@ -47,6 +47,14 @@ type fakeRosterStore struct {
 	// can be proven to derive from the same source the transcript pane
 	// numbers its "attempt N" divider from.
 	agentRuns map[string][]storage.AgentRun
+
+	// agents holds the per-run transcript summaries per Issue, so the roster's
+	// agent rows and latest-output column can be driven deterministically.
+	agents map[string][]storage.TranscriptAgent
+}
+
+func (f *fakeRosterStore) TranscriptAgents(_ context.Context, _, issueID string) ([]storage.TranscriptAgent, error) {
+	return f.agents[issueID], nil
 }
 
 func (f *fakeRosterStore) GetReplanCheckpoint(_ context.Context, _, issueID string) (storage.ReplanCheckpoint, error) {
@@ -352,6 +360,10 @@ func (missingExecutionRosterStore) AgentRunsByIssue(context.Context, string, str
 	return nil, nil
 }
 
+func (missingExecutionRosterStore) TranscriptAgents(context.Context, string, string) ([]storage.TranscriptAgent, error) {
+	return nil, nil
+}
+
 func (missingExecutionRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
 	return storage.ExecutionState{}, storage.ErrNotFound
 }
@@ -384,6 +396,10 @@ func (f *failingLoadRosterStore) AgentRunsByIssue(context.Context, string, strin
 	return nil, nil
 }
 
+func (f *failingLoadRosterStore) TranscriptAgents(context.Context, string, string) ([]storage.TranscriptAgent, error) {
+	return nil, nil
+}
+
 func (f *failingLoadRosterStore) LoadExecution(context.Context, string) (storage.ExecutionState, error) {
 	return storage.ExecutionState{}, errors.New("load failed")
 }
@@ -406,4 +422,35 @@ func (f *failingLoadRosterStore) GetReplanCheckpoint(_ context.Context, _, _ str
 
 func (f *failingLoadRosterStore) GetNeedsInfoCheckpoint(_ context.Context, _, _ string) (storage.NeedsInfoCheckpoint, error) {
 	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
+}
+
+// TestRosterRowsCarryAgents proves a poll pass folds the store's per-run
+// transcript summaries into each row's agent list, so the agents pane and the
+// execution list's agent count derive from the same read.
+func TestRosterRowsCarryAgents(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	store := &fakeRosterStore{
+		state: storage.ExecutionState{
+			Execution: domain.Execution{ID: "ex-1"},
+			Issues:    []domain.Issue{{ID: "#1", Title: "t", State: domain.StateReviewing}},
+		},
+		agents: map[string][]storage.TranscriptAgent{"#1": {
+			{AgentRunID: 1, Phase: "IMPLEMENTING", Events: 3, Last: storage.TranscriptEvent{Type: "MESSAGE", Text: "done", OccurredAt: now.Add(-time.Minute)}},
+			{AgentRunID: 2, Phase: "REVIEWING", Subagent: "bugs", Events: 1, Last: storage.TranscriptEvent{Type: "TOOL_CALL", ToolName: "Grep", OccurredAt: now}},
+		}},
+	}
+	vm, err := tui.NewRoster(store, func() time.Time { return now }).Fetch(context.Background(), "ex-1", now)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	row := vm.Workers[0]
+	if row.AgentCount() != 2 {
+		t.Fatalf("AgentCount = %d, want 2: %+v", row.AgentCount(), row.Agents)
+	}
+	if row.Agents[1].Label != "review: bugs" {
+		t.Errorf("Agents[1].Label = %q, want %q", row.Agents[1].Label, "review: bugs")
+	}
+	if got := row.LatestOutput(); got != "▸ Grep" {
+		t.Errorf("LatestOutput = %q, want %q", got, "▸ Grep")
+	}
 }

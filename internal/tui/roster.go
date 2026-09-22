@@ -40,6 +40,11 @@ type RosterStore interface {
 	// only (see answer.go). It is the record the answer key defers to $EDITOR.
 	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (storage.NeedsInfoCheckpoint, error)
 
+	// TranscriptAgents supplies one summary per AgentRun that recorded events
+	// for the Issue, so the roster lists the Issue's agents and their latest
+	// output without reading any event body.
+	TranscriptAgents(ctx context.Context, executionID, issueID string) ([]storage.TranscriptAgent, error)
+
 	// AgentRunsByIssue supplies the Issue's recorded attempts, so the roster's
 	// "attempt N" count derives from the same source the transcript pane's
 	// own "── attempt N ──" divider numbers from (see attemptBudget). It must
@@ -119,6 +124,14 @@ func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue
 	row.Attempt, row.Budget = attemptBudget(len(runs), issue.RetryBudget)
 
 	row.Verdict, row.HasDiff = lastReview(verdicts, issue.ID)
+
+	agents, err := r.Store.TranscriptAgents(ctx, executionID, issue.ID)
+	if err != nil {
+		// A read failure degrades to the implementation row alone: the roster
+		// is an observer and must not abort a pass over one failed summary.
+		agents = nil
+	}
+	row.Agents = DeriveAgents(agents)
 
 	claim, err := r.Store.WorkerClaim(ctx, executionID, issue.ID)
 	if err == nil && !claim.LastHeartbeat.IsZero() {

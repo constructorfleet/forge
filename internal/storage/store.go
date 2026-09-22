@@ -103,6 +103,20 @@ type AgentRun struct {
 	OutputTokens *int
 }
 
+// TranscriptAgent summarizes one AgentRun's transcript for the live TUI: the
+// phase and subagent stamped on its events, how many events it holds, and its
+// last event. The TUI lists one agent row per summary (the implementation
+// Agent, then each review subagent) and shows Last as the row's latest output.
+// Last carries no tool input and a text prefix only, so a poll pass never
+// loads a blob.
+type TranscriptAgent struct {
+	AgentRunID int64
+	Phase      string
+	Subagent   string
+	Events     int
+	Last       TranscriptEvent
+}
+
 // LiveRun identifies one AgentRun a live reader can tail (ADR 0030): its
 // storage-assigned id plus the Execution and Issue it belongs to, so the TUI
 // can find runs without knowing their IDs in advance. Phase-agnostic — an

@@ -122,6 +122,15 @@ type LiveModel struct {
 	// through AddComment returning — so a second answer key press on the
 	// same row cannot double-post it.
 	answerFlow actionFlow
+
+	// diffKey identifies the Review the open diff pane summarizes: the Issue,
+	// its verdict, and whether it stored a diff. A roster pass whose selected
+	// row yields another key reloads the pane; an unchanged key reads nothing,
+	// so an open pane costs no blob read per poll.
+	diffKey string
+	// diffLoading records a diff summary read in flight, so a poll cannot
+	// start a second one while a slow store still reads.
+	diffLoading bool
 }
 
 // NewLiveModel builds a live roster model over r for executionID, polling
@@ -134,7 +143,7 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 		Roster:      r,
 		ExecutionID: executionID,
 		poll:        poll,
-		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll},
+		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll, ExecutionID: executionID},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -166,10 +175,11 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The roster row count is part of the chrome, so a pass that changed the
 		// rows changes the transcript height as well.
 		m.applyTranscriptHeight()
-		return m, m.readTranscript()
+		return m, tea.Batch(m.readTranscript(), m.refreshDiff())
 	case tea.WindowSizeMsg:
 		m.winHeight = msg.Height
 		m.winWidth = msg.Width
+		m.vm.Width = msg.Width
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		return m, m.applyTranscript(msg)
@@ -184,31 +194,13 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.confirming {
 			return m, m.resolveCancelConfirm(key)
 		}
-		if key.MatchString("c") && m.vm.Focus == PaneRoster {
-			return m, m.armCancelConfirm()
-		}
-		if key.MatchString("d") && m.vm.Focus == PaneRoster {
-			return m, m.openSelectedDiff()
-		}
-		if key.MatchString("r") && m.vm.Focus == PaneRoster {
-			return m, m.startRetry()
-		}
-		if key.MatchString("p") && m.vm.Focus == PaneRoster {
-			return m, m.openSelectedApprove()
-		}
-		if key.MatchString("a") && m.vm.Focus == PaneRoster {
-			return m, m.openSelectedAnswer()
-		}
-		if m.vm.Focus == PaneRoster {
-			if cmd, moved := m.moveRosterSelection(key); moved {
-				return m, cmd
-			}
-		}
-		m.handleTranscriptKey(key)
+		return m, m.handleKey(key)
 	case diffNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case diffReadyMsg:
 		return m, m.openDiff(msg.dir, msg.diff)
+	case diffLoadedMsg:
+		m.applyDiffLoaded(msg)
 	case diffClosedMsg:
 		if msg.err != nil {
 			m.vm.ActionNotice = msg.err.Error()
@@ -311,10 +303,296 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	if vm.Selection < 0 {
 		vm.Selection = 0
 	}
+	// The agent selection, the diff pane, the terminal width, and the
+	// Execution name are all operator or runtime state a fresh view-model
+	// cannot know, so they carry over. The agent selection clamps to the
+	// selected row's agents, which a poll can shrink.
+	vm.AgentSelection = m.vm.AgentSelection
+	if row, ok := selectedWorker(vm); ok {
+		vm.AgentSelection = clampSelection(vm.AgentSelection, len(row.Agents))
+	}
+	vm.DiffOpen, vm.Diff, vm.DiffScroll = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll
+	vm.Width, vm.ExecutionID = m.vm.Width, m.vm.ExecutionID
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
 	vm.Style = m.vm.Style
 	m.vm = vm
+}
+
+// handleKey applies one non-quit key against the focused pane. The diff
+// toggle and pane navigation act from every pane; every other key acts on
+// the pane that holds focus alone, so a roster key and a pane key can share
+// a rune without collision.
+func (m *LiveModel) handleKey(key uv.Key) tea.Cmd {
+	switch {
+	case key.MatchString("d"):
+		return m.toggleDiff()
+	case key.MatchString("tab"):
+		m.cycleFocus(1)
+		return nil
+	case key.MatchString("shift+tab", "backtab"):
+		m.cycleFocus(-1)
+		return nil
+	}
+	switch m.vm.Focus {
+	case PaneRoster:
+		return m.handleRosterKey(key)
+	case PaneAgents:
+		return m.handleAgentsKey(key)
+	case PaneDiff:
+		return m.handleDiffKey(key)
+	default:
+		m.handleTranscriptKey(key, m.vm.Transcript, &m.vm.Focus)
+		return nil
+	}
+}
+
+// handleRosterKey applies the execution list's keys: the Worker actions,
+// row movement, and enter to inspect the output pane.
+func (m *LiveModel) handleRosterKey(key uv.Key) tea.Cmd {
+	switch {
+	case key.MatchString("c"):
+		return m.armCancelConfirm()
+	case key.MatchString("r"):
+		return m.startRetry()
+	case key.MatchString("p"):
+		return m.openSelectedApprove()
+	case key.MatchString("a"):
+		return m.openSelectedAnswer()
+	case key.MatchString("enter"):
+		m.inspectOutput()
+		return nil
+	}
+	cmd, _ := m.moveRosterSelection(key)
+	return cmd
+}
+
+// handleAgentsKey applies the agents pane's keys: agent movement, which
+// re-filters the output pane at once, and enter to inspect it.
+func (m *LiveModel) handleAgentsKey(key uv.Key) tea.Cmd {
+	switch {
+	case key.MatchString("j", "down"):
+		m.moveAgentSelection(1)
+	case key.MatchString("k", "up"):
+		m.moveAgentSelection(-1)
+	case key.MatchString("enter"):
+		m.inspectOutput()
+	}
+	return nil
+}
+
+// handleDiffKey applies the diff pane's keys: file-list scrolling and enter
+// to hand the whole diff to $PAGER.
+func (m *LiveModel) handleDiffKey(key uv.Key) tea.Cmd {
+	switch {
+	case key.MatchString("j", "down"):
+		m.scrollDiff(1)
+	case key.MatchString("k", "up"):
+		m.scrollDiff(-1)
+	case key.MatchString("enter"):
+		return m.openSelectedDiff()
+	}
+	return nil
+}
+
+// inspectOutput moves focus onto the output pane, when there is one.
+func (m *LiveModel) inspectOutput() {
+	if m.vm.Transcript != nil {
+		m.vm.Focus = PaneTranscript
+	}
+}
+
+// paneOrder lists the panes tab walks, in order, skipping any the frame does
+// not draw right now: the agents pane needs a selected Worker, the output
+// pane a transcript, the diff pane an open toggle.
+func (m *LiveModel) paneOrder() []Pane {
+	order := []Pane{PaneRoster}
+	if _, ok := selectedWorker(m.vm); ok {
+		order = append(order, PaneAgents)
+	}
+	if m.vm.Transcript != nil {
+		order = append(order, PaneTranscript)
+	}
+	if m.vm.DiffOpen {
+		order = append(order, PaneDiff)
+	}
+	return order
+}
+
+// cycleFocus moves focus delta panes along paneOrder, wrapping at both ends.
+func (m *LiveModel) cycleFocus(delta int) {
+	order := m.paneOrder()
+	at := 0
+	for i, p := range order {
+		if p == m.vm.Focus {
+			at = i
+		}
+	}
+	n := len(order)
+	m.vm.Focus = order[((at+delta)%n+n)%n]
+}
+
+// moveAgentSelection shifts the agent selection by delta, clamped to the
+// selected Worker's agents, and re-filters the output pane to the agent now
+// selected so the switch shows at once rather than after the next poll.
+func (m *LiveModel) moveAgentSelection(delta int) {
+	row, ok := selectedWorker(m.vm)
+	if !ok {
+		return
+	}
+	next := clampSelection(m.vm.AgentSelection+delta, len(row.Agents))
+	if next == m.vm.AgentSelection {
+		return
+	}
+	m.vm.AgentSelection = next
+	m.syncAgentFilter()
+}
+
+// agentFilter returns the output pane's filter for the selected agent. The
+// filter is always on: the output pane shows one agent at a time, the
+// implementation Agent by default.
+func (m *LiveModel) agentFilter() AgentFilter {
+	a, ok := selectedAgent(m.vm)
+	if !ok {
+		return AgentFilter{Enabled: true}
+	}
+	return AgentFilter{Enabled: true, Subagent: a.Subagent}
+}
+
+// syncAgentFilter applies the selected agent's filter to the feed's pane for
+// the selected Worker and shows the re-drawn pane. It runs after every
+// committed transcript read as well as on an agent move, so a pane the feed
+// built this poll picks the filter up at once.
+func (m *LiveModel) syncAgentFilter() {
+	if m.feed == nil {
+		return
+	}
+	row, ok := selectedWorker(m.vm)
+	if !ok {
+		return
+	}
+	if pane := m.feed.SelectAgent(row.IssueID, m.agentFilter()); pane != nil {
+		m.vm.Transcript = pane
+	}
+}
+
+// scrollDiff moves the diff pane's first visible file by delta, clamped to
+// the file list.
+func (m *LiveModel) scrollDiff(delta int) {
+	if m.vm.Diff == nil {
+		return
+	}
+	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll+delta, len(m.vm.Diff.Lines))
+}
+
+// toggleDiff opens or closes the diff pane for the selected Worker. Opening
+// starts the summary read; closing drops the summary and returns focus to
+// the roster if the pane held it. With no stored diff the key explains
+// itself instead of opening an empty pane.
+func (m *LiveModel) toggleDiff() tea.Cmd {
+	if m.vm.DiffOpen {
+		m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll = false, nil, 0
+		m.diffKey = ""
+		if m.vm.Focus == PaneDiff {
+			m.vm.Focus = PaneRoster
+		}
+		return nil
+	}
+	row, ok := selectedWorker(m.vm)
+	if !ok {
+		m.vm.ActionNotice = "no Worker selected"
+		return nil
+	}
+	if !row.HasDiff {
+		m.vm.ActionNotice = fmt.Sprintf("no diff for %s yet", row.IssueID)
+		return nil
+	}
+	m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll = true, nil, 0
+	// Opening the pane moves focus to it, matching the operator's intent and
+	// keeping the close control visible in the footer.
+	m.vm.Focus = PaneDiff
+	return m.loadDiff(row)
+}
+
+// diffLoadedMsg carries a finished diff summary read back to the update loop.
+type diffLoadedMsg struct {
+	key     string
+	summary DiffSummary
+	err     error
+}
+
+// rowDiffKey names the Review a row's diff pane would summarize.
+func rowDiffKey(row WorkerRow) string {
+	return fmt.Sprintf("%s|%s|%t", row.IssueID, row.Verdict, row.HasDiff)
+}
+
+// loadDiff returns the command that reads row's diff and summarizes it. The
+// read runs in the command, off the update goroutine, so a large blob cannot
+// delay a key press. One read runs at a time.
+func (m *LiveModel) loadDiff(row WorkerRow) tea.Cmd {
+	if m.diffLoading {
+		return nil
+	}
+	m.diffLoading = true
+	key := rowDiffKey(row)
+	m.diffKey = key
+	store, executionID, issueID := m.Roster.Store, m.ExecutionID, row.IssueID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
+		defer cancel()
+		diff, err := LatestDiff(ctx, store, executionID, issueID)
+		if err != nil {
+			return diffLoadedMsg{key: key, err: err}
+		}
+		return diffLoadedMsg{key: key, summary: SummarizeDiff(diff)}
+	}
+}
+
+// applyDiffLoaded commits a finished summary read to the open pane. A read
+// for a Review the pane has since moved away from is dropped, and a read
+// failure leaves the pane's last summary and reports the failure.
+func (m *LiveModel) applyDiffLoaded(msg diffLoadedMsg) {
+	m.diffLoading = false
+	if !m.vm.DiffOpen || msg.key != m.diffKey {
+		return
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, ErrNoDiff) {
+			m.vm.Diff = &DiffSummary{}
+			return
+		}
+		m.vm.ActionNotice = msg.err.Error()
+		return
+	}
+	summary := msg.summary
+	m.vm.Diff = &summary
+	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll, len(summary.Lines))
+}
+
+// refreshDiff reloads the open diff pane when the selected row's Review
+// changed since the last read: another Issue, a new verdict, or a diff that
+// appeared. An unchanged Review reads nothing.
+func (m *LiveModel) refreshDiff() tea.Cmd {
+	if !m.vm.DiffOpen {
+		return nil
+	}
+	row, ok := selectedWorker(m.vm)
+	if !ok {
+		m.vm.DiffOpen, m.vm.Diff, m.diffKey = false, nil, ""
+		if m.vm.Focus == PaneDiff {
+			m.vm.Focus = PaneRoster
+		}
+		return nil
+	}
+	if rowDiffKey(row) == m.diffKey {
+		return nil
+	}
+	if !row.HasDiff {
+		m.vm.Diff, m.diffKey = &DiffSummary{}, rowDiffKey(row)
+		return nil
+	}
+	m.vm.Diff = nil
+	return m.loadDiff(row)
 }
 
 // moveSelection shifts the roster selection by delta, clamped to the
@@ -399,13 +677,6 @@ func (m *LiveModel) artifactDir() (string, error) {
 // context cancellation, a signal, or a panic — leaks no temp directory.
 func (m *LiveModel) Close() { m.removeArtifacts() }
 
-// handleTranscriptKey applies the pane keys. Tab moves focus; the movement
-// and expand keys act only while the pane holds focus, so a roster key and a
-// pane key can share a rune without collision.
-func (m *LiveModel) handleTranscriptKey(key uv.Key) {
-	m.transcriptController.handleTranscriptKey(key, m.vm.Transcript, &m.vm.Focus)
-}
-
 // moveRosterSelection applies j/k and up/down against the roster selection,
 // so the operator can switch between the Workers of several Issues running
 // concurrently under one Execution instead of being stuck on the first row.
@@ -433,10 +704,14 @@ func (m *LiveModel) moveRosterSelection(key uv.Key) (tea.Cmd, bool) {
 		return nil, true
 	}
 	m.vm.Selection = next
+	// Another Worker has its own agents and its own diff, so the agent
+	// selection and the file scroll start over. The diff pane, if open,
+	// reloads for the new row.
+	m.vm.AgentSelection, m.vm.DiffScroll = 0, 0
 	// The selection just moved to another Issue: the transcript pane must
 	// follow at once rather than waiting up to a full poll interval to show
 	// the newly selected Worker's own context.
-	return m.readTranscript(), true
+	return tea.Batch(m.readTranscript(), m.refreshDiff()), true
 }
 
 // readTranscript returns the command that reads the selected Worker's
@@ -479,6 +754,9 @@ func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
 	cmd, committed := m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 	if committed {
 		m.lastCommit = m.Roster.Now()
+		// The feed may have built the pane this pass, so it takes the
+		// selected agent's filter here.
+		m.syncAgentFilter()
 	}
 	return cmd
 }
@@ -501,7 +779,11 @@ func (m *LiveModel) transcriptLagAge(now time.Time) time.Duration {
 // when a feed is attached.
 func (m *LiveModel) applyTranscriptHeight() {
 	m.vm.Height = m.winHeight
-	m.sizeFeed(TranscriptRows(m.vm), m.winWidth)
+	width := 0
+	if m.winWidth > 0 {
+		width = TranscriptWidth(m.vm)
+	}
+	m.sizeFeed(TranscriptRows(m.vm), width)
 }
 
 // SetFeed attaches the transcript feed each poll drives. It is the pane's one

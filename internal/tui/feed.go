@@ -191,6 +191,26 @@ func (f *TranscriptFeed) Apply(read FeedRead) *TranscriptPane {
 	return ip.pane
 }
 
+// SelectAgent narrows issueID's pane to one agent's events and returns the
+// pane re-drawn from the retained window, so the switch shows at once rather
+// than after the next poll. Gate rows stay only with the implementation
+// Agent. It returns nil when the feed holds no pane for the Issue yet; the
+// next Apply then builds one, and the caller selects again.
+func (f *TranscriptFeed) SelectAgent(issueID string, filter AgentFilter) *TranscriptPane {
+	ip, ok := f.issues[issueID]
+	if !ok {
+		return nil
+	}
+	ip.pane.SetHideGates(filter.Enabled && filter.Subagent != "")
+	// An unchanged filter re-draws nothing: the poll's own SetView already
+	// holds the pending selection and page moves the pane recorded, and a
+	// second rebuild here would answer them a poll early.
+	if ip.tailer != nil && ip.tailer.SetAgentFilter(filter) {
+		ip.pane.SetView(ip.tailer.snapshot())
+	}
+	return ip.pane
+}
+
 // Poll performs one whole pass inline. Use Fetch and Apply where the caller must
 // keep the store reads off its own goroutine.
 func (f *TranscriptFeed) Poll(ctx context.Context, executionID, issueID string) (*TranscriptPane, error) {
