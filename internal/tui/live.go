@@ -188,6 +188,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.winHeight = msg.Height
 		m.winWidth = msg.Width
 		m.vm.Width = msg.Width
+		m.clampDiffHorizontal()
 		m.applyTranscriptHeight()
 	case transcriptReadMsg:
 		return m, m.applyTranscript(msg)
@@ -500,7 +501,24 @@ func (m *LiveModel) scrollDiffHorizontal(delta int) {
 	if m.vm.Diff == nil {
 		return
 	}
-	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal+delta, maxDiffWidth(m.vm.Diff.Lines))
+	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal+delta, maxDiffHorizontalOffset(m.vm.Diff.Lines, diffViewportWidth(m.vm)))
+}
+
+func diffViewportWidth(vm ViewModel) int {
+	_, _, diffW := paneWidths(vm, frameWidth(vm))
+	return max(0, diffW-2)
+}
+
+func maxDiffHorizontalOffset(lines []DiffLine, viewportWidth int) int {
+	return max(0, maxDiffWidth(lines)-viewportWidth)
+}
+
+func (m *LiveModel) clampDiffHorizontal() {
+	if m.vm.Diff == nil {
+		m.vm.DiffHorizontal = 0
+		return
+	}
+	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal, maxDiffHorizontalOffset(m.vm.Diff.Lines, diffViewportWidth(m.vm)))
 }
 
 func maxDiffWidth(lines []DiffLine) int {
@@ -598,7 +616,7 @@ func (m *LiveModel) applyDiffLoaded(msg diffLoadedMsg) {
 	summary := msg.summary
 	m.vm.Diff = &summary
 	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll, len(summary.Lines))
-	m.vm.DiffHorizontal = clampSelection(m.vm.DiffHorizontal, maxDiffWidth(summary.Lines))
+	m.clampDiffHorizontal()
 }
 
 // refreshDiff reloads the open diff pane when the selected row's Review
@@ -649,7 +667,8 @@ func clampSelection(sel, n int) int {
 }
 
 // openSelectedDiff reads the selected Worker's complete Review diff and defers
-// it to $PAGER. It returns no command when the store holds no diff.
+// it to $PAGER. Read errors report asynchronously through diffNoticeMsg.
+// It returns no command only when no Worker is selected or artifact setup fails.
 func (m *LiveModel) openSelectedDiff() tea.Cmd {
 	row, ok := selectedWorker(m.vm)
 	if !ok {

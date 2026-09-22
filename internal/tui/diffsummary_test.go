@@ -96,3 +96,14 @@ func TestBoundDiffStopsBeforeAnOversizedUTF8Line(t *testing.T) {
 		t.Fatal("BoundDiff returned invalid UTF-8")
 	}
 }
+
+func TestBoundDiffKeepsTheLastCompleteLineWithoutSplitting(t *testing.T) {
+	input := "+one\n+two\npartial"
+	got, truncated := tui.BoundDiff(input, len([]byte("+one\n+two\npartial"))-1, 0)
+	if !truncated {
+		t.Fatal("BoundDiff reported no truncation")
+	}
+	if got != "+one\n+two\n" {
+		t.Fatalf("BoundDiff = %q, want complete lines only", got)
+	}
+}

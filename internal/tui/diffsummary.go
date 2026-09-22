@@ -14,7 +14,14 @@ func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
 	var b strings.Builder
 	truncated := false
 	lines := 0
-	for _, line := range strings.SplitAfter(diff, "\n") {
+	for start := 0; start < len(diff); {
+		end := strings.IndexByte(diff[start:], '\n')
+		if end >= 0 {
+			end += start + 1
+		} else {
+			end = len(diff)
+		}
+		line := diff[start:end]
 		if maxLines > 0 && lines >= maxLines {
 			truncated = true
 			break
@@ -25,6 +32,7 @@ func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
 		}
 		b.WriteString(line)
 		lines++
+		start = end
 	}
 	if b.Len() < len(diff) {
 		truncated = true
