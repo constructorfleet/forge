@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/planengine"
 	"github.com/Teagan42/forge/internal/storage"
+	"github.com/Teagan42/forge/internal/tui"
 	"github.com/Teagan42/forge/internal/wayfinding"
 )
 
@@ -23,6 +25,9 @@ func runResume(args []string) int {
 	configPath := fs.String("config", defaultConfigPath, "path to .forge.yaml")
 	dbPath := fs.String("db", defaultDBPath, "path to the SQLite state database")
 	answer := fs.String("answer", "", "answer a paused needs-human Decision locally, without a tracker (for a local Feature slug)")
+	tuiMode := &triState{}
+	fs.BoolFunc("tui", "force the live roster on", tuiMode.tuiFlag)
+	fs.BoolFunc("no-tui", "force the live roster off", tuiMode.noTuiFlag)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -42,6 +47,7 @@ func runResume(args []string) int {
 	}
 
 	resolvedConfigPath, resolvedDBPath := resolveConfigDBPaths(fs, repoRoot, *configPath, *dbPath)
+	useTUI := shouldUseTUI(tuiMode.val, tuiMode.set, isTerminalSession())
 
 	cfg, err := loadConfig(resolvedConfigPath)
 	if err != nil {
@@ -81,7 +87,12 @@ func runResume(args []string) int {
 			fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
 			return 1
 		}
-		state, err := eng.ResumeExecution(ctx, executionID)
+		var state storage.ExecutionState
+		if useTUI {
+			state, err = runResumeTUI(ctx, store, executionID, eng, resolveRetrier(resolvedConfigPath, resolvedDBPath), resolveResumer(resolvedConfigPath, resolvedDBPath), resolveAnswerer(ctx, cfg, repoRoot))
+		} else {
+			state, err = eng.ResumeExecution(ctx, executionID)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
 			return 1
@@ -126,6 +137,36 @@ func runResume(args []string) int {
 		fmt.Fprintf(os.Stderr, "forge resume: %v\n", planLookupErr)
 		return 1
 	}
+}
+
+// runResumeTUI mirrors execute's observer lifecycle: the live roster renders
+// the persisted Execution while ResumeExecution performs the actual recovery.
+// Quitting the roster only detaches the observer; it never cancels recovery.
+func runResumeTUI(ctx context.Context, store liveStore, executionID string, eng *engine.Engine, retrier tui.Retrier, resumer tui.Resumer, answerer tui.Answerer) (storage.ExecutionState, error) {
+	rosterCtx, cancelRoster := context.WithCancel(context.Background())
+	defer cancelRoster()
+
+	type resumeResult struct {
+		state storage.ExecutionState
+		err   error
+	}
+	resumed := make(chan resumeResult, 1)
+	go func() {
+		state, err := eng.ResumeExecution(ctx, executionID)
+		resumed <- resumeResult{state: state, err: err}
+	}()
+
+	rosterDone := make(chan error, 1)
+	go func() {
+		rosterDone <- runLiveRoster(rosterCtx, store, executionID, liveControls{canceller: eng, retrier: retrier, resumer: resumer, approver: eng, answerer: answerer})
+	}()
+
+	result := <-resumed
+	cancelRoster()
+	if err := <-rosterDone; err != nil {
+		fmt.Fprintf(os.Stderr, "forge resume: %v\n", err)
+	}
+	return result.state, result.err
 }
 
 // resumeWithLocalAnswer answers the single paused needs-human Decision of a
