@@ -124,6 +124,10 @@ type TranscriptPane struct {
 	// gates are the quality-gate rows the pane interleaves into the event
 	// timeline by finish time.
 	gates []GateRow
+	// hideGates leaves the gate rows out of the timeline. The gates belong to
+	// the implementation Agent, so a pane filtered to a review subagent hides
+	// them.
+	hideGates bool
 	// lastEventIndex is the index of the last entry in entries that comes from
 	// the event window, or noSelection where the window holds no event. A gate
 	// row is not part of the window, so a move past this edge must still ask
@@ -210,6 +214,17 @@ func (p *TranscriptPane) SetGates(rows []GateRow) {
 	p.rebuild(0)
 }
 
+// SetHideGates leaves the gate rows out of the timeline while hide is set,
+// and rebuilds the entries. A pane filtered to a review subagent hides them:
+// the gates ran against the implementation Agent's work, not the review's.
+func (p *TranscriptPane) SetHideGates(hide bool) {
+	if p.hideGates == hide {
+		return
+	}
+	p.hideGates = hide
+	p.rebuild(0)
+}
+
 // SetView replaces the visible window and re-interleaves the gate rows. A
 // pinned selection holds its entry by key where the new window still retains
 // it, so a poll that appends events does not move the operator's selection.
@@ -234,11 +249,18 @@ func (p *TranscriptPane) rebuild(pending int) {
 	wasExpanded := p.expanded != noSelection
 
 	events := buildEntries(p.view.Events)
-	p.entries = mergeTimeline(events, gateEntries(p.gates))
+	gates := p.gates
+	if p.hideGates {
+		gates = nil
+	}
+	p.entries = mergeTimeline(events, gateEntries(gates))
 	p.lastEventIndex = lastEventIndex(p.entries)
 
 	idx := p.defaultSelection()
-	if hadSelection && (p.pinned || !p.view.AtTail) {
+	// A pending page move decides the landing itself (below), so the lost
+	// pinned entry must not pull the window back towards where it was: that
+	// scroll would undo the page the operator asked for.
+	if hadSelection && (p.pinned || !p.view.AtTail) && p.pendingPageMove == 0 {
 		idx = indexOfKey(p.entries, prevKey)
 		if idx == noSelection {
 			idx = p.anchorLostSelection(prevEntry)

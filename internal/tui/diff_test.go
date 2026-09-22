@@ -137,9 +137,10 @@ func pressDiffKey(t *testing.T, m *tui.LiveModel) tea.Cmd {
 	return next
 }
 
-// TestLiveModelDiffKeyDefersToThePager proves the diff key hands the stored
-// diff to the pager seam, so no diff ever enters the frame.
-func TestLiveModelDiffKeyDefersToThePager(t *testing.T) {
+// TestLiveModelDiffKeyOpensThePaneNotThePager proves the diff key opens the
+// in-frame diff pane with the file summary, and no pager: the body defers to
+// $PAGER only from the pane's own enter key.
+func TestLiveModelDiffKeyOpensThePaneNotThePager(t *testing.T) {
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	m := diffFixture(t, now)
 	var opened []string
@@ -149,14 +150,16 @@ func TestLiveModelDiffKeyDefersToThePager(t *testing.T) {
 	}
 	nextPollTick(t, m)
 
-	if cmd := pressDiffKey(t, m); cmd == nil {
-		t.Fatal("the diff key produced no pager command, want the pager's own command")
+	pressDiffKey(t, m)
+	if len(opened) != 0 {
+		t.Fatalf("pager opened %d times on the diff key, want 0", len(opened))
 	}
-	if len(opened) != 1 {
-		t.Fatalf("pager opened %d times, want 1", len(opened))
+	got := visible(m.View().Content)
+	if !strings.Contains(got, "a.go") || !strings.Contains(got, "+1") || !strings.Contains(got, "Diff +1 -0") {
+		t.Fatalf("diff pane does not summarize the stored diff:\n%s", got)
 	}
-	if !strings.Contains(opened[0], "+added line") {
-		t.Fatalf("pager received %q, want the stored diff", opened[0])
+	if strings.Contains(got, "+added line") {
+		t.Fatalf("the diff body entered the frame:\n%s", got)
 	}
 }
 
@@ -301,6 +304,15 @@ func TestLiveModelQuitRemovesTheDiffArtifacts(t *testing.T) {
 	}
 	nextPollTick(t, m)
 	pressDiffKey(t, m)
+	// Enter in the diff pane is what defers the body to the pager.
+	press(t, m, "tab")
+	press(t, m, "tab")
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '\r'}))
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
 	if dir == "" {
 		t.Fatal("the pager seam received no artifact directory")
 	}

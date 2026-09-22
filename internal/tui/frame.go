@@ -140,24 +140,53 @@ type WorkerRow struct {
 	// offer the pager key. The diff itself never enters the view-model: it is
 	// a heavy artifact, read on request and handed to $PAGER.
 	HasDiff bool
+
+	// Agents lists the agents that worked the Issue: the implementation Agent
+	// first, then each review subagent. The agents pane renders them and the
+	// execution list counts them.
+	Agents []AgentRow
 }
 
-// Pane names the frame's two panes. Focus decides which pane the detail strip
-// describes and which keys the footer offers.
+// Pane names the frame's regions. Focus decides which region the detail strip
+// describes and which keys the footer offers. The planning view uses the first
+// two alone.
 type Pane int
 
 const (
-	// PaneRoster: the Worker list holds focus.
+	// PaneRoster: the execution list holds focus.
 	PaneRoster Pane = iota
-	// PaneTranscript: the transcript pane holds focus.
+	// PaneTranscript: the output pane holds focus.
 	PaneTranscript
+	// PaneAgents: the agents pane holds focus.
+	PaneAgents
+	// PaneDiff: the diff pane holds focus.
+	PaneDiff
 )
 
 // ViewModel is the plain, transportable input to Render.
 type ViewModel struct {
+	// ExecutionID names the Execution the list observes. The execution list's
+	// header shows its short form.
+	ExecutionID string
+
 	// Selection is the index of the row whose detail strip and footer render.
 	Selection int
 	Workers   []WorkerRow
+
+	// AgentSelection is the index into the selected Worker's Agents of the
+	// agent the agents pane marks and the output pane shows.
+	AgentSelection int
+
+	// DiffOpen shows the diff pane. Diff is its loaded summary; nil while the
+	// read is in flight. DiffScroll is the first file row the pane shows.
+	DiffOpen   bool
+	Diff       *DiffSummary
+	DiffScroll int
+
+	// Width is the terminal width in cells. Render sizes the three body panes
+	// from it. Zero means the runtime has sent no size yet, and Render uses
+	// defaultFrameWidth.
+	Width int
 
 	// Notice explains the roster: the Execution does not exist yet, it holds no
 	// Issues, or a roster poll pass failed. It renders with whatever rows the
@@ -261,57 +290,6 @@ func LegalKeys(state domain.IssueState) []KeyBinding {
 	return keys
 }
 
-// Render draws the whole frame: one line per Worker, a notice for an empty or
-// stale roster, the transcript pane with its own poll notice, a detail strip
-// for the focused pane's selection, and a footer of legal keys. The transcript
-// is clipped to the rows vm.Height leaves, so the frame never draws past the
-// terminal bottom. Pure and headless.
-func Render(vm ViewModel) string {
-	above, below := chromeLines(vm)
-	return assembleFrame(above, below, vm.Transcript, vm.Height)
-}
-
-// TranscriptRows returns the rows vm.Height leaves the transcript, after the
-// roster, the notices, the detail strip, and the footer. Render clips to it and
-// the live view budgets the tailer's event window against it, so one place owns
-// the arithmetic. Zero means vm.Height is unset and nothing is clipped. One is
-// the floor: a terminal too short for the chrome must still show the newest row.
-func TranscriptRows(vm ViewModel) int {
-	above, below := chromeLines(vm)
-	return transcriptRows(vm.Height, above, below)
-}
-
-// chromeLines splits the frame's non-transcript rows into the rows above the
-// transcript and the rows below it.
-func chromeLines(vm ViewModel) (above, below []string) {
-	for i, row := range vm.Workers {
-		above = append(above, rowLine(row, i == vm.Selection, vm.Style))
-	}
-	// A notice also carries a failed poll pass, which holds the last good rows.
-	// It must render with those rows, or the failure is invisible.
-	if vm.Notice != "" {
-		above = append(above, vm.Style.Notice.Render(vm.Notice))
-	}
-	// The notice renders above the pane, so the failure sits with the transcript
-	// it describes and a long pane cannot push the two apart.
-	if vm.TranscriptNotice != "" {
-		above = append(above, vm.Style.Notice.Render(vm.TranscriptNotice))
-	}
-	// A lagging transcript renders here too, so a store slower than the poll
-	// cadence sits with the pane it describes rather than hiding behind a
-	// roster that keeps ticking at its own full rate.
-	if DeriveTranscriptLag(vm.TranscriptLagAge, vm.PollInterval) {
-		above = append(above, vm.Style.Notice.Render(transcriptLagLine(vm.TranscriptLagAge)))
-	}
-	if vm.ActionNotice != "" {
-		above = append(above, vm.Style.Notice.Render(vm.ActionNotice))
-	}
-	if strip, ok := stripLine(vm); ok {
-		below = append(below, strip)
-	}
-	return above, append(below, footerLine(frameKeys(vm), vm.Style))
-}
-
 // assembleFrame joins the chrome rows above and below the transcript with the
 // transcript itself, clipped to what height leaves. Shared by Render and
 // RenderPlanning so the row order, the clip arithmetic, and the one-row floor
@@ -361,44 +339,6 @@ func clipTranscript(transcript *TranscriptPane, rows int) []string {
 	return strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 }
 
-// stripLine picks the detail strip for the focused pane: the transcript
-// selection's own strip, or the selected Worker's.
-func stripLine(vm ViewModel) (string, bool) {
-	if vm.Focus == PaneTranscript && vm.Transcript != nil {
-		if e, ok := vm.Transcript.SelectedEntry(); ok {
-			return transcriptDetailLine(e), true
-		}
-		return "", false
-	}
-	if row, ok := selectedWorker(vm); ok {
-		return detailLine(row), true
-	}
-	return "", false
-}
-
-// frameKeys picks the footer's keys for the focused pane. A transcript focus
-// offers only transcript actions, so no state-illegal Worker key can appear.
-func frameKeys(vm ViewModel) []KeyBinding {
-	if vm.Focus == PaneTranscript && vm.Transcript != nil {
-		return TranscriptKeys(vm.Transcript)
-	}
-	if row, ok := selectedWorker(vm); ok {
-		keys := LegalKeys(row.State)
-		if row.HasDiff {
-			// The diff defers to $PAGER, so the key appears only where the
-			// store holds a diff to open.
-			keys = append(keys, KeyBinding{Key: "d", Label: "diff"})
-		}
-		if len(vm.Workers) > 1 {
-			// The switch key moves between concurrently running Workers, so it
-			// appears only where there is more than one row to switch to.
-			keys = append(keys, KeyBinding{Key: "j/k", Label: "switch worker"})
-		}
-		return keys
-	}
-	return []KeyBinding{{Key: "q", Label: "quit"}}
-}
-
 // selectedWorker returns the selected roster row. The bool is false when the
 // roster is empty, which a transcript-only attach produces.
 func selectedWorker(vm ViewModel) (WorkerRow, bool) {
@@ -406,22 +346,6 @@ func selectedWorker(vm ViewModel) (WorkerRow, bool) {
 		return WorkerRow{}, false
 	}
 	return vm.Workers[vm.Selection], true
-}
-
-// rowLine renders one Worker. Cursor marks the selection; the coarse state and
-// issue id are fixed-width so the title takes whatever width remains.
-func rowLine(row WorkerRow, selected bool, style Style) string {
-	cur := " "
-	if selected {
-		cur = ">"
-	}
-	att := AttentionGlyph(DeriveAttention(row.State, row.Tool))
-	live := LivenessGlyph(DeriveLiveness(row.HasHeartbeat, row.HeartbeatAge))
-	line := fmt.Sprintf("%s %s %s %-8s %-10s %s", cur, att, live, row.State.Group(), row.IssueID, row.Title)
-	if selected {
-		return style.Selection.Render(line)
-	}
-	return line
 }
 
 // detailLine renders the verbatim state, elapsed, heartbeat age, attempt

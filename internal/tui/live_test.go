@@ -199,13 +199,22 @@ func transcriptModel(t *testing.T) *tui.LiveModel {
 	return m
 }
 
-// TestLiveModelTabFocusesTranscript proves tab moves focus onto the pane, so
-// the footer offers the transcript keys and no Worker key.
+// focusOutput walks focus from the execution list, past the agents pane,
+// onto the output pane.
+func focusOutput(t *testing.T, m *tui.LiveModel) string {
+	t.Helper()
+	press(t, m, "tab")
+	return press(t, m, "tab")
+}
+
+// TestLiveModelTabFocusesTranscript proves two tabs move focus onto the
+// output pane, so the footer offers the transcript keys and no Worker key,
+// and a third returns to the execution list.
 func TestLiveModelTabFocusesTranscript(t *testing.T) {
 	m := transcriptModel(t)
 
-	got := press(t, m, "tab")
-	if !strings.Contains(visible(got), "[tab] roster") {
+	got := focusOutput(t, m)
+	if !strings.Contains(visible(got), "[tab] next pane") || !strings.Contains(visible(got), "[enter] expand") {
 		t.Errorf("footer is not the transcript footer after tab:\n%s", got)
 	}
 	if strings.Contains(visible(got), "[c] cancel") {
@@ -223,7 +232,7 @@ func TestLiveModelTabFocusesTranscript(t *testing.T) {
 func TestLiveModelEnterExpandsSelectedToolCall(t *testing.T) {
 	m := transcriptModel(t)
 	// A fresh pane selects the newest entry: the tool call.
-	press(t, m, "tab")
+	focusOutput(t, m)
 
 	if got := press(t, m, "enter"); !strings.Contains(got, "go build ./...") {
 		t.Fatalf("enter did not expand the selected tool call:\n%s", got)
@@ -241,7 +250,7 @@ func TestLiveModelEnterExpandsSelectedToolCall(t *testing.T) {
 // that the key returns the selection to the tail and then clears itself.
 func TestLiveModelFollowTailKeyReachesPane(t *testing.T) {
 	m := transcriptModel(t)
-	press(t, m, "tab")
+	focusOutput(t, m)
 	// One selection move pins the pane, which is what the follow-tail key undoes.
 	if got := press(t, m, "k"); !strings.Contains(visible(got), "[G] follow tail") {
 		t.Fatalf("footer omits the follow-tail key while the selection is pinned:\n%s", got)
@@ -284,7 +293,7 @@ func TestLiveModelPageKeysReachThePane(t *testing.T) {
 	if got := m.View().Content; strings.Contains(got, "event 0\n") || strings.Contains(got, "event 0 ") {
 		t.Fatalf("the tail-following window already shows the oldest event:\n%s", got)
 	}
-	press(t, m, "tab")
+	focusOutput(t, m)
 
 	press(t, m, "pgup")
 	nextPollTick(t, m)
@@ -388,14 +397,18 @@ func TestLiveModelTranscriptKeysDoNothingOnRosterFocus(t *testing.T) {
 }
 
 // TestLiveModelTabWithoutTranscriptStaysOnRoster proves focus never moves to a
-// pane that does not exist.
+// pane that does not exist: with no transcript, tab visits the agents pane
+// and then returns to the execution list.
 func TestLiveModelTabWithoutTranscriptStaysOnRoster(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	m, _ := liveFixture(t, now)
 	nextPollTick(t, m)
 
+	if got := press(t, m, "tab"); strings.Contains(visible(got), "[enter] expand") {
+		t.Errorf("focus reached an output pane that does not exist:\n%s", got)
+	}
 	if got := press(t, m, "tab"); !strings.Contains(visible(got), "[c] cancel") {
-		t.Errorf("footer left the roster with no transcript pane:\n%s", got)
+		t.Errorf("tab did not return to the roster with no transcript pane:\n%s", got)
 	}
 }
 
@@ -426,7 +439,7 @@ func TestLiveModelFeedKeysReachThePolledPane(t *testing.T) {
 	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
 	nextPollTick(t, m)
 
-	press(t, m, "tab")
+	focusOutput(t, m)
 	if got := press(t, m, "enter"); !strings.Contains(got, "go build ./...") {
 		t.Errorf("enter did not expand the polled pane's tool call:\n%s", got)
 	}
@@ -756,7 +769,7 @@ func TestLiveModelFeedDetachesPaneWithoutSelection(t *testing.T) {
 	m, rosterStore := liveFixture(t, now)
 	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
 	nextPollTick(t, m)
-	press(t, m, "tab")
+	focusOutput(t, m)
 
 	rosterStore.state.Issues = nil
 	nextPollTick(t, m)
@@ -900,8 +913,9 @@ func TestLiveModelWindowSizeSetsTranscriptHeight(t *testing.T) {
 	m, _ := liveFixture(t, now)
 	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
 
-	// One roster row, one detail strip, one footer: a height of 5 leaves 2 rows.
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 5})
+	// The execution list takes four rows, the body borders two, the detail
+	// strip and the footer one each: a height of 10 leaves 2 output rows.
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
 	nextPollTick(t, m)
 
 	got := m.View().Content
@@ -923,20 +937,22 @@ func TestLiveModelWindowSizeSetsTranscriptHeight(t *testing.T) {
 func TestLiveModelWindowSizeSetsTranscriptWidth(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 
+	// An unset height clips nothing, so the row count differs by wrapping
+	// alone.
 	m, _ := liveFixture(t, now)
 	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
-	m.Update(tea.WindowSizeMsg{Width: 200, Height: 100})
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 0})
 	nextPollTick(t, m)
 	wide := len(splitLines(m.View().Content))
 
 	m2, _ := liveFixture(t, now)
 	m2.SetFeed(tui.NewTranscriptFeed(feedFixture()))
-	m2.Update(tea.WindowSizeMsg{Width: 5, Height: 100})
+	m2.Update(tea.WindowSizeMsg{Width: 40, Height: 0})
 	nextPollTick(t, m2)
 	narrow := len(splitLines(m2.View().Content))
 
 	if narrow <= wide {
-		t.Errorf("a width of 5 produced %d rows, want more than the width-200 render's %d", narrow, wide)
+		t.Errorf("a width of 40 produced %d rows, want more than the width-200 render's %d", narrow, wide)
 	}
 }
 
@@ -951,7 +967,7 @@ func TestLiveModelWindowSizeAfterPollResizesTranscript(t *testing.T) {
 		t.Fatalf("the default height dropped the oldest event:\n%s", got)
 	}
 
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 5})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
 	nextPollTick(t, m)
 
 	if got := m.View().Content; strings.Contains(got, "starting work") {
@@ -974,8 +990,9 @@ func TestLiveModelTinyWindowKeepsOneTranscriptRow(t *testing.T) {
 	if strings.Contains(m.View().Content, "starting work") {
 		t.Errorf("a one-row terminal rendered the whole scrollback:\n%s", m.View().Content)
 	}
-	// The chrome alone takes three rows, so exactly one transcript row remains.
-	if len(got) != 4 {
+	// The chrome alone takes eight rows (the four-row execution list, the
+	// body borders, the strip, the footer), so exactly one output row remains.
+	if len(got) != 9 {
 		t.Errorf("frame drew %d rows, want the chrome plus one:\n%s", len(got), strings.Join(got, "\n"))
 	}
 }
@@ -987,12 +1004,12 @@ func TestLiveModelWindowSizeClipsTheFrame(t *testing.T) {
 	m, _ := liveFixture(t, now)
 	m.SetFeed(tui.NewTranscriptFeed(feedFixture()))
 
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 6})
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 11})
 	nextPollTick(t, m)
 
 	got := strings.Split(strings.TrimRight(m.View().Content, "\n"), "\n")
-	if len(got) > 6 {
-		t.Errorf("frame drew %d rows in a 6-row terminal:\n%s", len(got), strings.Join(got, "\n"))
+	if len(got) > 11 {
+		t.Errorf("frame drew %d rows in an 11-row terminal:\n%s", len(got), strings.Join(got, "\n"))
 	}
 	if !strings.Contains(m.View().Content, "bash") {
 		t.Errorf("clipping dropped the newest rows:\n%s", m.View().Content)

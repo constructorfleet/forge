@@ -36,6 +36,21 @@ type Style struct {
 	Selection lipgloss.Style
 	// Notice styles a roster, transcript, or action notice.
 	Notice lipgloss.Style
+	// Border styles an unfocused pane's border; FocusBorder the focused one.
+	Border      lipgloss.Style
+	FocusBorder lipgloss.Style
+	// Header styles a pane title and the execution list's column header.
+	Header lipgloss.Style
+	// Running, Passed, Failed, and Warning colour a Worker state by its group.
+	Running lipgloss.Style
+	Passed  lipgloss.Style
+	Failed  lipgloss.Style
+	Warning lipgloss.Style
+	// Added and Removed colour the diff pane's addition and deletion counts.
+	Added   lipgloss.Style
+	Removed lipgloss.Style
+	// Muted styles a pending state and a pane's placeholder text.
+	Muted lipgloss.Style
 }
 
 // DefaultStyle returns forge's terminal colour scheme. It uses the terminal's
@@ -46,15 +61,25 @@ type Style struct {
 // and a notice each carry their own hue.
 func DefaultStyle() Style {
 	return Style{
-		Message:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		Thinking:   lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true),
-		Tool:       lipgloss.NewStyle().Faint(true),
-		Truncation: lipgloss.NewStyle().Faint(true),
-		GatePass:   lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		GateFail:   lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true),
-		Axis:       lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		Key:        lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true),
-		Selection:  lipgloss.NewStyle().Bold(true),
-		Notice:     lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		Message:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Thinking:    lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true),
+		Tool:        lipgloss.NewStyle().Faint(true),
+		Truncation:  lipgloss.NewStyle().Faint(true),
+		GatePass:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		GateFail:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true),
+		Axis:        lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
+		Key:         lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true),
+		Selection:   lipgloss.NewStyle().Bold(true),
+		Notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		Border:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		FocusBorder: lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Header:      lipgloss.NewStyle().Bold(true),
+		Running:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Passed:      lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		Failed:      lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true),
+		Warning:     lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		Added:       lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		Removed:     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		Muted:       lipgloss.NewStyle().Faint(true),
 	}
 }
