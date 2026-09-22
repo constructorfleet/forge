@@ -40,3 +40,12 @@ func TestSteeringQueueIsNotReusedAfterRelease(t *testing.T) {
 		t.Fatalf("later execution received stale message %q", got)
 	}
 }
+
+func TestSteeringQueueLookupDoesNotFallbackToCompatibilityQueue(t *testing.T) {
+	configured := steering.NewQueue()
+	e := &Engine{Steering: configured}
+
+	if got := e.steeringQueue("unknown-execution"); got != nil {
+		t.Fatalf("unknown execution must not resolve the compatibility queue, got %p", got)
+	}
+}

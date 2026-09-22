@@ -578,14 +578,25 @@ func (e *Engine) releaseSteeringQueue(executionID string) func() {
 	}
 }
 
+// acquireSteeringExecution acquires and registers one execution queue.
+// The returned function unregisters and releases the queue.
+func (e *Engine) acquireSteeringExecution(executionID string) (*steering.Queue, func()) {
+	queue, releaseQueue := e.acquireSteeringQueue(executionID)
+	if queue == nil || e.SteeringRegistry == nil {
+		return queue, releaseQueue
+	}
+	e.SteeringRegistry.Register(executionID, queue, e.Session)
+	return queue, func() {
+		e.SteeringRegistry.Unregister(executionID)
+		releaseQueue()
+	}
+}
+
 func (e *Engine) steeringQueue(executionID string) *steering.Queue {
 	e.steeringMu.Lock()
 	active := e.steeringQueues[executionID]
 	e.steeringMu.Unlock()
-	if active.queue != nil {
-		return active.queue
-	}
-	return e.Steering
+	return active.queue
 }
 
 // ExecuteInExecution drives one Issue through the execution pipeline inside
@@ -593,15 +604,8 @@ func (e *Engine) steeringQueue(executionID string) *steering.Queue {
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
 func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
-	queue, releaseQueue := e.acquireSteeringQueue(execution.ID)
+	_, releaseQueue := e.acquireSteeringExecution(execution.ID)
 	defer releaseQueue()
-	// Register this Execution's ID as the loop-id `forge steer` resolves
-	// (constructorfleet/forge#746), for this loop's whole duration — every
-	// return path below, success or failure, unregisters it via defer.
-	if queue != nil && e.SteeringRegistry != nil {
-		e.SteeringRegistry.Register(execution.ID, queue, e.Session)
-		defer e.SteeringRegistry.Unregister(execution.ID)
-	}
 
 	issue, err := e.Tracker.GetIssue(ctx, issueID)
 	if err != nil {
@@ -787,12 +791,8 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 // decrements the independent CI retry budget, and re-enters the existing
 // implementation -> validate -> review -> commit/push flow in place.
 func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
-	queue, releaseQueue := e.acquireSteeringQueue(executionID)
+	_, releaseQueue := e.acquireSteeringExecution(executionID)
 	defer releaseQueue()
-	if queue != nil && e.SteeringRegistry != nil {
-		e.SteeringRegistry.Register(executionID, queue, e.Session)
-		defer e.SteeringRegistry.Unregister(executionID)
-	}
 
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {

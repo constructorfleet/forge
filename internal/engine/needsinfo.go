@@ -137,8 +137,9 @@ func (e *Engine) handleNeedsInfo(ctx context.Context, executionID, issueID, work
 
 // waitForSteeringAndReclaim is TKT-006's in-process resume: it blocks on
 // the execution queue until a Message is enqueued (a NEEDS_INFO answer or a
-// free-form steering message — both travel the same Enqueue/DrainAll path,
-// no separate reply channel or correlation ID), then drains the queue,
+// free-form steering message — both use the same Enqueue/Drain path while
+// preserving their message kinds, with no separate reply channel or
+// correlation ID), then drains the queue,
 // restores the loop's status to running, and reclaims the Issue through the
 // same legal edges `forge resume` takes: NEEDS_INFO -> READY (Resume,
 // resume.go) and READY -> CLAIMED -> PREPARING (reclaimAndPrepare, shared
