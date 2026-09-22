@@ -185,8 +185,9 @@ type Engine struct {
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
 
-	steeringMu     sync.Mutex
-	steeringQueues map[string]steeringExecution
+	steeringMu                   sync.Mutex
+	steeringQueues               map[string]steeringExecution
+	steeringCompatibilityClaimed bool
 
 	// SteeringRegistry resolves a loop-id (an Execution's ID) to that
 	// Execution's Steering Queue for the `forge steer` CLI entry point
@@ -534,7 +535,8 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 
 // acquireSteeringQueue returns the queue for one active execution. The
 // configured queue remains the compatibility path for the first execution.
-// Later overlapping executions receive independent queues.
+// Every later execution receives an independent queue, including sequential
+// executions after the first queue is released.
 func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func()) {
 	if e.Steering == nil {
 		return nil, func() {}
@@ -550,8 +552,10 @@ func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func
 		return active.queue, e.releaseSteeringQueue(executionID)
 	}
 	queue := e.Steering
-	if len(e.steeringQueues) > 0 {
+	if e.steeringCompatibilityClaimed || len(e.steeringQueues) > 0 {
 		queue = steering.NewQueue()
+	} else {
+		e.steeringCompatibilityClaimed = true
 	}
 	e.steeringQueues[executionID] = steeringExecution{queue: queue, count: 1}
 	e.steeringMu.Unlock()
@@ -783,6 +787,13 @@ func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execut
 // decrements the independent CI retry budget, and re-enters the existing
 // implementation -> validate -> review -> commit/push flow in place.
 func (e *Engine) RepairCIFailure(ctx context.Context, executionID, issueID string) (domain.Issue, error) {
+	queue, releaseQueue := e.acquireSteeringQueue(executionID)
+	defer releaseQueue()
+	if queue != nil && e.SteeringRegistry != nil {
+		e.SteeringRegistry.Register(executionID, queue, e.Session)
+		defer e.SteeringRegistry.Unregister(executionID)
+	}
+
 	state, err := e.Store.LoadExecution(ctx, executionID)
 	if err != nil {
 		return domain.Issue{}, fmt.Errorf("engine: load execution %s: %w", executionID, err)
@@ -1037,9 +1048,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains e.Steering (if configured) and returns one
+// drainSteeringFeedback drains the execution queue (if configured) and returns one
 // Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
-// nil if e.Steering is unset or was empty at the time of the call. A run's
+// nil if the queue is unset or was empty at the time of the call. A run's
 // Messages are joined into one Feedback.Message with a newline between each,
 // matching Queue.DrainAll's join, and its Source names the Kind
 // (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.

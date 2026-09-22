@@ -22,3 +22,21 @@ func TestSteeringQueueIsScopedToExecution(t *testing.T) {
 		t.Fatal("concurrent executions must not share a steering queue")
 	}
 }
+
+func TestSteeringQueueIsNotReusedAfterRelease(t *testing.T) {
+	configured := steering.NewQueue()
+	e := &Engine{Steering: configured}
+
+	first, releaseFirst := e.acquireSteeringQueue("execution-1")
+	releaseFirst()
+	configured.Enqueue(steering.Message{Text: "stale"})
+
+	second, releaseSecond := e.acquireSteeringQueue("execution-2")
+	defer releaseSecond()
+	if second == configured || second == first {
+		t.Fatal("later execution must receive a fresh queue")
+	}
+	if got := second.DrainAll(); got != "" {
+		t.Fatalf("later execution received stale message %q", got)
+	}
+}
