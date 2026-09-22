@@ -217,7 +217,7 @@ func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case answerNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case answerReadyMsg:
-		m.answerFlow.open(msg.issueID)
+		m.answerFlow.open("", msg.issueID)
 		m.vm.ActionNotice = "opening decision question in $EDITOR…"
 		return m, m.openAnswer(msg.dir, msg.artifact)
 	case AnswerClosedMsg:
@@ -354,7 +354,7 @@ func (m *PlanningModel) startApprove() tea.Cmd {
 		m.vm.ActionNotice = "approve is not available"
 		return nil
 	}
-	m.approveFlow.open(m.FeatureID)
+	m.approveFlow.open("", m.FeatureID)
 	m.vm.ActionNotice = fmt.Sprintf("approving planning artifact for %s…", m.FeatureID)
 	approver, ctx, featureID := m.Approver, m.ctx, m.FeatureID
 	return func() tea.Msg {

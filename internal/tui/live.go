@@ -15,6 +15,13 @@ import (
 // seam's spec.
 const pollInterval = 1 * time.Second
 
+func nonEmptyExecutionIDs(id string) []string {
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
 // diffReadTimeout bounds the on-demand diff read. The diff column can hold a
 // large blob, and the read runs on the event loop.
 const diffReadTimeout = 2 * time.Second
@@ -151,7 +158,7 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 		Roster:      r,
 		ExecutionID: executionID,
 		poll:        poll,
-		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll, ExecutionID: executionID},
+		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll, ExecutionID: executionID, ExecutionIDs: nonEmptyExecutionIDs(executionID)},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -221,7 +228,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case approveNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case approveReadyMsg:
-		m.approveFlow.open(msg.issueID)
+		m.approveFlow.open(msg.executionID, msg.issueID)
 		m.vm.ActionNotice = fmt.Sprintf("opening replan artifact for %s in $PAGER…", msg.issueID)
 		return m, m.openApprove(msg.dir, msg.artifact)
 	case ApproveClosedMsg:
@@ -236,7 +243,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case answerNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case answerReadyMsg:
-		m.answerFlow.open(msg.issueID)
+		m.answerFlow.open(msg.executionID, msg.issueID)
 		m.vm.ActionNotice = fmt.Sprintf("opening needs-info question for %s in $EDITOR…", msg.issueID)
 		return m, m.openAnswer(msg.dir, msg.artifact)
 	case AnswerClosedMsg:
@@ -251,6 +258,11 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vm.ActionNotice = "answer is empty, not posted"
 			return m, nil
 		}
+		if !m.flowMatchesSelection(m.answerFlow) {
+			m.answerFlow.close()
+			m.vm.ActionNotice = "answer cancelled: selected Worker changed"
+			return m, nil
+		}
 		return m, m.startAnswer(answer)
 	case answerResultMsg:
 		m.applyAnswerResult(msg)
@@ -260,6 +272,11 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m *LiveModel) flowMatchesSelection(flow actionFlow) bool {
+	row, ok := selectedWorker(m.vm)
+	return ok && row.ExecutionID == flow.executionID && row.IssueID == flow.issueID
 }
 
 // readRoster returns the command that reads the roster state. The read runs in
@@ -341,6 +358,9 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	}
 	vm.DiffOpen, vm.Diff, vm.DiffScroll, vm.DiffHorizontal = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal
 	vm.Width, vm.ExecutionID = m.vm.Width, m.vm.ExecutionID
+	if len(vm.ExecutionIDs) == 0 {
+		vm.ExecutionIDs = m.vm.ExecutionIDs
+	}
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
 	vm.Style = m.vm.Style

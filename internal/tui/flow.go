@@ -21,7 +21,8 @@ type actionFlow struct {
 	// issueID is the Issue the in-flight flow names, read back once the
 	// artifact process closes so the call fires against the row the
 	// artifact was actually read for.
-	issueID string
+	issueID     string
+	executionID string
 }
 
 // guard reports whether f already has a flow running, setting notice to say
@@ -36,8 +37,9 @@ func (f *actionFlow) guard(notice *string, label string) bool {
 }
 
 // open arms f for issueID once the artifact is ready to defer to its process.
-func (f *actionFlow) open(issueID string) {
+func (f *actionFlow) open(executionID, issueID string) {
 	f.inFlight = true
+	f.executionID = executionID
 	f.issueID = issueID
 }
 
@@ -45,6 +47,7 @@ func (f *actionFlow) open(issueID string) {
 // answer, or a finished tracker/engine call all end the flow here.
 func (f *actionFlow) close() {
 	f.inFlight = false
+	f.executionID = ""
 	f.issueID = ""
 }
 

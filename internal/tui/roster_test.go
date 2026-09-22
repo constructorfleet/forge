@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,6 +131,29 @@ func TestRosterFetchManyMergesExecutions(t *testing.T) {
 	if vm.Workers[0].ExecutionID != "ex-1" || vm.Workers[1].ExecutionID != "ex-2" {
 		t.Fatalf("execution ids = %q, %q", vm.Workers[0].ExecutionID, vm.Workers[1].ExecutionID)
 	}
+	if !reflect.DeepEqual(vm.ExecutionIDs, []string{"ex-1", "ex-2"}) {
+		t.Fatalf("ExecutionIDs = %v, want [ex-1 ex-2]", vm.ExecutionIDs)
+	}
+}
+
+func TestRosterFetchManyRetainsRowsWhenOneExecutionFails(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{
+		states: map[string]storage.ExecutionState{
+			"ex-good": {Execution: domain.Execution{ID: "ex-good"}, Issues: []domain.Issue{{ID: "#1"}}},
+		},
+		errors: map[string]error{"ex-bad": errors.New("temporary read failure")},
+	}
+	vm, err := tui.NewRoster(store, nil).FetchMany(context.Background(), []string{"ex-good", "ex-bad"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	if len(vm.Workers) != 1 || vm.Workers[0].ExecutionID != "ex-good" {
+		t.Fatalf("Workers = %+v, want the successful execution row", vm.Workers)
+	}
+	if !strings.Contains(vm.Notice, "ex-bad") {
+		t.Fatalf("Notice = %q, want failed execution id", vm.Notice)
+	}
 }
 
 func TestRosterFetchLiveSortsExecutionIDs(t *testing.T) {
@@ -153,6 +177,7 @@ func TestRosterFetchLiveSortsExecutionIDs(t *testing.T) {
 
 type multiRosterStore struct {
 	states map[string]storage.ExecutionState
+	errors map[string]error
 }
 
 type liveRosterStore struct {
@@ -165,6 +190,9 @@ func (s *liveRosterStore) LiveWorkerExecutionIDs(context.Context, time.Time) ([]
 }
 
 func (s *multiRosterStore) LoadExecution(_ context.Context, id string) (storage.ExecutionState, error) {
+	if err := s.errors[id]; err != nil {
+		return storage.ExecutionState{}, err
+	}
 	state, ok := s.states[id]
 	if !ok {
 		return storage.ExecutionState{}, storage.ErrNotFound
@@ -181,7 +209,7 @@ func (s *multiRosterStore) LatestReviewDiff(context.Context, string, string) (st
 	return "", nil
 }
 func (s *multiRosterStore) GetReplanCheckpoint(context.Context, string, string) (storage.ReplanCheckpoint, error) {
-	return storage.ReplanCheckpoint{}, storage.ErrNotFound
+	return storage.ReplanCheckpoint{Reason: "test"}, nil
 }
 func (s *multiRosterStore) GetNeedsInfoCheckpoint(context.Context, string, string) (storage.NeedsInfoCheckpoint, error) {
 	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound

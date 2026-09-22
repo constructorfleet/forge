@@ -171,6 +171,9 @@ const (
 
 // ViewModel is the plain, transportable input to Render.
 type ViewModel struct {
+	// ExecutionIDs names every Execution represented by the roster.
+	// ExecutionID remains populated for a single-Execution view.
+	ExecutionIDs []string
 	// ExecutionID names the Execution the list observes. The execution list's
 	// header shows its short form.
 	ExecutionID string

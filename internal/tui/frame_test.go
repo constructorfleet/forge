@@ -31,6 +31,16 @@ func TestAttentionGlyph(t *testing.T) {
 	}
 }
 
+func TestRenderMultiExecutionRosterShowsExecutionIdentity(t *testing.T) {
+	out := tui.Render(tui.ViewModel{
+		ExecutionIDs: []string{"ex-a", "ex-b"},
+		Workers:      []tui.WorkerRow{{ExecutionID: "ex-a", IssueID: "#1", Title: "same"}, {ExecutionID: "ex-b", IssueID: "#1", Title: "same"}},
+	})
+	if !strings.Contains(out, "ex-a") || !strings.Contains(out, "ex-b") {
+		t.Fatalf("render = %q, want both execution identities", out)
+	}
+}
+
 func TestLivenessGlyph(t *testing.T) {
 	cases := []struct {
 		name string

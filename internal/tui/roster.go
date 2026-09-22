@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -106,6 +107,7 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 	vm := ViewModel{}
 	loadedRequested := false
 	requestedNotFound := false
+	var failures []string
 	for _, executionID := range executionIDs {
 		state, err := r.Store.LoadExecution(ctx, executionID)
 		if errors.Is(err, storage.ErrNotFound) {
@@ -115,8 +117,13 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 			continue
 		}
 		if err != nil {
-			return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
+			if len(executionIDs) == 1 {
+				return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
+			}
+			failures = append(failures, fmt.Sprintf("%s: %v", executionID, err))
+			continue
 		}
+		vm.ExecutionIDs = append(vm.ExecutionIDs, state.Execution.ID)
 		if len(executionIDs) == 1 {
 			loadedRequested = true
 		}
@@ -137,6 +144,14 @@ func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.
 			}
 		} else {
 			vm.Notice = "no live executions"
+		}
+	}
+	if len(failures) > 0 {
+		failureNotice := "failed to load executions: " + strings.Join(failures, "; ")
+		if vm.Notice != "" {
+			vm.Notice += "; " + failureNotice
+		} else {
+			vm.Notice = failureNotice
 		}
 	}
 	return vm, nil

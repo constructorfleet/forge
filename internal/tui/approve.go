@@ -79,9 +79,10 @@ type approveNoticeMsg struct{ text string }
 // which owns the pager handover: tea.ExecProcess must come from Update and not
 // from inside a command.
 type approveReadyMsg struct {
-	dir      string
-	issueID  string
-	artifact string
+	dir         string
+	executionID string
+	issueID     string
+	artifact    string
 }
 
 // ApproveClosedMsg reports that the approve artifact's pager exited. A
@@ -127,14 +128,15 @@ func (m *LiveModel) openSelectedApprove() tea.Cmd {
 		return nil
 	}
 	issueID := row.IssueID
+	executionID := row.ExecutionID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		checkpoint, err := LatestReplanCheckpoint(ctx, m.Roster.Store, m.selectedExecutionID(), issueID)
+		checkpoint, err := LatestReplanCheckpoint(ctx, m.Roster.Store, executionID, issueID)
 		if err != nil {
 			return approveNoticeMsg{text: err.Error()}
 		}
-		return approveReadyMsg{dir: dir, issueID: issueID, artifact: renderReplanCheckpoint(checkpoint)}
+		return approveReadyMsg{dir: dir, executionID: executionID, issueID: issueID, artifact: renderReplanCheckpoint(checkpoint)}
 	}
 }
 
@@ -158,7 +160,7 @@ func (m *LiveModel) startApprove() tea.Cmd {
 	}
 	issueID := m.approveFlow.issueID
 	m.vm.ActionNotice = fmt.Sprintf("approving issue %s…", issueID)
-	approver, ctx, executionID := m.Approver, m.ctx, m.selectedExecutionID()
+	approver, ctx, executionID := m.Approver, m.ctx, m.approveFlow.executionID
 	return func() tea.Msg {
 		_, err := approver.ResumeAfterReplan(ctx, executionID, issueID)
 		return approveResultMsg{issueID: issueID, err: err}
