@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +12,58 @@ import (
 	"github.com/Teagan42/forge/internal/domain"
 	"github.com/Teagan42/forge/internal/engine"
 	"github.com/Teagan42/forge/internal/gittest"
+	"github.com/Teagan42/forge/internal/tracker"
 	"github.com/Teagan42/forge/internal/workspace"
 )
+
+type needsInfoTrackerWithoutResume struct{}
+
+func (needsInfoTrackerWithoutResume) AddLabel(context.Context, string, string) error {
+	return nil
+}
+
+func (needsInfoTrackerWithoutResume) AddComment(context.Context, string, string) (tracker.Comment, error) {
+	return tracker.Comment{}, nil
+}
+
+// TestResumeExecution_NeedsInfoWithoutResumeTrackerReturnsCapabilityError
+// prevents a partial Engine wiring from making resume silently do nothing.
+func TestResumeExecution_NeedsInfoWithoutResumeTrackerReturnsCapabilityError(t *testing.T) {
+	eng, _, _, fake, base := newNeedsInfoTestEngine(t, map[string]domain.Issue{
+		"478": {ID: "478"},
+	})
+	fake.ProgramResult("478", agent.AgentResult{
+		Status:    agent.StatusNeedsInfo,
+		NeedsInfo: &agent.NeedsInfoDetail{Question: "which setting?"},
+	})
+
+	ctx := context.Background()
+	result, err := eng.Execute(ctx, "478", base)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	eng.NeedsInfoTracker = needsInfoTrackerWithoutResume{}
+
+	_, err = eng.ResumeExecution(ctx, result.ExecutionID)
+	var missing *engine.MissingResumeTrackerError
+	if !errors.As(err, &missing) {
+		t.Fatalf("ResumeExecution error = %v, want MissingResumeTrackerError", err)
+	}
+	if missing.IssueID != "478" {
+		t.Errorf("MissingResumeTrackerError.IssueID = %q, want 478", missing.IssueID)
+	}
+	if !strings.Contains(err.Error(), "ResumeTracker") {
+		t.Errorf("ResumeExecution error = %q, want missing capability name", err)
+	}
+
+	issue, err := eng.Store.GetIssue(ctx, result.ExecutionID, "478")
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+	if issue.State != domain.StateNeedsInfo {
+		t.Fatalf("state after failed resume = %s, want NEEDS_INFO", issue.State)
+	}
+}
 
 // TestResume_NewHumanComment_TransitionsNeedsInfoToReady is the ticket's
 // resume half of the headline integration test: after an Issue enters

@@ -156,7 +156,7 @@ func (e *Engine) resumeNeedsReplanIssue(ctx context.Context, exec domain.Executi
 func (e *Engine) resumeNeedsInfoIssue(ctx context.Context, exec domain.Execution, issue domain.Issue) (domain.Issue, error) {
 	resumeTracker, ok := e.NeedsInfoTracker.(ResumeTracker)
 	if !ok {
-		return issue, nil
+		return issue, &MissingResumeTrackerError{IssueID: issue.ID}
 	}
 	result, err := Resume(ctx, e.Store, resumeTracker, exec.ID, issue.ID, e.Now)
 	if err != nil {
