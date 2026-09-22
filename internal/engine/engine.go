@@ -172,9 +172,10 @@ type Engine struct {
 	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
 	ReplanDecisions ReplanDecisionRecorder
 
-	// Steering is the steering.Queue holding free-form steering messages and
-	// NEEDS_INFO answers enqueued for this Engine's execute loop (TKT-001/
-	// TKT-002, constructorfleet/forge#732). runRepairLoop drains it once per
+	// Steering is the compatibility queue for a single execute loop. The
+	// Engine scopes queues by Execution ID while executions overlap. It holds
+	// free-form steering messages and NEEDS_INFO answers (TKT-001/TKT-002,
+	// constructorfleet/forge#732). runRepairLoop drains the active queue once per
 	// iteration, at the top of the loop — after the previous step fully
 	// completed and before the next step starts. Drained text is folded into
 	// that step's Agent Feedback only when the iteration proceeds into a
@@ -183,6 +184,9 @@ type Engine struct {
 	// discarded. Optional: nil disables draining entirely, leaving loop
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
+
+	steeringMu     sync.Mutex
+	steeringQueues map[string]steeringExecution
 
 	// SteeringRegistry resolves a loop-id (an Execution's ID) to that
 	// Execution's Steering Queue for the `forge steer` CLI entry point
@@ -202,12 +206,6 @@ type Engine struct {
 	// independently without one Worker's finish evicting the loop-id while
 	// sibling Workers under the same Execution are still running.
 	SteeringRegistry *steering.Registry
-
-	steeringMu    sync.Mutex
-	steeringLoops map[string]*steeringLoop
-	// steeringLegacyUsed records whether the configured queue served one
-	// execution. Later executions always receive a new queue.
-	steeringLegacyUsed bool
 
 	// Session is the executeloop.Session tracking this Engine's execute
 	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
@@ -372,53 +370,9 @@ type Engine struct {
 	ownerTokenDone  bool
 }
 
-type steeringLoop struct {
+type steeringExecution struct {
 	queue *steering.Queue
 	count int
-}
-
-func (e *Engine) acquireSteering(executionID string) *steering.Queue {
-	if e.Steering == nil {
-		return nil
-	}
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	if e.steeringLoops == nil {
-		e.steeringLoops = make(map[string]*steeringLoop)
-	}
-	if loop, ok := e.steeringLoops[executionID]; ok {
-		loop.count++
-		return loop.queue
-	}
-	queue := steering.NewQueue()
-	if !e.steeringLegacyUsed {
-		queue = e.Steering
-		e.steeringLegacyUsed = true
-	}
-	e.steeringLoops[executionID] = &steeringLoop{queue: queue, count: 1}
-	return queue
-}
-
-func (e *Engine) releaseSteering(executionID string) {
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	loop, ok := e.steeringLoops[executionID]
-	if !ok {
-		return
-	}
-	loop.count--
-	if loop.count == 0 {
-		delete(e.steeringLoops, executionID)
-	}
-}
-
-func (e *Engine) steeringQueue(executionID string) *steering.Queue {
-	e.steeringMu.Lock()
-	defer e.steeringMu.Unlock()
-	if loop := e.steeringLoops[executionID]; loop != nil {
-		return loop.queue
-	}
-	return nil
 }
 
 // IssueLocker serializes work scoped to one (executionID, issueID) pair
@@ -578,15 +532,65 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	return e.ExecuteInExecution(ctx, execution, issueID, baseRevision)
 }
 
+// acquireSteeringQueue returns the queue for one active execution. The
+// configured queue remains the compatibility path for the first execution.
+// Later overlapping executions receive independent queues.
+func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func()) {
+	if e.Steering == nil {
+		return nil, func() {}
+	}
+	e.steeringMu.Lock()
+	if e.steeringQueues == nil {
+		e.steeringQueues = make(map[string]steeringExecution)
+	}
+	if active, ok := e.steeringQueues[executionID]; ok {
+		active.count++
+		e.steeringQueues[executionID] = active
+		e.steeringMu.Unlock()
+		return active.queue, e.releaseSteeringQueue(executionID)
+	}
+	queue := e.Steering
+	if len(e.steeringQueues) > 0 {
+		queue = steering.NewQueue()
+	}
+	e.steeringQueues[executionID] = steeringExecution{queue: queue, count: 1}
+	e.steeringMu.Unlock()
+	return queue, e.releaseSteeringQueue(executionID)
+}
+
+func (e *Engine) releaseSteeringQueue(executionID string) func() {
+	return func() {
+		e.steeringMu.Lock()
+		active, ok := e.steeringQueues[executionID]
+		if ok {
+			active.count--
+			if active.count == 0 {
+				delete(e.steeringQueues, executionID)
+			} else {
+				e.steeringQueues[executionID] = active
+			}
+		}
+		e.steeringMu.Unlock()
+	}
+}
+
+func (e *Engine) steeringQueue(executionID string) *steering.Queue {
+	e.steeringMu.Lock()
+	active := e.steeringQueues[executionID]
+	e.steeringMu.Unlock()
+	if active.queue != nil {
+		return active.queue
+	}
+	return e.Steering
+}
+
 // ExecuteInExecution drives one Issue through the execution pipeline inside
 // an already-created Execution. workerBase is the per-Worker base captured
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
 func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
-	queue := e.acquireSteering(execution.ID)
-	if queue != nil {
-		defer e.releaseSteering(execution.ID)
-	}
+	queue, releaseQueue := e.acquireSteeringQueue(execution.ID)
+	defer releaseQueue()
 	// Register this Execution's ID as the loop-id `forge steer` resolves
 	// (constructorfleet/forge#746), for this loop's whole duration — every
 	// return path below, success or failure, unregisters it via defer.
@@ -1033,9 +1037,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains the queue associated with executionID and returns one
+// drainSteeringFeedback drains e.Steering (if configured) and returns one
 // Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
-// nil if that queue is unset or was empty at the time of the call. A run's
+// nil if e.Steering is unset or was empty at the time of the call. A run's
 // Messages are joined into one Feedback.Message with a newline between each,
 // matching Queue.DrainAll's join, and its Source names the Kind
 // (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.
