@@ -151,11 +151,14 @@ Everything but the diff rides the transcript pane; heavy content defers out.
   event is lean (name/command/exit_code/passed). The synthetic row expands to
   `stdout`/`stderr` + `exit_code` + `command`. No separate gate strip.
 - **Diff bodies render in the pane and defer to `$PAGER`** over
-  `review_runs.diff`. There is no `forge diff` subcommand (it is the live
-  `gitDiffProducer`, forbidden by the store-only read path); `review_runs.diff`
-  is the only store-side copy (migration 0004). Same
-  suspend-and-return mechanic as #447's artifact view. No inline diff/lexing/
-  navigation machinery.
+  `review_runs.diff`. The pane reads at most 256 KiB and 4,000 complete lines
+  off the update goroutine. It renders unified-diff lines without syntax
+  lexing, and supports vertical hunk scrolling plus horizontal scrolling for
+  long lines. `enter` still opens the complete stored diff in `$PAGER`.
+  There is no `forge diff` subcommand (it is the live `gitDiffProducer`,
+  forbidden by the store-only read path); `review_runs.diff` is the only
+  store-side copy (migration 0004). Same suspend-and-return mechanic as
+  #447's artifact view.
 - **Multi-attempt history** is one continuous scrollback with inline
   `— attempt N —` dividers. `agent_runs` has no attempt field (order is
   insertion `id`); retries accumulate rows. "Attempt" is a derived grouping of

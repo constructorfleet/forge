@@ -395,6 +395,23 @@ func TestRenderFooterPerPane(t *testing.T) {
 	}
 }
 
+func TestRenderDiffFooterOffersHorizontalScrollForOneLongLine(t *testing.T) {
+	vm := tui.ViewModel{
+		Workers:  []tui.WorkerRow{{IssueID: "#1", State: domain.StateReviewing, HasDiff: true}},
+		DiffOpen: true,
+		Diff: &tui.DiffSummary{
+			Files: []tui.DiffFile{{Path: "a.go", Additions: 1}},
+			Lines: []tui.DiffLine{{Kind: '+', Text: "+" + strings.Repeat("x", 40)}},
+		},
+		Focus: tui.PaneDiff,
+	}
+	lines := splitLines(tui.Render(vm))
+	footer := lines[len(lines)-1]
+	if !strings.Contains(footer, "[h/l] scroll columns") {
+		t.Fatalf("footer %q omits horizontal scrolling for one long line", footer)
+	}
+}
+
 // TestRenderFooterLeadsWithLegalKeys proves the roster footer starts with
 // exactly the keys legal for the selected row's state, derived from the same
 // view-model as the row, so it can never advertise an illegal action.

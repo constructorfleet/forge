@@ -6,7 +6,8 @@ package tui
 import "strings"
 
 // BoundDiff limits the body shown in the TUI. It keeps complete lines until
-// either limit is reached. It omits a line that exceeds the byte limit.
+// either positive limit is reached. A non-positive limit disables that bound.
+// It omits a line that exceeds the byte limit.
 func BoundDiff(diff string, maxBytes, maxLines int) (string, bool) {
 	if maxBytes <= 0 && maxLines <= 0 {
 		return diff, false
