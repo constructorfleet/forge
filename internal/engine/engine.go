@@ -203,6 +203,12 @@ type Engine struct {
 	// sibling Workers under the same Execution are still running.
 	SteeringRegistry *steering.Registry
 
+	steeringMu    sync.Mutex
+	steeringLoops map[string]*steeringLoop
+	// steeringLegacyUsed records whether the configured queue served one
+	// execution. Later executions always receive a new queue.
+	steeringLegacyUsed bool
+
 	// Session is the executeloop.Session tracking this Engine's execute
 	// loop status (TKT-004/TKT-005, constructorfleet/forge#732). handleNeedsInfo
 	// sets it to executeloop.StatusNeedsInfo on every AgentResult flagged
@@ -364,6 +370,55 @@ type Engine struct {
 	ownerTokenValue string
 	ownerTokenPID   int
 	ownerTokenDone  bool
+}
+
+type steeringLoop struct {
+	queue *steering.Queue
+	count int
+}
+
+func (e *Engine) acquireSteering(executionID string) *steering.Queue {
+	if e.Steering == nil {
+		return nil
+	}
+	e.steeringMu.Lock()
+	defer e.steeringMu.Unlock()
+	if e.steeringLoops == nil {
+		e.steeringLoops = make(map[string]*steeringLoop)
+	}
+	if loop, ok := e.steeringLoops[executionID]; ok {
+		loop.count++
+		return loop.queue
+	}
+	queue := steering.NewQueue()
+	if !e.steeringLegacyUsed {
+		queue = e.Steering
+		e.steeringLegacyUsed = true
+	}
+	e.steeringLoops[executionID] = &steeringLoop{queue: queue, count: 1}
+	return queue
+}
+
+func (e *Engine) releaseSteering(executionID string) {
+	e.steeringMu.Lock()
+	defer e.steeringMu.Unlock()
+	loop, ok := e.steeringLoops[executionID]
+	if !ok {
+		return
+	}
+	loop.count--
+	if loop.count == 0 {
+		delete(e.steeringLoops, executionID)
+	}
+}
+
+func (e *Engine) steeringQueue(executionID string) *steering.Queue {
+	e.steeringMu.Lock()
+	defer e.steeringMu.Unlock()
+	if loop := e.steeringLoops[executionID]; loop != nil {
+		return loop.queue
+	}
+	return nil
 }
 
 // IssueLocker serializes work scoped to one (executionID, issueID) pair
@@ -528,11 +583,15 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 // at READY; it may differ from execution.BaseRevision for dependency-
 // blocked Issues that become ready later in a shared multi-Issue run.
 func (e *Engine) ExecuteInExecution(ctx context.Context, execution domain.Execution, issueID, workerBase string) (_ ExecuteResult, retErr error) {
+	queue := e.acquireSteering(execution.ID)
+	if queue != nil {
+		defer e.releaseSteering(execution.ID)
+	}
 	// Register this Execution's ID as the loop-id `forge steer` resolves
 	// (constructorfleet/forge#746), for this loop's whole duration — every
 	// return path below, success or failure, unregisters it via defer.
-	if e.Steering != nil && e.SteeringRegistry != nil {
-		e.SteeringRegistry.Register(execution.ID, e.Steering, e.Session)
+	if queue != nil && e.SteeringRegistry != nil {
+		e.SteeringRegistry.Register(execution.ID, queue, e.Session)
 		defer e.SteeringRegistry.Unregister(execution.ID)
 	}
 
@@ -867,7 +926,7 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 		// Agent invocation) has fully completed, and before this iteration's
 		// step starts. A message enqueued while that previous step was still
 		// executing is picked up here, never mid-step.
-		steeringFeedback := e.drainSteeringFeedback()
+		steeringFeedback := e.drainSteeringFeedback(executionID)
 
 		issue, err := e.transition(ctx, executionID, issueID, domain.StateValidating)
 		if err != nil {
@@ -974,9 +1033,9 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 	}
 }
 
-// drainSteeringFeedback drains e.Steering (if configured) and returns one
+// drainSteeringFeedback drains the queue associated with executionID and returns one
 // Feedback entry per contiguous run of same-Kind Messages, in FIFO order, or
-// nil if e.Steering is unset or was empty at the time of the call. A run's
+// nil if that queue is unset or was empty at the time of the call. A run's
 // Messages are joined into one Feedback.Message with a newline between each,
 // matching Queue.DrainAll's join, and its Source names the Kind
 // (steering.KindAnswer becomes FeedbackSourceSteeringAnswer, steering.
@@ -985,11 +1044,12 @@ func (e *Engine) runRepairLoop(ctx context.Context, executionID, issueID, worker
 // transcript tag, or vice versa (constructorfleet/forge#745). runRepairLoop
 // calls this once per iteration, at the step boundary between iterations —
 // never while a step is in progress.
-func (e *Engine) drainSteeringFeedback() []agent.Feedback {
-	if e.Steering == nil {
+func (e *Engine) drainSteeringFeedback(executionID string) []agent.Feedback {
+	queue := e.steeringQueue(executionID)
+	if queue == nil {
 		return nil
 	}
-	messages := e.Steering.Drain()
+	messages := queue.Drain()
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1409,7 +1469,7 @@ func (e *Engine) executeAgentStep(ctx context.Context, executionID, issueID stri
 		if err != nil {
 			return issue, false, false, err
 		}
-		if e.Steering == nil {
+		if e.steeringQueue(executionID) == nil {
 			return issue, false, false, nil
 		}
 		return issue, false, true, nil
