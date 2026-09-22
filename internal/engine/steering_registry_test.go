@@ -50,6 +50,7 @@ func TestExecuteInExecution_RegistersSteeringQueueUnderExecutionID(t *testing.T)
 	registry := steering.NewRegistry()
 	te.eng.SteeringRegistry = registry
 	te.eng.Steering = steering.NewQueue()
+	te.eng.SteeringFactory = func() *steering.Queue { return steering.NewQueue() }
 
 	wrapped := &registerDuringFirstCallAgent{inner: te.eng.Agent, registry: registry, loopID: executionID}
 	te.eng.Agent = wrapped
@@ -113,6 +114,7 @@ func TestExecuteInExecution_ConcurrentWorkersShareLoopIDUntilBothFinish(t *testi
 	registry := steering.NewRegistry()
 	te.eng.SteeringRegistry = registry
 	te.eng.Steering = steering.NewQueue()
+	te.eng.SteeringFactory = func() *steering.Queue { return steering.NewQueue() }
 
 	blocker := &issueGatedAgent{inner: te.eng.Agent, issueID: "71", started: make(chan struct{}), release: make(chan struct{})}
 	te.eng.Agent = blocker

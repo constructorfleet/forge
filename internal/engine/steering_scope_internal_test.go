@@ -37,8 +37,8 @@ func TestSteeringQueueIsScopedToExecution(t *testing.T) {
 	second, releaseSecond := e.acquireSteeringQueue("execution-2")
 	defer releaseSecond()
 
-	if first != configured {
-		t.Fatal("first execution must preserve the configured queue compatibility path")
+	if first == configured {
+		t.Fatal("execution must receive a queue owned by its execution")
 	}
 	if second == first {
 		t.Fatal("concurrent executions must not share a steering queue")

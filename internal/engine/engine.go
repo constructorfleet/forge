@@ -172,8 +172,8 @@ type Engine struct {
 	// PlanningLease; cmd/forge wires internal/replan's file-backed recorder.
 	ReplanDecisions ReplanDecisionRecorder
 
-	// Steering is the compatibility queue for a single execute loop. The
-	// Engine scopes queues by Execution ID while executions overlap. It holds
+	// Steering enables steering support for execute loops. The Engine creates
+	// one queue per Execution ID. It holds
 	// free-form steering messages and NEEDS_INFO answers (TKT-001/TKT-002,
 	// constructorfleet/forge#732). runRepairLoop drains the active queue once per
 	// iteration, at the top of the loop — after the previous step fully
@@ -184,10 +184,15 @@ type Engine struct {
 	// discarded. Optional: nil disables draining entirely, leaving loop
 	// behavior unchanged for existing callers of New.
 	Steering *steering.Queue
+	// SteeringFactory creates an execution-scoped queue. It is optional and
+	// defaults to steering.NewQueue when Steering is configured.
+	SteeringFactory func() *steering.Queue
+	// SessionFactory creates an execution-scoped loop session. It is optional
+	// and defaults to executeloop.NewSession when Steering is configured.
+	SessionFactory func() *executeloop.Session
 
-	steeringMu                   sync.Mutex
-	steeringQueues               map[string]steeringExecution
-	steeringCompatibilityClaimed bool
+	steeringMu     sync.Mutex
+	steeringQueues map[string]steeringExecution
 
 	// SteeringRegistry resolves a loop-id (an Execution's ID) to that
 	// Execution's Steering Queue for the `forge steer` CLI entry point
@@ -534,12 +539,10 @@ func (e *Engine) Execute(ctx context.Context, issueID, baseRevision string) (Exe
 	return e.ExecuteInExecution(ctx, execution, issueID, baseRevision)
 }
 
-// acquireSteeringQueue returns the queue for one active execution. The
-// configured queue remains the compatibility path for the first execution.
-// Every later execution receives an independent queue, including sequential
-// executions after the first queue is released.
+// acquireSteeringQueue returns the queue for one active execution. Each
+// execution receives an independent queue, including sequential executions.
 func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func()) {
-	if e.Steering == nil {
+	if e.Steering == nil && e.SteeringFactory == nil {
 		return nil, func() {}
 	}
 	e.steeringMu.Lock()
@@ -552,18 +555,20 @@ func (e *Engine) acquireSteeringQueue(executionID string) (*steering.Queue, func
 		e.steeringMu.Unlock()
 		return active.queue, e.releaseSteeringQueue(executionID)
 	}
-	queue := e.Steering
-	session := e.Session
-	if e.steeringCompatibilityClaimed || len(e.steeringQueues) > 0 {
-		queue = steering.NewQueue()
-		session = executeloop.NewSession()
-	} else {
-		e.steeringCompatibilityClaimed = true
-		if session == nil {
-			session = executeloop.NewSession()
-		}
+	newQueue := e.SteeringFactory
+	if newQueue == nil {
+		newQueue = steering.NewQueue
 	}
-	e.steeringQueues[executionID] = steeringExecution{queue: queue, session: session, count: 1}
+	newSession := e.SessionFactory
+	if newSession == nil {
+		newSession = executeloop.NewSession
+	}
+	e.steeringQueues[executionID] = steeringExecution{
+		queue:   newQueue(),
+		session: newSession(),
+		count:   1,
+	}
+	queue := e.steeringQueues[executionID].queue
 	e.steeringMu.Unlock()
 	return queue, e.releaseSteeringQueue(executionID)
 }

@@ -50,8 +50,10 @@ func TestExecute_NeedsInfo_ResumesFromQueueAndInjectsAnswerAsContext(t *testing.
 
 	queue := steering.NewQueue()
 	te.eng.Steering = queue
+	te.eng.SteeringFactory = func() *steering.Queue { return queue }
 	session := executeloop.NewSession()
 	te.eng.Session = session
+	te.eng.SessionFactory = func() *executeloop.Session { return session }
 
 	wrapped := &enqueueAnswerOnFirstCallAgent{
 		inner: te.eng.Agent,
