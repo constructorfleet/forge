@@ -40,9 +40,9 @@ type RosterStore interface {
 	// only (see answer.go). It is the record the answer key defers to $EDITOR.
 	GetNeedsInfoCheckpoint(ctx context.Context, executionID, issueID string) (storage.NeedsInfoCheckpoint, error)
 
-	// TranscriptAgents supplies one summary per AgentRun that recorded events
-	// for the Issue, so the roster lists the Issue's agents and their latest
-	// output without reading any event body.
+	// TranscriptAgents supplies one summary per AgentRun for the Issue, so the
+	// roster lists started agents and their latest output without reading any
+	// event body.
 	TranscriptAgents(ctx context.Context, executionID, issueID string) ([]storage.TranscriptAgent, error)
 
 	// AgentRunsByIssue supplies the Issue's recorded attempts, so the roster's

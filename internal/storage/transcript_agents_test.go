@@ -93,3 +93,33 @@ func TestTranscriptAgents_NoEventsReturnsEmpty(t *testing.T) {
 		t.Fatalf("got %d agents, want 0", len(got))
 	}
 }
+
+func TestTranscriptAgents_IncludesStartedRunWithoutEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-started", "issue-started")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-started",
+		IssueID:     "issue-started",
+		Backend:     "claude-code",
+		StartedAt:   time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
+		Phase:       "REVIEWING",
+		Subagent:    "bugs",
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-started", "issue-started")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want one: %+v", len(agents), agents)
+	}
+	got := agents[0]
+	if got.AgentRunID != runID || got.Phase != "REVIEWING" || got.Subagent != "bugs" || got.Events != 0 {
+		t.Fatalf("agent = %+v, want run %d reviewing/bugs with zero events", got, runID)
+	}
+}
