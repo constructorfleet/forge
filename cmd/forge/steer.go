@@ -10,14 +10,10 @@ import (
 	"github.com/Teagan42/forge/internal/steering"
 )
 
-// steerer is the narrow seam doRunSteer enqueues through. steering.Registry
-// satisfies it in production; a test double lets doRunSteer's argument
-// parsing and output be verified without a real running loop.
+// steerer is the command seam doRunSteer enqueues through. Implementations
+// support both steering messages and NEEDS_INFO answers.
 type steerer interface {
 	Steer(loopID, text string) error
-}
-
-type answerer interface {
 	Answer(loopID, text string) error
 }
 
@@ -62,12 +58,7 @@ func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 
 	var err error
 	if *answer {
-		answerer, ok := s.(answerer)
-		if !ok {
-			fmt.Fprintln(stderr, "forge steer: answer mode is not supported")
-			return 1
-		}
-		err = answerer.Answer(loopID, text)
+		err = s.Answer(loopID, text)
 	} else {
 		err = s.Steer(loopID, text)
 	}

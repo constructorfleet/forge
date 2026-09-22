@@ -114,6 +114,8 @@ func (r *Registry) Steer(loopID, text string) error {
 
 // Answer resolves loopID to its registered Queue and enqueues text as a
 // NEEDS_INFO answer. It returns ErrLoopNotFound if no loop is registered.
+// Answer returns after Queue.Enqueue and does not wait for step completion.
+// The loop processes the answer at its next step boundary.
 func (r *Registry) Answer(loopID, text string) error {
 	return r.enqueue(loopID, Message{Text: text, Kind: KindAnswer})
 }
