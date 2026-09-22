@@ -15,12 +15,20 @@ import (
 type fakeSteerer struct {
 	gotLoopID string
 	gotText   string
+	gotAnswer bool
 	err       error
 }
 
 func (f *fakeSteerer) Steer(loopID, text string) error {
 	f.gotLoopID = loopID
 	f.gotText = text
+	return f.err
+}
+
+func (f *fakeSteerer) Answer(loopID, text string) error {
+	f.gotLoopID = loopID
+	f.gotText = text
+	f.gotAnswer = true
 	return f.err
 }
 
@@ -58,6 +66,23 @@ func TestDoRunSteer_QueuesMessageAndReportsQueued(t *testing.T) {
 	}
 	if bytes.Contains(stdout.Bytes(), []byte("applied")) {
 		t.Fatalf("stdout = %q, must not imply immediate application", stdout.String())
+	}
+}
+
+func TestDoRunSteerAnswer_QueuesAnswerMessage(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	fake := &fakeSteerer{}
+
+	code := doRunSteer([]string{"--answer", "loop-1", "the", "answer"}, fake, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("doRunSteer() = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !fake.gotAnswer {
+		t.Fatal("Answer() was not called for --answer")
+	}
+	if fake.gotLoopID != "loop-1" || fake.gotText != "the answer" {
+		t.Fatalf("Answer() arguments = (%q, %q), want (%q, %q)", fake.gotLoopID, fake.gotText, "loop-1", "the answer")
 	}
 }
 

@@ -17,6 +17,10 @@ type steerer interface {
 	Steer(loopID, text string) error
 }
 
+type answerer interface {
+	Answer(loopID, text string) error
+}
+
 // runSteer implements `forge steer <loop-id> <message...>`: it resolves
 // loop-id through steering.DefaultRegistry and enqueues a free-form
 // steering message or NEEDS_INFO answer onto the Queue registered there.
@@ -44,6 +48,7 @@ func runSteer(args []string) int {
 func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forge steer", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	answer := fs.Bool("answer", false, "enqueue a NEEDS_INFO answer instead of a steering message")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -54,7 +59,18 @@ func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 	loopID := fs.Arg(0)
 	text := strings.Join(fs.Args()[1:], " ")
 
-	if err := s.Steer(loopID, text); err != nil {
+	var err error
+	if *answer {
+		answerer, ok := s.(answerer)
+		if !ok {
+			fmt.Fprintln(stderr, "forge steer: answer mode is not supported")
+			return 1
+		}
+		err = answerer.Answer(loopID, text)
+	} else {
+		err = s.Steer(loopID, text)
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "forge steer: %v\n", err)
 		return 1
 	}

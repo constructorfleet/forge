@@ -25,6 +25,22 @@ func TestRegistry_SteerEnqueuesOntoRegisteredQueue(t *testing.T) {
 	}
 }
 
+func TestRegistry_AnswerEnqueuesAnswerKindOntoRegisteredQueue(t *testing.T) {
+	r := steering.NewRegistry()
+	q := steering.NewQueue()
+	r.Register("loop-1", q, nil)
+
+	if err := r.Answer("loop-1", "the answer"); err != nil {
+		t.Fatalf("Answer() error = %v, want nil", err)
+	}
+
+	got := q.Drain()
+	want := []steering.Message{{Text: "the answer", Kind: steering.KindAnswer}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue.Drain() = %+v, want %+v", got, want)
+	}
+}
+
 func TestRegistry_SteerOnUnknownLoopReturnsErrLoopNotFound(t *testing.T) {
 	r := steering.NewRegistry()
 
