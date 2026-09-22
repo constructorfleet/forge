@@ -124,6 +124,30 @@ func TestTranscriptAgents_IncludesStartedRunWithoutEvents(t *testing.T) {
 	}
 }
 
+func TestTranscriptAgents_IncludesUnattributedRunWithoutEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	seedIssueForAgentRun(t, store, "exec-empty", "issue-empty")
+
+	runID, err := store.StartAgentRun(ctx, storage.AgentRun{
+		ExecutionID: "exec-empty",
+		IssueID:     "issue-empty",
+		Backend:     "claude-code",
+		StartedAt:   time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("StartAgentRun: %v", err)
+	}
+
+	agents, err := store.TranscriptAgents(ctx, "exec-empty", "issue-empty")
+	if err != nil {
+		t.Fatalf("TranscriptAgents: %v", err)
+	}
+	if len(agents) != 1 || agents[0].AgentRunID != runID || agents[0].Phase != "" || agents[0].Subagent != "" || agents[0].Events != 0 {
+		t.Fatalf("agents = %+v, want one empty run summary", agents)
+	}
+}
+
 func TestTranscriptAgents_IgnoresEventsFromAnotherScope(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

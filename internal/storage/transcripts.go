@@ -178,7 +178,7 @@ const transcriptAgentTextPrefix = 200
 // run with no events still appears with an empty last event.
 func (s *SQLiteStore) TranscriptAgents(ctx context.Context, executionID, issueID string) ([]TranscriptAgent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, COALESCE(NULLIF(r.phase, ''), e.phase), COALESCE(NULLIF(r.subagent, ''), e.subagent),
+		SELECT r.id, COALESCE(NULLIF(r.phase, ''), e.phase, ''), COALESCE(NULLIF(r.subagent, ''), e.subagent, ''),
 		       (SELECT COUNT(*) FROM transcript_events c WHERE c.execution_id = r.execution_id AND c.issue_id = r.issue_id AND c.agent_run_id = r.id),
 		       COALESCE(e.seq, 0), COALESCE(e.type, ''), COALESCE(e.role, ''), substr(COALESCE(e.text, ''), 1, ?),
 		       COALESCE(e.tool_name, ''), substr(COALESCE(e.tool_output, ''), 1, ?), COALESCE(e.tool_call_id, ''), e.occurred_at
