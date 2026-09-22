@@ -69,7 +69,7 @@ func DefaultStyle() Style {
 		GateFail:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true),
 		Axis:        lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
 		Key:         lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true),
-		Selection:   lipgloss.NewStyle().Bold(true),
+		Selection:   lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6")).Bold(true),
 		Notice:      lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 		Border:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		FocusBorder: lipgloss.NewStyle().Foreground(lipgloss.Color("6")),

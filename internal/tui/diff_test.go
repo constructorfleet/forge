@@ -138,8 +138,7 @@ func pressDiffKey(t *testing.T, m *tui.LiveModel) tea.Cmd {
 }
 
 // TestLiveModelDiffKeyOpensThePaneNotThePager proves the diff key opens the
-// in-frame diff pane with the file summary, and no pager: the body defers to
-// $PAGER only from the pane's own enter key.
+// in-frame diff pane without opening the pager.
 func TestLiveModelDiffKeyOpensThePaneNotThePager(t *testing.T) {
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	m := diffFixture(t, now)
@@ -155,11 +154,11 @@ func TestLiveModelDiffKeyOpensThePaneNotThePager(t *testing.T) {
 		t.Fatalf("pager opened %d times on the diff key, want 0", len(opened))
 	}
 	got := visible(m.View().Content)
-	if !strings.Contains(got, "a.go") || !strings.Contains(got, "+1") || !strings.Contains(got, "Diff +1 -0") {
-		t.Fatalf("diff pane does not summarize the stored diff:\n%s", got)
+	if !strings.Contains(got, "a.go") || !strings.Contains(got, "DIFF (1 files)") {
+		t.Fatalf("diff pane does not show the stored diff:\n%s", got)
 	}
-	if strings.Contains(got, "+added line") {
-		t.Fatalf("the diff body entered the frame:\n%s", got)
+	if !strings.Contains(got, "+added line") {
+		t.Fatalf("the diff body did not enter the frame:\n%s", got)
 	}
 }
 
@@ -204,17 +203,14 @@ func TestFrameOffersTheDiffKeyOnlyWithADiff(t *testing.T) {
 	}
 }
 
-// TestFrameRendersNoInlineDiff proves the frame carries no diff content: the
-// diff is a heavy artifact and defers out, so nothing lexes or paginates it
-// inline. The view-model has no field that could carry one.
+// TestFrameRendersNoInlineDiff keeps the pure frame safe when no diff has been
+// loaded. The live model supplies the loaded summary when the pane opens.
 func TestFrameRendersNoInlineDiff(t *testing.T) {
 	frame := tui.Render(tui.ViewModel{Workers: []tui.WorkerRow{
 		{IssueID: "#1", Title: "t", State: domain.StateReviewing, Verdict: "CHANGES_REQUIRED", HasDiff: true},
 	}})
-	for _, marker := range []string{"diff --git", "@@", "+++", "---"} {
-		if strings.Contains(frame, marker) {
-			t.Fatalf("frame = %q, want no inline diff (found %q)", frame, marker)
-		}
+	if strings.Contains(frame, "diff --git") {
+		t.Fatalf("frame unexpectedly rendered an unloaded diff: %q", frame)
 	}
 }
 
@@ -305,8 +301,6 @@ func TestLiveModelQuitRemovesTheDiffArtifacts(t *testing.T) {
 	nextPollTick(t, m)
 	pressDiffKey(t, m)
 	// Enter in the diff pane is what defers the body to the pager.
-	press(t, m, "tab")
-	press(t, m, "tab")
 	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '\r'}))
 	if cmd != nil {
 		if msg := cmd(); msg != nil {

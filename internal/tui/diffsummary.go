@@ -19,6 +19,13 @@ type DiffSummary struct {
 	Files     []DiffFile
 	Additions int
 	Deletions int
+	Lines     []DiffLine
+}
+
+// DiffLine is one display line from a unified diff.
+type DiffLine struct {
+	Kind byte
+	Text string
 }
 
 // SummarizeDiff parses a unified diff into per-file addition and deletion
@@ -33,6 +40,13 @@ func SummarizeDiff(diff string) DiffSummary {
 		cur = &sum.Files[len(sum.Files)-1]
 	}
 	for _, line := range strings.Split(diff, "\n") {
+		if line != "" {
+			kind := byte(' ')
+			if line[0] == '+' || line[0] == '-' || line[0] == '@' {
+				kind = line[0]
+			}
+			sum.Lines = append(sum.Lines, DiffLine{Kind: kind, Text: line})
+		}
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			open(gitDiffPath(line))

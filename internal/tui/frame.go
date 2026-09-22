@@ -128,6 +128,11 @@ type WorkerRow struct {
 	Attempt int
 	Budget  int
 
+	// ProgressDone and ProgressTotal drive the execution table's progress
+	// column. Zero values render a neutral dash when no step budget exists.
+	ProgressDone  int
+	ProgressTotal int
+
 	// Tool is the running tool's name; empty when none is in flight.
 	Tool string
 

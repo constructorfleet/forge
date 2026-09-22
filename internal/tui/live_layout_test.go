@@ -61,10 +61,8 @@ func TestLiveModelTabCyclesEveryPane(t *testing.T) {
 		t.Fatalf("third tab (diff closed) did not return to the roster:\n%s", got)
 	}
 	pressDiffKey(t, m)
-	press(t, m, "tab")
-	press(t, m, "tab")
-	if got := visible(press(t, m, "tab")); !strings.Contains(got, "[enter] open in $PAGER") {
-		t.Fatalf("tab with the diff open did not focus the diff pane:\n%s", got)
+	if got := visible(m.View().Content); !strings.Contains(got, "[enter] open in $PAGER") {
+		t.Fatalf("opening the diff did not focus the diff pane:\n%s", got)
 	}
 	if got := visible(press(t, m, "tab")); !strings.Contains(got, "[c] cancel") {
 		t.Fatalf("tab from the diff pane did not return to the roster:\n%s", got)
@@ -122,7 +120,7 @@ func TestLiveModelDiffKeyTogglesThePane(t *testing.T) {
 		t.Fatalf("opening the diff pane returned a follow-up command, want none")
 	}
 	got := visible(m.View().Content)
-	for _, want := range []string{"Diff +2 -1", "a.go", "+2", "-1", "[d] hide diff"} {
+	for _, want := range []string{"DIFF (1 files)", "a.go", "+added line", "[d] hide diff"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("open diff pane omits %q:\n%s", want, got)
 		}
@@ -145,9 +143,6 @@ func TestLiveModelDiffPaneEnterDefersToThePager(t *testing.T) {
 		return func() tea.Msg { return nil }
 	}
 	pressDiffKey(t, m)
-	press(t, m, "tab")
-	press(t, m, "tab")
-	press(t, m, "tab")
 	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: '\r'}))
 	if cmd == nil {
 		t.Fatal("enter in the diff pane produced no command")
@@ -158,8 +153,8 @@ func TestLiveModelDiffPaneEnterDefersToThePager(t *testing.T) {
 	if len(opened) != 1 || !strings.Contains(opened[0], "+added line") {
 		t.Fatalf("pager opened with %v, want the stored diff once", opened)
 	}
-	if strings.Contains(m.View().Content, "+added line") {
-		t.Fatalf("the diff body entered the frame:\n%s", m.View().Content)
+	if !strings.Contains(m.View().Content, "DIFF") {
+		t.Fatalf("the diff pane disappeared after pager return:\n%s", m.View().Content)
 	}
 }
 

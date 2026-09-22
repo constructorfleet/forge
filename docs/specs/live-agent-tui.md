@@ -116,11 +116,12 @@ by [#756]):
 - **The output pane** shows the selected agent's transcript alone. The tailer
   keeps every event and filters the window, so a switch between agents needs
   no re-read. Gate rows show only with the implementation Agent.
-- **The diff pane** opens and closes with `d`. It lists the changed files with
-  their additions and deletions, and the totals in its header. The summary
-  loads off the update goroutine, once per Review; an open pane reloads only
-  when the selected row's Review changes. `enter` in the pane hands the whole
-  diff to `$PAGER`. The diff body never enters the frame.
+- **The diff pane** opens and closes with `d`. It shows the stored unified diff
+  inline, with file headers, hunk headers, additions, and deletions styled by
+  kind. Its header names the changed-file count. The summary loads off the
+  update goroutine, once per Review; an open pane reloads only when the
+  selected row's Review changes. `enter` in the pane still hands the whole
+  diff to `$PAGER` for detailed inspection.
 - **The detail strip** describes the focused pane's selection: the Worker's
   verbatim `IssueState`, elapsed from `state_changed_at`, heartbeat age from
   `workers.last_heartbeat` (**never conflated**), attempt number against the
@@ -149,10 +150,10 @@ Everything but the diff rides the transcript pane; heavy content defers out.
   output already tail-bounded by source `textcap`; the engine's `gate.run`
   event is lean (name/command/exit_code/passed). The synthetic row expands to
   `stdout`/`stderr` + `exit_code` + `command`. No separate gate strip.
-- **Diff bodies defer to `$PAGER`** over `review_runs.diff`. The diff pane
-  shows the file summary alone ([#756]). There is no `forge diff` subcommand
-  (it is the live `gitDiffProducer`, forbidden by the store-only read path);
-  `review_runs.diff` is the only store-side copy (migration 0004). Same
+- **Diff bodies render in the pane and defer to `$PAGER`** over
+  `review_runs.diff`. There is no `forge diff` subcommand (it is the live
+  `gitDiffProducer`, forbidden by the store-only read path); `review_runs.diff`
+  is the only store-side copy (migration 0004). Same
   suspend-and-return mechanic as #447's artifact view. No inline diff/lexing/
   navigation machinery.
 - **Multi-attempt history** is one continuous scrollback with inline

@@ -37,7 +37,7 @@ const (
 
 // Pane titles, shared by the renderer and the tests that look for them.
 const (
-	titleExecutions = "Executions"
+	titleExecutions = "EXECUTIONS"
 	titleAgents     = "Agents"
 	titleOutput     = "Output"
 	titleDiff       = "Diff"
@@ -187,11 +187,15 @@ func bodyLines(vm ViewModel, width, rows int) []string {
 	}
 	var panels [][]string
 	if agentsW > 0 {
-		panels = append(panels, panel(titleAgents, agents, agentsW, rows, vm.Focus == PaneAgents, vm.Style))
+		panels = append(panels, panelMeta(agentTitle(vm), "", agents, agentsW, rows, vm.Focus == PaneAgents, vm.Style))
 	}
-	panels = append(panels, panel(titleOutput, transcript, transcriptW, rows, vm.Focus == PaneTranscript, vm.Style))
+	panels = append(panels, panelMeta(outputTitle(vm), "", transcript, transcriptW, rows, vm.Focus == PaneTranscript, vm.Style))
 	if diffW > 0 {
-		panels = append(panels, panel(diffTitle(vm), diff, diffW, rows, vm.Focus == PaneDiff, vm.Style))
+		meta := ""
+		if vm.Focus == PaneDiff {
+			meta = "[d] close diff"
+		}
+		panels = append(panels, panelMeta(diffTitle(vm), meta, diff, diffW, rows, vm.Focus == PaneDiff, vm.Style))
 	}
 	out := make([]string, rows+2)
 	for i := range out {
@@ -204,15 +208,31 @@ func bodyLines(vm ViewModel, width, rows int) []string {
 	return out
 }
 
+func agentTitle(vm ViewModel) string {
+	if row, ok := selectedWorker(vm); ok {
+		return "SUBAGENTS (" + row.Title + ")"
+	}
+	return "SUBAGENTS"
+}
+
+func outputTitle(vm ViewModel) string {
+	row, ok := selectedWorker(vm)
+	if !ok {
+		return "OUTPUT"
+	}
+	agent := "implementation"
+	if a, ok := selectedAgent(vm); ok {
+		agent = a.Label
+	}
+	return fmt.Sprintf("OUTPUT (%s / %s)", row.Title, agent)
+}
+
 // executionPanel draws the execution list: a column header, then at most
 // maxExecutionRows Workers, scrolled to keep the selection visible. The
 // header names the Execution and, when the list scrolls, the visible range.
 func executionPanel(vm ViewModel, width int) []string {
 	inner := width - 2
 	title := titleExecutions
-	if vm.ExecutionID != "" {
-		title += " · " + shortID(vm.ExecutionID)
-	}
 	start, end := executionWindow(vm.Selection, len(vm.Workers))
 	if len(vm.Workers) > maxExecutionRows {
 		title += fmt.Sprintf(" (%d-%d of %d)", start+1, end, len(vm.Workers))
@@ -222,7 +242,23 @@ func executionPanel(vm ViewModel, width int) []string {
 	for i := start; i < end; i++ {
 		lines = append(lines, cols.row(vm.Workers[i], i == vm.Selection, vm.Style))
 	}
-	return panel(title, lines, width, len(lines), vm.Focus == PaneRoster, vm.Style)
+	return panelMeta(title, executionSummary(vm), lines, width, len(lines), vm.Focus == PaneRoster, vm.Style)
+}
+
+func executionSummary(vm ViewModel) string {
+	running, completed := 0, 0
+	for _, row := range vm.Workers {
+		switch row.State.Group() {
+		case domain.GroupDone:
+			completed++
+		case domain.GroupWorking, domain.GroupBlocked, domain.GroupWaiting:
+			running++
+		}
+	}
+	if running == 0 && completed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d running | %d completed", running, completed)
 }
 
 // executionWindow returns the [start, end) rows the list shows so that
@@ -259,14 +295,15 @@ type executionColumns struct {
 
 // Fixed column widths of the execution list.
 const (
-	colGlyphs  = 6 // cursor, attention, liveness, and their separators
-	colID      = 10
-	colStatus  = 13
-	colElapsed = 8
-	colAgents  = 6
-	colFixed   = colGlyphs + colID + 1 + 1 + colStatus + 1 + colElapsed + 1 + colAgents + 1
-	colNameMax = 24
-	colNameMin = 10
+	colGlyphs   = 6 // cursor, attention, liveness, and their separators
+	colID       = 10
+	colStatus   = 13
+	colProgress = 15
+	colElapsed  = 8
+	colAgents   = 6
+	colFixed    = colGlyphs + colID + 1 + 1 + colStatus + 1 + colProgress + 1 + colElapsed + 1 + colAgents + 1
+	colNameMax  = 24
+	colNameMin  = 10
 )
 
 // newExecutionColumns sizes the flexible columns for an inner width.
@@ -287,8 +324,8 @@ func newExecutionColumns(inner int) executionColumns {
 
 // header renders the column header row.
 func (c executionColumns) header() string {
-	return fmt.Sprintf("%-*s%-*s %-*s %-*s %-*s %-*s %s",
-		colGlyphs, "", colID, "ID", c.name, "NAME", colStatus, "STATUS", colElapsed, "ELAPSED", colAgents, "AGENTS", "LATEST OUTPUT")
+	return fmt.Sprintf("%-*s%-*s %-*s %-*s %-*s %-*s %-*s %s",
+		colGlyphs, "", colID, "ID", c.name, "NAME", colStatus, "STATUS", colProgress, "PROGRESS", colElapsed, "ELAPSED", colAgents, "AGENTS", "LATEST OUTPUT")
 }
 
 // row renders one Worker: cursor, attention and liveness glyphs, id, name,
@@ -302,11 +339,12 @@ func (c executionColumns) row(row WorkerRow, selected bool, style Style) string 
 	att := AttentionGlyph(DeriveAttention(row.State, row.Tool))
 	live := LivenessGlyph(DeriveLiveness(row.HasHeartbeat, row.HeartbeatAge))
 	state := stateStyle(style, row.State).Render(pad(string(row.State), colStatus))
-	line := fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
+	line := fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s",
 		cur, att, live,
 		pad(row.IssueID, colID),
 		pad(row.Title, c.name),
 		state,
+		pad(progressText(row), colProgress),
 		pad(formatDuration(row.Elapsed), colElapsed),
 		pad(strconv.Itoa(row.AgentCount()), colAgents),
 		pad(row.LatestOutput(), c.latest))
@@ -314,6 +352,21 @@ func (c executionColumns) row(row WorkerRow, selected bool, style Style) string 
 		return style.Selection.Render(line)
 	}
 	return line
+}
+
+func progressText(row WorkerRow) string {
+	if row.ProgressTotal <= 0 {
+		return "—"
+	}
+	done := row.ProgressDone
+	if done < 0 {
+		done = 0
+	}
+	if done > row.ProgressTotal {
+		done = row.ProgressTotal
+	}
+	percent := done * 100 / row.ProgressTotal
+	return fmt.Sprintf("%d/%d (%d%%)", done, row.ProgressTotal, percent)
 }
 
 // stateStyle picks the colour for a Worker state by its coarse group: a
@@ -378,9 +431,9 @@ func transcriptLines(vm ViewModel, inner, rows int) []string {
 // diffTitle names the diff pane with its totals once loaded.
 func diffTitle(vm ViewModel) string {
 	if vm.Diff == nil {
-		return titleDiff
+		return "DIFF"
 	}
-	return fmt.Sprintf("%s +%d -%d", titleDiff, vm.Diff.Additions, vm.Diff.Deletions)
+	return fmt.Sprintf("DIFF (%d files)", len(vm.Diff.Files))
 }
 
 // diffLines draws the diff pane's body: one row per changed file with its
@@ -396,23 +449,34 @@ func diffLines(vm ViewModel, inner, rows int) []string {
 	if len(vm.Diff.Files) == 0 {
 		return []string{vm.Style.Muted.Render("no changed files")}
 	}
-	files := vm.Diff.Files
-	if vm.DiffScroll > 0 && vm.DiffScroll < len(files) {
-		files = files[vm.DiffScroll:]
-	}
-	if rows > 0 && len(files) > rows {
-		files = files[:rows]
-	}
-	lines := make([]string, 0, len(files))
-	for _, f := range files {
-		adds := vm.Style.Added.Render("+" + strconv.Itoa(f.Additions))
-		dels := vm.Style.Removed.Render("-" + strconv.Itoa(f.Deletions))
-		counts := adds + " " + dels
-		pathW := inner - lipgloss.Width(counts) - 1
-		if pathW < 1 {
-			pathW = 1
+	// A hand-built ViewModel may contain only the lightweight summary. Keep
+	// that state useful in tests and while a legacy caller has no raw diff.
+	if len(vm.Diff.Lines) == 0 {
+		lines := make([]string, 0, len(vm.Diff.Files))
+		for _, f := range vm.Diff.Files {
+			lines = append(lines, fmt.Sprintf("%s +%d -%d", f.Path, f.Additions, f.Deletions))
 		}
-		lines = append(lines, padLeftTrunc(f.Path, pathW)+" "+counts)
+		return lines
+	}
+	lines := make([]string, 0, len(vm.Diff.Lines))
+	start := vm.DiffScroll
+	if start >= len(vm.Diff.Lines) {
+		start = 0
+	}
+	for _, line := range vm.Diff.Lines[start:] {
+		text := fitLine(line.Text, inner)
+		switch line.Kind {
+		case '+':
+			text = vm.Style.Added.Render(text)
+		case '-':
+			text = vm.Style.Removed.Render(text)
+		case '@':
+			text = vm.Style.Axis.Render(text)
+		}
+		lines = append(lines, text)
+		if rows > 0 && len(lines) >= rows {
+			break
+		}
 	}
 	return lines
 }
@@ -535,6 +599,10 @@ func relabelTab(keys []KeyBinding) []KeyBinding {
 // double-line border, so focus reads without colour. Body rows past height
 // are dropped and missing rows are padded blank. A zero height fits the body.
 func panel(title string, body []string, width, height int, focused bool, style Style) []string {
+	return panelMeta(title, "", body, width, height, focused, style)
+}
+
+func panelMeta(title, meta string, body []string, width, height int, focused bool, style Style) []string {
 	if height <= 0 {
 		height = len(body)
 	}
@@ -551,16 +619,20 @@ func panel(title string, body []string, width, height int, focused bool, style S
 		border = style.FocusBorder
 	}
 	titleText := " " + title + " "
+	metaText := ""
+	if meta != "" {
+		metaText = " " + meta + " "
+	}
 	if w := lipgloss.Width(titleText); w > inner-2 && inner >= 2 {
 		titleText = ansi.Truncate(titleText, inner-2, "…")
 	} else if inner < 2 {
 		titleText = ""
 	}
-	fill := inner - 1 - lipgloss.Width(titleText)
+	fill := inner - 1 - lipgloss.Width(titleText) - lipgloss.Width(metaText)
 	if fill < 0 {
 		fill = 0
 	}
-	top := border.Render(b.tl+b.h) + style.Header.Render(titleText) + border.Render(strings.Repeat(b.h, fill)+b.tr)
+	top := border.Render(b.tl+b.h) + style.Header.Render(titleText) + border.Render(strings.Repeat(b.h, fill)) + style.Header.Render(metaText) + border.Render(b.tr)
 	lines := make([]string, 0, height+2)
 	lines = append(lines, top)
 	for i := range height {

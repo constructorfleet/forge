@@ -482,7 +482,7 @@ func (m *LiveModel) scrollDiff(delta int) {
 	if m.vm.Diff == nil {
 		return
 	}
-	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll+delta, len(m.vm.Diff.Files))
+	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll+delta, len(m.vm.Diff.Lines))
 }
 
 // toggleDiff opens or closes the diff pane for the selected Worker. Opening
@@ -508,6 +508,9 @@ func (m *LiveModel) toggleDiff() tea.Cmd {
 		return nil
 	}
 	m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll = true, nil, 0
+	// Opening the pane moves focus to it, matching the operator's intent and
+	// keeping the close control visible in the footer.
+	m.vm.Focus = PaneDiff
 	return m.loadDiff(row)
 }
 
@@ -563,7 +566,7 @@ func (m *LiveModel) applyDiffLoaded(msg diffLoadedMsg) {
 	}
 	summary := msg.summary
 	m.vm.Diff = &summary
-	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll, len(summary.Files))
+	m.vm.DiffScroll = clampSelection(m.vm.DiffScroll, len(summary.Lines))
 }
 
 // refreshDiff reloads the open diff pane when the selected row's Review

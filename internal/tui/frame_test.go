@@ -172,6 +172,7 @@ func layoutFixture() tui.ViewModel {
 				IssueID: "#2", Title: "Add roster frame", State: domain.StateReviewing,
 				Elapsed: 62 * time.Second, HasHeartbeat: true, HeartbeatAge: 3 * time.Second,
 				Attempt: 2, Budget: 3, Tool: "git status", HasDiff: true, Verdict: "PASS",
+				ProgressDone: 4, ProgressTotal: 5,
 				Agents: []tui.AgentRow{
 					{Label: "implementation", Events: 12, Latest: "Fixed the finding.", LastAt: at},
 					{Label: "review: bugs", Subagent: "bugs", Events: 7, Latest: "▸ Grep", LastAt: at.Add(time.Second)},
@@ -195,13 +196,13 @@ func layoutFixture() tui.ViewModel {
 func TestRenderDrawsEveryRegion(t *testing.T) {
 	got := tui.Render(layoutFixture())
 	for _, want := range []string{
-		"Executions", "45c7c799", // region header names the Execution
-		"ID", "NAME", "STATUS", "ELAPSED", "AGENTS", "LATEST OUTPUT", // list columns
+		"EXECUTIONS",                                                             // region header names the execution list
+		"ID", "NAME", "STATUS", "PROGRESS", "ELAPSED", "AGENTS", "LATEST OUTPUT", // list columns
 		"#1", "Write tests", "PENDING",
-		"> ", "#2", "Add roster frame", "REVIEWING", "1m2s", "▸ Grep", // the selected row and its newest output
-		"Agents", "  implementation", "> review: bugs", "  review: docs",
-		"Output", "starting work", "▸ bash",
-		"Diff", "internal/tui/frame.go", "+12", "-3", "docs/spec.md", "+2", "+14",
+		"> ", "#2", "Add roster frame", "REVIEWING", "4/5 (80%)", "1m2s", "▸ Grep", // the selected row and its newest output
+		"SUBAGENTS", "  implementation", "> review: bugs", "  review: docs",
+		"OUTPUT", "starting work", "▸ bash",
+		"DIFF", "internal/tui/frame.go", "docs/spec.md",
 		"REVIEWING | elapsed 1m2s | beat 3s | attempt 2/3 | tool git status | verdict PASS",
 		"[q] quit",
 	} {
@@ -311,10 +312,10 @@ func TestRenderFocusedPaneUsesDoubleBorder(t *testing.T) {
 		focus tui.Pane
 		title string
 	}{
-		{tui.PaneRoster, "Executions"},
-		{tui.PaneAgents, "Agents"},
-		{tui.PaneTranscript, "Output"},
-		{tui.PaneDiff, "Diff"},
+		{tui.PaneRoster, "EXECUTIONS"},
+		{tui.PaneAgents, "SUBAGENTS"},
+		{tui.PaneTranscript, "OUTPUT"},
+		{tui.PaneDiff, "DIFF"},
 	} {
 		vm := layoutFixture()
 		vm.Focus = tc.focus
@@ -425,14 +426,14 @@ func TestRenderMarksTranscriptHeaderWhenLagging(t *testing.T) {
 // chrome with its notice and offers quit alone.
 func TestRenderEmptyRoster(t *testing.T) {
 	got := tui.Render(tui.ViewModel{Notice: "waiting"})
-	if !strings.Contains(got, "waiting") || !strings.Contains(got, "Executions") {
+	if !strings.Contains(got, "waiting") || !strings.Contains(got, "EXECUTIONS") {
 		t.Fatalf("empty frame omits the notice or the list header:\n%s", got)
 	}
 	lines := splitLines(got)
 	if footer := lines[len(lines)-1]; footer != "[q] quit" {
 		t.Fatalf("empty frame footer = %q, want %q", footer, "[q] quit")
 	}
-	if strings.Contains(got, "Agents") {
+	if strings.Contains(got, "SUBAGENTS") {
 		t.Fatalf("empty frame draws an agents pane with no Worker:\n%s", got)
 	}
 }
