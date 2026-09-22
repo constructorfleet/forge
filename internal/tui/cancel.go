@@ -36,7 +36,8 @@ func (m *LiveModel) armCancelConfirm() tea.Cmd {
 		return nil
 	}
 	m.confirming = true
-	m.vm.ActionNotice = fmt.Sprintf("cancel execution %s? [y] confirm, any other key cancels", m.ExecutionID)
+	m.cancelExecutionID = row.ExecutionID
+	m.vm.ActionNotice = fmt.Sprintf("cancel execution %s? [y] confirm, any other key cancels", m.cancelExecutionID)
 	return nil
 }
 
@@ -46,6 +47,7 @@ func (m *LiveModel) armCancelConfirm() tea.Cmd {
 func (m *LiveModel) resolveCancelConfirm(key uv.Key) tea.Cmd {
 	m.confirming = false
 	if !key.MatchString("y") {
+		m.cancelExecutionID = ""
 		m.vm.ActionNotice = "cancel declined"
 		return nil
 	}
@@ -64,18 +66,23 @@ func (m *LiveModel) startCancel() tea.Cmd {
 		return nil
 	}
 	m.cancelling = true
-	m.vm.ActionNotice = fmt.Sprintf("cancelling execution %s…", m.ExecutionID)
-	canceller, ctx, executionID := m.Canceller, m.ctx, m.ExecutionID
+	executionID := m.cancelExecutionID
+	m.cancelExecutionID = ""
+	m.vm.ActionNotice = fmt.Sprintf("cancelling execution %s…", executionID)
+	canceller, ctx := m.Canceller, m.ctx
 	return func() tea.Msg {
 		_, err := canceller.CancelExecution(ctx, executionID)
-		return cancelResultMsg{err: err}
+		return cancelResultMsg{executionID: executionID, err: err}
 	}
 }
 
 // cancelResultMsg carries a finished CancelExecution call back to the update
 // loop. Pending-until-observed means this message never mutates a row's
 // state itself: the next roster poll is what shows CANCELLED.
-type cancelResultMsg struct{ err error }
+type cancelResultMsg struct {
+	executionID string
+	err         error
+}
 
 // applyCancelResult commits a finished cancel call. A CancelOwnerError is a
 // warning the cancel still completed; any other error is surfaced as a
@@ -84,7 +91,7 @@ type cancelResultMsg struct{ err error }
 func (m *LiveModel) applyCancelResult(msg cancelResultMsg) {
 	m.cancelling = false
 	if msg.err == nil {
-		m.vm.ActionNotice = fmt.Sprintf("cancel requested for %s", m.ExecutionID)
+		m.vm.ActionNotice = fmt.Sprintf("cancel requested for %s", msg.executionID)
 		return
 	}
 	m.vm.ActionNotice = "cancel: " + msg.err.Error()

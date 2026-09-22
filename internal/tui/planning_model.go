@@ -217,7 +217,7 @@ func (m *PlanningModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case answerNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case answerReadyMsg:
-		m.answerFlow.open(msg.issueID)
+		m.answerFlow.open("", msg.issueID)
 		m.vm.ActionNotice = "opening decision question in $EDITOR…"
 		return m, m.openAnswer(msg.dir, msg.artifact)
 	case AnswerClosedMsg:
@@ -307,7 +307,7 @@ func (m *PlanningModel) readTranscript() tea.Cmd {
 // Execution and the Issue, so the read a Feature ever gets back always
 // answers that same FeatureID: it is never stale.
 func (m *PlanningModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	cmd, committed := m.transcriptController.applyTranscript(msg, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, m.FeatureID, m.FeatureID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 	if committed {
 		m.lastCommit = m.Roster.Now()
 	}
@@ -354,7 +354,7 @@ func (m *PlanningModel) startApprove() tea.Cmd {
 		m.vm.ActionNotice = "approve is not available"
 		return nil
 	}
-	m.approveFlow.open(m.FeatureID)
+	m.approveFlow.open("", m.FeatureID)
 	m.vm.ActionNotice = fmt.Sprintf("approving planning artifact for %s…", m.FeatureID)
 	approver, ctx, featureID := m.Approver, m.ctx, m.FeatureID
 	return func() tea.Msg {

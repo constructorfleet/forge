@@ -15,6 +15,13 @@ import (
 // seam's spec.
 const pollInterval = 1 * time.Second
 
+func nonEmptyExecutionIDs(id string) []string {
+	if id == "" {
+		return nil
+	}
+	return []string{id}
+}
+
 // diffReadTimeout bounds the on-demand diff read. The diff column can hold a
 // large blob, and the read runs on the event loop.
 const diffReadTimeout = 2 * time.Second
@@ -48,8 +55,8 @@ type transcriptReadMsg struct {
 	read FeedRead
 }
 
-// LiveModel is the Bubble Tea model driving the live roster for one
-// Execution: it polls the Roster each tick and renders the frame. It is an
+// LiveModel is the Bubble Tea model driving the live roster for one or more
+// Executions: it polls the Roster each tick and renders the frame. It is an
 // observer, never an owner (ADR-0031): it has no path to write engineering
 // state, so quitting (q / Ctrl+C) can never stop the work being watched. The
 // pure frame Render turns the polled ViewModel into the view.
@@ -91,6 +98,9 @@ type LiveModel struct {
 	// confirming records that a cancel key armed the UI-only confirmation and
 	// awaits the operator's next key to fire or abandon it.
 	confirming bool
+	// cancelExecutionID keeps the identity captured when confirmation started.
+	// A poll can change the selected row before the operator presses y.
+	cancelExecutionID string
 	// cancelling records a CancelExecution call in flight, so a second cancel
 	// key press on the same call cannot double-issue it.
 	cancelling bool
@@ -131,8 +141,8 @@ type LiveModel struct {
 	// same row cannot double-post it.
 	answerFlow actionFlow
 
-	// diffKey identifies the Review the open diff pane summarizes: the Issue,
-	// its verdict, and whether it stored a diff. A roster pass whose selected
+	// diffKey identifies the Review the open diff pane summarizes: the Execution,
+	// Issue, verdict, and whether it stored a diff. A roster pass whose selected
 	// row yields another key reloads the pane; an unchanged key reads nothing,
 	// so an open pane costs no blob read per poll.
 	diffKey string
@@ -151,7 +161,7 @@ func NewLiveModel(r *Roster, executionID string, poll time.Duration) *LiveModel 
 		Roster:      r,
 		ExecutionID: executionID,
 		poll:        poll,
-		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll, ExecutionID: executionID},
+		vm:          ViewModel{Style: DefaultStyle(), PollInterval: poll, ExecutionID: executionID, ExecutionIDs: nonEmptyExecutionIDs(executionID)},
 		transcriptController: transcriptController{
 			ctx: context.Background(),
 		},
@@ -221,7 +231,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case approveNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case approveReadyMsg:
-		m.approveFlow.open(msg.issueID)
+		m.approveFlow.open(msg.executionID, msg.issueID)
 		m.vm.ActionNotice = fmt.Sprintf("opening replan artifact for %s in $PAGER…", msg.issueID)
 		return m, m.openApprove(msg.dir, msg.artifact)
 	case ApproveClosedMsg:
@@ -236,7 +246,7 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case answerNoticeMsg:
 		m.vm.ActionNotice = msg.text
 	case answerReadyMsg:
-		m.answerFlow.open(msg.issueID)
+		m.answerFlow.open(msg.executionID, msg.issueID)
 		m.vm.ActionNotice = fmt.Sprintf("opening needs-info question for %s in $EDITOR…", msg.issueID)
 		return m, m.openAnswer(msg.dir, msg.artifact)
 	case AnswerClosedMsg:
@@ -251,6 +261,11 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vm.ActionNotice = "answer is empty, not posted"
 			return m, nil
 		}
+		if !m.flowMatchesSelection(m.answerFlow) {
+			m.answerFlow.close()
+			m.vm.ActionNotice = "answer cancelled: selected Worker changed"
+			return m, nil
+		}
 		return m, m.startAnswer(answer)
 	case answerResultMsg:
 		m.applyAnswerResult(msg)
@@ -260,6 +275,11 @@ func (m *LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m *LiveModel) flowMatchesSelection(flow actionFlow) bool {
+	row, ok := selectedWorker(m.vm)
+	return ok && row.ExecutionID == flow.executionID && row.IssueID == flow.issueID
 }
 
 // readRoster returns the command that reads the roster state. The read runs in
@@ -272,7 +292,13 @@ func (m *LiveModel) readRoster(now time.Time) tea.Cmd {
 	m.rosterReading = true
 	roster, ctx, executionID := m.Roster, m.ctx, m.ExecutionID
 	return func() tea.Msg {
-		vm, err := roster.Fetch(ctx, executionID, now)
+		var vm ViewModel
+		var err error
+		if executionID == "" {
+			vm, err = roster.FetchLive(ctx, now)
+		} else {
+			vm, err = roster.Fetch(ctx, executionID, now)
+		}
 		return rosterReadMsg{vm: vm, err: err}
 	}
 }
@@ -289,6 +315,10 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		return
 	}
 	vm := msg.vm
+	selectedExecutionID, selectedIssueID := "", ""
+	if row, ok := selectedWorker(m.vm); ok {
+		selectedExecutionID, selectedIssueID = row.ExecutionID, row.IssueID
+	}
 	// The roster refresh keeps the operator's pane, focus, and chosen row: a
 	// sequential run's later Issues would otherwise vanish behind the first
 	// row every time a poll pass replaced the view-model.
@@ -305,12 +335,21 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 	// the new row count: a fresh ViewModel's Selection is always the zero
 	// value, and copying it over would silently snap the pane back to the
 	// first row on every poll.
-	vm.Selection = m.vm.Selection
-	if last := len(vm.Workers) - 1; vm.Selection > last {
-		vm.Selection = last
-	}
-	if vm.Selection < 0 {
-		vm.Selection = 0
+	vm.Selection = 0
+	if selectedExecutionID != "" || selectedIssueID != "" {
+		found := false
+		for i, row := range vm.Workers {
+			if row.ExecutionID == selectedExecutionID && row.IssueID == selectedIssueID {
+				vm.Selection = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
+		}
+	} else {
+		vm.Selection = clampSelection(m.vm.Selection, len(vm.Workers))
 	}
 	// The agent selection, the diff pane, the terminal width, and the
 	// Execution name are all operator or runtime state a fresh view-model
@@ -321,7 +360,10 @@ func (m *LiveModel) applyRoster(msg rosterReadMsg) {
 		vm.AgentSelection = clampSelection(vm.AgentSelection, len(row.Agents))
 	}
 	vm.DiffOpen, vm.Diff, vm.DiffScroll, vm.DiffHorizontal = m.vm.DiffOpen, m.vm.Diff, m.vm.DiffScroll, m.vm.DiffHorizontal
-	vm.Width, vm.ExecutionID = m.vm.Width, m.vm.ExecutionID
+	vm.Width = m.vm.Width
+	if m.ExecutionID != "" {
+		vm.ExecutionID = m.ExecutionID
+	}
 	// The colour scheme is set once at construction; a poll's fresh view-model
 	// carries the zero Style, so copy it over or every poll would render plain.
 	vm.Style = m.vm.Style
@@ -569,7 +611,7 @@ type diffLoadedMsg struct {
 
 // rowDiffKey names the Review a row's diff pane would summarize.
 func rowDiffKey(row WorkerRow) string {
-	return fmt.Sprintf("%s|%s|%t", row.IssueID, row.Verdict, row.HasDiff)
+	return fmt.Sprintf("%s|%s|%s|%t", row.ExecutionID, row.IssueID, row.Verdict, row.HasDiff)
 }
 
 // loadDiff returns the command that reads row's diff and summarizes it. The
@@ -582,7 +624,7 @@ func (m *LiveModel) loadDiff(row WorkerRow) tea.Cmd {
 	m.diffLoading = true
 	key := rowDiffKey(row)
 	m.diffKey = key
-	store, executionID, issueID := m.Roster.Store, m.ExecutionID, row.IssueID
+	store, executionID, issueID := m.Roster.Store, m.selectedExecutionID(), row.IssueID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
@@ -683,10 +725,11 @@ func (m *LiveModel) openSelectedDiff() tea.Cmd {
 		return nil
 	}
 	issueID := row.IssueID
+	executionID := row.ExecutionID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		diff, err := LatestDiff(ctx, m.Roster.Store, m.ExecutionID, issueID)
+		diff, err := LatestDiff(ctx, m.Roster.Store, executionID, issueID)
 		if err != nil {
 			if errors.Is(err, ErrNoDiff) {
 				return diffNoticeMsg{text: fmt.Sprintf("no diff for %s yet", issueID)}
@@ -784,7 +827,7 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 		return nil
 	}
 	m.reading = true
-	feed, ctx, executionID, issueID := m.feed, m.ctx, m.ExecutionID, row.IssueID
+	feed, ctx, executionID, issueID := m.feed, m.ctx, m.selectedExecutionID(), row.IssueID
 	return func() tea.Msg {
 		return transcriptReadMsg{feed: feed, read: feed.Fetch(ctx, executionID, issueID)}
 	}
@@ -797,11 +840,11 @@ func (m *LiveModel) readTranscript() tea.Cmd {
 // starts a fresh read for the Worker now selected, so a stale read can never
 // paint the wrong Worker's transcript into the pane.
 func (m *LiveModel) applyTranscript(msg transcriptReadMsg) tea.Cmd {
-	want := ""
+	wantExecutionID, wantIssueID := "", ""
 	if row, ok := selectedWorker(m.vm); ok {
-		want = row.IssueID
+		wantExecutionID, wantIssueID = row.ExecutionID, row.IssueID
 	}
-	cmd, committed := m.transcriptController.applyTranscript(msg, want, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
+	cmd, committed := m.transcriptController.applyTranscript(msg, wantExecutionID, wantIssueID, &m.vm.TranscriptNotice, &m.vm.Transcript, m.readTranscript)
 	if committed {
 		m.lastCommit = m.Roster.Now()
 		// The feed may have built the pane this pass, so it takes the
@@ -868,3 +911,10 @@ func (m *LiveModel) View() tea.View {
 
 // Workers exposes the current roster rows, for the model's own tests.
 func (m *LiveModel) Workers() []WorkerRow { return m.vm.Workers }
+
+func (m *LiveModel) selectedExecutionID() string {
+	if row, ok := selectedWorker(m.vm); ok && row.ExecutionID != "" {
+		return row.ExecutionID
+	}
+	return m.ExecutionID
+}

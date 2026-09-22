@@ -89,7 +89,7 @@ func (t *transcriptController) handleTranscriptKey(key uv.Key, transcript *Trans
 }
 
 // applyTranscript commits a finished read into notice and pane, provided it
-// still answers wantIssueID, and reports whether it committed. When the read
+// still answers the wanted Execution and Issue, and reports whether it committed. When the read
 // is stale — the operator moved the selection to another Worker while this
 // read was still in flight — it runs retry instead and reports no commit, so
 // a fresh read starts for the Worker now selected rather than let an older
@@ -99,12 +99,12 @@ func (t *transcriptController) handleTranscriptKey(key uv.Key, transcript *Trans
 // one retry-on-stale path so a future change to it cannot drift between the
 // two call sites; the committed bool lets each model stamp its own lag-age
 // clock only on a read that actually lands.
-func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantIssueID string, notice *string, pane **TranscriptPane, retry func() tea.Cmd) (cmd tea.Cmd, committed bool) {
+func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantExecutionID, wantIssueID string, notice *string, pane **TranscriptPane, retry func() tea.Cmd) (cmd tea.Cmd, committed bool) {
 	if t.feed == nil || msg.feed != t.feed {
 		return nil, false
 	}
 	t.reading = false
-	if msg.read.IssueID() != wantIssueID {
+	if msg.read.executionID != wantExecutionID || msg.read.IssueID() != wantIssueID {
 		return retry(), false
 	}
 	p := t.feed.Apply(msg.read)

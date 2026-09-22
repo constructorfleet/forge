@@ -20,16 +20,18 @@ import (
 // fire) the in-process write, and it can hold the call open on block, so a
 // test can drive the in-flight guard deterministically.
 type fakeApprover struct {
-	mu      sync.Mutex
-	calls   []string
-	err     error
-	block   chan struct{}
-	entered chan struct{}
+	mu         sync.Mutex
+	calls      []string
+	executions []string
+	err        error
+	block      chan struct{}
+	entered    chan struct{}
 }
 
-func (f *fakeApprover) ResumeAfterReplan(_ context.Context, _, issueID string) (domain.Issue, error) {
+func (f *fakeApprover) ResumeAfterReplan(_ context.Context, executionID, issueID string) (domain.Issue, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, issueID)
+	f.executions = append(f.executions, executionID)
 	f.mu.Unlock()
 	if f.entered != nil {
 		f.entered <- struct{}{}
@@ -38,6 +40,37 @@ func (f *fakeApprover) ResumeAfterReplan(_ context.Context, _, issueID string) (
 		<-f.block
 	}
 	return domain.Issue{}, f.err
+}
+
+func TestLiveModelApproveKeepsArtifactExecutionWhenSelectionChanges(t *testing.T) {
+	store := &liveRosterStore{multiRosterStore: &multiRosterStore{states: map[string]storage.ExecutionState{
+		"ex-a": {Execution: domain.Execution{ID: "ex-a"}, Issues: []domain.Issue{{ID: "#1", State: domain.StateNeedsReplan}}},
+		"ex-b": {Execution: domain.Execution{ID: "ex-b"}, Issues: []domain.Issue{{ID: "#1", State: domain.StateNeedsReplan}}},
+	}}, ids: []string{"ex-a", "ex-b"}}
+	m := tui.NewLiveModel(tui.NewRoster(store, nil), "", time.Second)
+	m.OpenApprove = func(string, string) tea.Cmd { return func() tea.Msg { return tui.ApproveClosedMsg{} } }
+	approver := &fakeApprover{}
+	m.Approver = approver
+	nextPollTick(t, m)
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Text: "p", Code: 'p'}))
+	if cmd == nil {
+		t.Fatal("approve key returned no command")
+	}
+	msg := cmd()
+	_, cmd = m.Update(msg)
+	if cmd == nil {
+		t.Fatal("approve pager returned no command")
+	}
+	// Move to the second duplicate issue before the pager closes.
+	m.Update(tea.KeyPressMsg(tea.Key{Text: "j", Code: 'j'}))
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("approve close returned no command")
+	}
+	cmd()
+	if len(approver.executions) != 1 || approver.executions[0] != "ex-a" {
+		t.Fatalf("approve execution ids = %v, want [ex-a]", approver.executions)
+	}
 }
 
 func (f *fakeApprover) callCount() int {

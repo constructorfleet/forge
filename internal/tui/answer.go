@@ -105,9 +105,10 @@ type answerNoticeMsg struct{ text string }
 // loop, which owns the editor handover: tea.ExecProcess must come from
 // Update and not from inside a command.
 type answerReadyMsg struct {
-	dir      string
-	issueID  string
-	artifact string
+	dir         string
+	executionID string
+	issueID     string
+	artifact    string
 }
 
 // AnswerClosedMsg reports that the answer artifact's editor exited, carrying
@@ -160,14 +161,15 @@ func (m *LiveModel) openSelectedAnswer() tea.Cmd {
 		return nil
 	}
 	issueID := row.IssueID
+	executionID := row.ExecutionID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), diffReadTimeout)
 		defer cancel()
-		checkpoint, err := LatestNeedsInfoCheckpoint(ctx, m.Roster.Store, m.ExecutionID, issueID)
+		checkpoint, err := LatestNeedsInfoCheckpoint(ctx, m.Roster.Store, executionID, issueID)
 		if err != nil {
 			return answerNoticeMsg{text: err.Error()}
 		}
-		return answerReadyMsg{dir: dir, issueID: issueID, artifact: renderNeedsInfoQuestion(checkpoint)}
+		return answerReadyMsg{dir: dir, executionID: executionID, issueID: issueID, artifact: renderNeedsInfoQuestion(checkpoint)}
 	}
 }
 

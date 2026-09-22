@@ -112,9 +112,11 @@ func DeriveLiveness(hasBeat bool, age time.Duration) Liveness {
 // WorkerRow is one roster line's view data, fully resolved against a clock by
 // the caller so the renderer stays time-free and deterministic.
 type WorkerRow struct {
-	IssueID string
-	Title   string
-	State   domain.IssueState
+	// ExecutionID identifies the Execution that owns this Issue.
+	ExecutionID string
+	IssueID     string
+	Title       string
+	State       domain.IssueState
 
 	// Elapsed is time spent in the current state (execution_issues.state_changed_at).
 	Elapsed time.Duration
@@ -169,6 +171,9 @@ const (
 
 // ViewModel is the plain, transportable input to Render.
 type ViewModel struct {
+	// ExecutionIDs names every Execution represented by the roster.
+	// ExecutionID remains populated for a single-Execution view.
+	ExecutionIDs []string
 	// ExecutionID names the Execution the list observes. The execution list's
 	// header shows its short form.
 	ExecutionID string

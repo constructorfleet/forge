@@ -51,7 +51,7 @@ func (m *LiveModel) startRetry() tea.Cmd {
 	}
 	m.retrying = true
 	m.vm.ActionNotice = fmt.Sprintf("retrying issue %s…", row.IssueID)
-	retrier, executionID, issueID := m.Retrier, m.ExecutionID, row.IssueID
+	retrier, executionID, issueID := m.Retrier, m.selectedExecutionID(), row.IssueID
 	return func() tea.Msg {
 		result, err := retrier.Retry(executionID, issueID)
 		return retryResultMsg{issueID: issueID, result: result, err: err}

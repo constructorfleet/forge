@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Teagan42/forge/internal/domain"
@@ -52,6 +54,12 @@ type RosterStore interface {
 	AgentRunsByIssue(ctx context.Context, executionID, issueID string) ([]storage.AgentRun, error)
 }
 
+// LiveExecutionLister discovers executions that have a current Worker claim.
+// It is optional so narrow roster test doubles and older stores remain valid.
+type LiveExecutionLister interface {
+	LiveWorkerExecutionIDs(ctx context.Context, cutoff time.Time) ([]string, error)
+}
+
 // Roster fetches an Execution's Worker state into a ViewModel on demand.
 // Now is injectable (the LostExecutionController pattern) so a poll pass is
 // deterministic under test.
@@ -76,31 +84,103 @@ func NewRoster(store RosterStore, now func() time.Time) *Roster {
 // as the liveness criterion requires — each against the injected clock.
 // A Worker with no claim (planning) claims no liveness.
 func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (ViewModel, error) {
-	state, err := r.Store.LoadExecution(ctx, executionID)
-	if errors.Is(err, storage.ErrNotFound) {
-		// The Scheduler writes the Execution after the roster starts polling.
-		return ViewModel{Notice: "waiting for the execution to start…"}, nil
-	}
-	if err != nil {
-		return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
-	}
+	return r.FetchMany(ctx, []string{executionID}, now)
+}
 
-	verdicts, err := r.Store.LatestReviewVerdicts(ctx, state.Execution.ID)
+// FetchLive discovers and merges every execution with a live Worker heartbeat.
+func (r *Roster) FetchLive(ctx context.Context, now time.Time) (ViewModel, error) {
+	lister, ok := r.Store.(LiveExecutionLister)
+	if !ok {
+		return ViewModel{}, fmt.Errorf("tui: store cannot list live executions")
+	}
+	ids, err := lister.LiveWorkerExecutionIDs(ctx, now.Add(-StaleHeartbeat))
 	if err != nil {
-		// A read failure degrades to no verdicts: the roster is an observer
-		// and must not abort a pass over one failed aggregate read.
-		verdicts = nil
+		return ViewModel{}, fmt.Errorf("tui: list live executions: %w", err)
 	}
+	sortedIDs := append([]string(nil), ids...)
+	sort.Strings(sortedIDs)
+	return r.FetchMany(ctx, sortedIDs, now)
+}
 
-	rows := make([]WorkerRow, 0, len(state.Issues))
-	for _, issue := range state.Issues {
-		rows = append(rows, r.row(ctx, state.Execution.ID, issue, now, verdicts))
+// FetchMany merges the Issues from several Executions into one roster.
+func (r *Roster) FetchMany(ctx context.Context, executionIDs []string, now time.Time) (ViewModel, error) {
+	vm := ViewModel{}
+	executionIDs = stableExecutionIDs(executionIDs)
+	loadedRequested := false
+	requestedNotFound := false
+	var failures []string
+	for _, executionID := range executionIDs {
+		state, err := r.Store.LoadExecution(ctx, executionID)
+		if errors.Is(err, storage.ErrNotFound) {
+			if len(executionIDs) == 1 {
+				requestedNotFound = true
+			}
+			continue
+		}
+		if err != nil {
+			if len(executionIDs) == 1 {
+				return ViewModel{}, fmt.Errorf("tui: load execution %s: %w", executionID, err)
+			}
+			failures = append(failures, fmt.Sprintf("%s: %v", executionID, err))
+			continue
+		}
+		vm.ExecutionIDs = append(vm.ExecutionIDs, state.Execution.ID)
+		if len(executionIDs) == 1 {
+			loadedRequested = true
+		}
+		verdicts, err := r.Store.LatestReviewVerdicts(ctx, state.Execution.ID)
+		if err != nil {
+			verdicts = nil
+		}
+		for _, issue := range state.Issues {
+			vm.Workers = append(vm.Workers, r.row(ctx, state.Execution.ID, issue, now, verdicts))
+		}
 	}
-	vm := ViewModel{Workers: rows}
-	if len(rows) == 0 {
-		vm.Notice = "no issues in this execution"
+	if len(vm.Workers) == 0 {
+		if len(executionIDs) == 1 {
+			if requestedNotFound && !loadedRequested {
+				vm.Notice = "waiting for the execution to start…"
+			} else {
+				vm.Notice = "no issues in this execution"
+			}
+		} else {
+			vm.Notice = "no live executions"
+		}
+	}
+	if len(vm.ExecutionIDs) == 1 {
+		vm.ExecutionID = vm.ExecutionIDs[0]
+	}
+	sort.SliceStable(vm.Workers, func(i, j int) bool {
+		if vm.Workers[i].ExecutionID != vm.Workers[j].ExecutionID {
+			return vm.Workers[i].ExecutionID < vm.Workers[j].ExecutionID
+		}
+		return vm.Workers[i].IssueID < vm.Workers[j].IssueID
+	})
+	if len(failures) > 0 {
+		failureNotice := "failed to load executions: " + strings.Join(failures, "; ")
+		if vm.Notice != "" {
+			vm.Notice += "; " + failureNotice
+		} else {
+			vm.Notice = failureNotice
+		}
 	}
 	return vm, nil
+}
+
+func stableExecutionIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	out := sorted[:0]
+	for _, id := range sorted {
+		if id == "" || (len(out) > 0 && out[len(out)-1] == id) {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // row resolves one Issue into a WorkerRow. A heartbeat missing or stale is
@@ -108,9 +188,10 @@ func (r *Roster) Fetch(ctx context.Context, executionID string, now time.Time) (
 // ErrNotFound degrades to a no-heartbeat row rather than aborting the pass.
 func (r *Roster) row(ctx context.Context, executionID string, issue domain.Issue, now time.Time, verdicts map[string]storage.ReviewOutcome) WorkerRow {
 	row := WorkerRow{
-		IssueID: issue.ID,
-		Title:   issue.Title,
-		State:   issue.State,
+		ExecutionID: executionID,
+		IssueID:     issue.ID,
+		Title:       issue.Title,
+		State:       issue.State,
 	}
 	if !issue.StateChangedAt.IsZero() {
 		row.Elapsed = now.Sub(issue.StateChangedAt)

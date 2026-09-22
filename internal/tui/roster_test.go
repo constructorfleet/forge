@@ -3,6 +3,8 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +112,136 @@ func (f *fakeRosterStore) LoadExecution(context.Context, string) (storage.Execut
 		return storage.ExecutionState{}, f.loadErr
 	}
 	return f.state, nil
+}
+
+func TestRosterFetchManyMergesExecutions(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{states: map[string]storage.ExecutionState{
+		"ex-1": {Execution: domain.Execution{ID: "ex-1"}, Issues: []domain.Issue{{ID: "#1", Title: "first"}}},
+		"ex-2": {Execution: domain.Execution{ID: "ex-2"}, Issues: []domain.Issue{{ID: "#2", Title: "second"}}},
+	}}
+	roster := tui.NewRoster(store, func() time.Time { return now })
+	vm, err := roster.FetchMany(context.Background(), []string{"ex-1", "ex-2"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	if len(vm.Workers) != 2 {
+		t.Fatalf("len(Workers) = %d, want 2", len(vm.Workers))
+	}
+	if vm.Workers[0].ExecutionID != "ex-1" || vm.Workers[1].ExecutionID != "ex-2" {
+		t.Fatalf("execution ids = %q, %q", vm.Workers[0].ExecutionID, vm.Workers[1].ExecutionID)
+	}
+	if !reflect.DeepEqual(vm.ExecutionIDs, []string{"ex-1", "ex-2"}) {
+		t.Fatalf("ExecutionIDs = %v, want [ex-1 ex-2]", vm.ExecutionIDs)
+	}
+}
+
+func TestRosterFetchManySortsExecutionsAndIssues(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{states: map[string]storage.ExecutionState{
+		"ex-b": {Execution: domain.Execution{ID: "ex-b"}, Issues: []domain.Issue{{ID: "#2"}, {ID: "#1"}}},
+		"ex-a": {Execution: domain.Execution{ID: "ex-a"}, Issues: []domain.Issue{{ID: "#3"}, {ID: "#1"}}},
+	}}
+	vm, err := tui.NewRoster(store, nil).FetchMany(context.Background(), []string{"ex-b", "ex-a", "ex-b"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	got := make([]string, 0, len(vm.Workers))
+	for _, row := range vm.Workers {
+		got = append(got, row.ExecutionID+"/"+row.IssueID)
+	}
+	want := []string{"ex-a/#1", "ex-a/#3", "ex-b/#1", "ex-b/#2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("workers = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(vm.ExecutionIDs, []string{"ex-a", "ex-b"}) {
+		t.Fatalf("execution ids = %v, want [ex-a ex-b]", vm.ExecutionIDs)
+	}
+}
+
+func TestRosterFetchManyRetainsRowsWhenOneExecutionFails(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &multiRosterStore{
+		states: map[string]storage.ExecutionState{
+			"ex-good": {Execution: domain.Execution{ID: "ex-good"}, Issues: []domain.Issue{{ID: "#1"}}},
+		},
+		errors: map[string]error{"ex-bad": errors.New("temporary read failure")},
+	}
+	vm, err := tui.NewRoster(store, nil).FetchMany(context.Background(), []string{"ex-good", "ex-bad"}, now)
+	if err != nil {
+		t.Fatalf("FetchMany: %v", err)
+	}
+	if len(vm.Workers) != 1 || vm.Workers[0].ExecutionID != "ex-good" {
+		t.Fatalf("Workers = %+v, want the successful execution row", vm.Workers)
+	}
+	if !strings.Contains(vm.Notice, "ex-bad") {
+		t.Fatalf("Notice = %q, want failed execution id", vm.Notice)
+	}
+}
+
+func TestRosterFetchLiveSortsExecutionIDs(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := &liveRosterStore{
+		multiRosterStore: &multiRosterStore{states: map[string]storage.ExecutionState{
+			"ex-1": {Execution: domain.Execution{ID: "ex-1"}, Issues: []domain.Issue{{ID: "#1"}}},
+			"ex-2": {Execution: domain.Execution{ID: "ex-2"}, Issues: []domain.Issue{{ID: "#2"}}},
+		}},
+		ids: []string{"ex-2", "ex-1"},
+	}
+	vm, err := tui.NewRoster(store, func() time.Time { return now }).FetchLive(context.Background(), now)
+	if err != nil {
+		t.Fatalf("FetchLive: %v", err)
+	}
+	got := []string{vm.Workers[0].ExecutionID, vm.Workers[1].ExecutionID}
+	if want := []string{"ex-1", "ex-2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("execution ids = %v, want %v", got, want)
+	}
+}
+
+type multiRosterStore struct {
+	states map[string]storage.ExecutionState
+	errors map[string]error
+}
+
+type liveRosterStore struct {
+	*multiRosterStore
+	ids []string
+}
+
+func (s *liveRosterStore) LiveWorkerExecutionIDs(context.Context, time.Time) ([]string, error) {
+	return s.ids, nil
+}
+
+func (s *multiRosterStore) LoadExecution(_ context.Context, id string) (storage.ExecutionState, error) {
+	if err := s.errors[id]; err != nil {
+		return storage.ExecutionState{}, err
+	}
+	state, ok := s.states[id]
+	if !ok {
+		return storage.ExecutionState{}, storage.ErrNotFound
+	}
+	return state, nil
+}
+func (s *multiRosterStore) WorkerClaim(context.Context, string, string) (storage.WorkerClaim, error) {
+	return storage.WorkerClaim{}, storage.ErrNotFound
+}
+func (s *multiRosterStore) LatestReviewVerdicts(context.Context, string) (map[string]storage.ReviewOutcome, error) {
+	return nil, nil
+}
+func (s *multiRosterStore) LatestReviewDiff(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (s *multiRosterStore) GetReplanCheckpoint(context.Context, string, string) (storage.ReplanCheckpoint, error) {
+	return storage.ReplanCheckpoint{Reason: "test"}, nil
+}
+func (s *multiRosterStore) GetNeedsInfoCheckpoint(context.Context, string, string) (storage.NeedsInfoCheckpoint, error) {
+	return storage.NeedsInfoCheckpoint{}, storage.ErrNotFound
+}
+func (s *multiRosterStore) TranscriptAgents(context.Context, string, string) ([]storage.TranscriptAgent, error) {
+	return nil, nil
+}
+func (s *multiRosterStore) AgentRunsByIssue(context.Context, string, string) ([]storage.AgentRun, error) {
+	return nil, nil
 }
 
 func (f *fakeRosterStore) WorkerClaim(_ context.Context, _, issueID string) (storage.WorkerClaim, error) {

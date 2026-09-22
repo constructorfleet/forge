@@ -233,14 +233,18 @@ func outputTitle(vm ViewModel) string {
 func executionPanel(vm ViewModel, width int) []string {
 	inner := width - 2
 	title := titleExecutions
+	if len(vm.ExecutionIDs) > 0 {
+		title += " (" + strings.Join(vm.ExecutionIDs, ", ") + ")"
+	}
 	start, end := executionWindow(vm.Selection, len(vm.Workers))
 	if len(vm.Workers) > maxExecutionRows {
 		title += fmt.Sprintf(" (%d-%d of %d)", start+1, end, len(vm.Workers))
 	}
 	cols := newExecutionColumns(inner)
 	lines := []string{vm.Style.Header.Render(cols.header())}
+	multi := len(vm.ExecutionIDs) > 1
 	for i := start; i < end; i++ {
-		lines = append(lines, cols.row(vm.Workers[i], i == vm.Selection, vm.Style))
+		lines = append(lines, cols.row(vm.Workers[i], i == vm.Selection, vm.Style, multi))
 	}
 	return panelMeta(title, executionSummary(vm), lines, width, len(lines), vm.Focus == PaneRoster, vm.Style)
 }
@@ -331,7 +335,7 @@ func (c executionColumns) header() string {
 // row renders one Worker: cursor, attention and liveness glyphs, id, name,
 // state, elapsed, agent count, and the newest output line. The state carries
 // its colour; the selected row carries the selection style.
-func (c executionColumns) row(row WorkerRow, selected bool, style Style) string {
+func (c executionColumns) row(row WorkerRow, selected bool, style Style, multi ...bool) string {
 	cur := " "
 	if selected {
 		cur = ">"
@@ -339,9 +343,13 @@ func (c executionColumns) row(row WorkerRow, selected bool, style Style) string 
 	att := AttentionGlyph(DeriveAttention(row.State, row.Tool))
 	live := LivenessGlyph(DeriveLiveness(row.HasHeartbeat, row.HeartbeatAge))
 	state := stateStyle(style, row.State).Render(pad(string(row.State), colStatus))
+	id := row.IssueID
+	if len(multi) > 0 && multi[0] {
+		id = row.ExecutionID + "/" + row.IssueID
+	}
 	line := fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s",
 		cur, att, live,
-		pad(row.IssueID, colID),
+		pad(id, colID),
 		pad(row.Title, c.name),
 		state,
 		pad(progressText(row), colProgress),
