@@ -38,12 +38,13 @@ func runSteer(args []string) int {
 }
 
 // doRunSteer resolves the running loop named by args' first positional
-// argument and enqueues the remaining arguments (joined with spaces) as one
-// steering Message onto it. The message takes effect only at that loop's
-// next step boundary (internal/engine's runRepairLoop drains its Queue
-// there, between steps, never mid-step), so doRunSteer always reports the
-// message as queued, never applied — even when a step is currently running:
-// Steer returns as soon as the message is enqueued, without waiting for that
+// argument. It enqueues the remaining arguments as one steering Message by
+// default, or as a NEEDS_INFO answer when --answer is set. The selected
+// message takes effect only at that loop's next step boundary
+// (internal/engine's runRepairLoop drains its Queue there, between steps,
+// never mid-step). Therefore, doRunSteer reports the message as queued,
+// never applied, even when a step is currently running. The selected entry
+// point returns as soon as the message is enqueued, without waiting for that
 // step to finish.
 func doRunSteer(args []string, s steerer, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forge steer", flag.ContinueOnError)
