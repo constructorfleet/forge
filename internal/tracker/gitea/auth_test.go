@@ -11,6 +11,7 @@ import (
 
 func TestVerifyAuth_MissingTokenFailsWithoutRequest(t *testing.T) {
 	t.Setenv("GITEA_TOKEN", "")
+	t.Setenv("HOME", t.TempDir())
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("VerifyAuth must not send a request when the token is missing")
 	})

@@ -14,12 +14,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/tracker/clitoken"
 )
 
 // tokenEnvVar is the environment variable Client reads the Gitea token from at
@@ -115,7 +115,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 	}
 	// Gitea authenticates a personal access token with the "token <value>"
 	// Authorization scheme, not GitHub's "Bearer <value>".
-	if token := os.Getenv(tokenEnvVar); token != "" {
+	if token, _ := clitoken.Resolve(req.Context(), "gitea", tokenEnvVar, c.baseURL); token != "" {
 		req.Header.Set("Authorization", "token "+token)
 	}
 
