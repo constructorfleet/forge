@@ -109,6 +109,7 @@ func (f *TranscriptFeed) SetWidth(w int) {
 	f.width = w
 	for _, ip := range f.issues {
 		ip.pane.SetWidth(w)
+		f.fitWindow(ip)
 	}
 }
 
@@ -198,6 +199,7 @@ func (f *TranscriptFeed) Apply(read FeedRead) *TranscriptPane {
 
 // fitWindow chooses the largest event window whose entries fit the row budget.
 // Event groups have variable height, so an event count cannot stand in for rows.
+// If one event needs more rows than the budget, it keeps that one event.
 func (f *TranscriptFeed) fitWindow(ip *issuePane) {
 	if ip == nil || ip.tailer == nil || f.height <= 0 {
 		return
@@ -206,16 +208,25 @@ func (f *TranscriptFeed) fitWindow(ip *issuePane) {
 	if limit == 0 {
 		return
 	}
-	best := 1
-	for n := 1; n <= limit; n++ {
+	rowsFor := func(n int) int {
 		ip.tailer.SetHeight(n)
 		ip.pane.SetView(ip.tailer.snapshot())
-		if ip.pane.Rows() <= f.height {
-			best = n
+		return ip.pane.Rows()
+	}
+	best := 1
+	if rowsFor(1) <= f.height {
+		low, high := 1, limit
+		for low <= high {
+			mid := low + (high-low)/2
+			if rowsFor(mid) <= f.height {
+				best = mid
+				low = mid + 1
+			} else {
+				high = mid - 1
+			}
 		}
 	}
-	ip.tailer.SetHeight(best)
-	ip.pane.SetView(ip.tailer.snapshot())
+	rowsFor(best)
 	ip.pane.SetHeight(f.height)
 }
 
@@ -236,6 +247,9 @@ func (f *TranscriptFeed) SelectAgent(issueID string, filter AgentFilter) *Transc
 	if ip.tailer != nil && ip.tailer.SetAgentFilter(filter) {
 		ip.pane.SetView(ip.tailer.snapshot())
 	}
+	// Filtering and gate visibility change the rows each event needs.
+	// Refit even when the filter value is unchanged because hideGates can change.
+	f.fitWindow(ip)
 	return ip.pane
 }
 

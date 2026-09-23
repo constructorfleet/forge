@@ -487,6 +487,20 @@ func TestFeedSetWidthReachesTheHeldPane(t *testing.T) {
 	}
 }
 
+func TestFeedSetWidthRefitsTheHeldWindow(t *testing.T) {
+	feed := tui.NewTranscriptFeed(feedFixture())
+	feed.SetWidth(80)
+	feed.SetHeight(4)
+	pane, err := feed.Poll(context.Background(), "ex-1", "#1")
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	feed.SetWidth(5)
+	if got := tui.RenderTranscript(pane); strings.Contains(got, "starting work") {
+		t.Fatalf("narrow resize kept an older event that does not fit:\n%s", got)
+	}
+}
+
 // TestFeedSetWidthBeforePollReachesANewPane proves a width set before a pane
 // exists still reaches the pane ensureIssue builds on the first Poll.
 func TestFeedSetWidthBeforePollReachesANewPane(t *testing.T) {
