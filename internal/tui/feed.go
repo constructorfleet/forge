@@ -241,9 +241,7 @@ func (f *TranscriptFeed) SelectAgent(issueID string, filter AgentFilter) *Transc
 		return nil
 	}
 	ip.pane.SetHideGates(filter.Enabled && filter.Subagent != "")
-	// An unchanged filter re-draws nothing: the poll's own SetView already
-	// holds the pending selection and page moves the pane recorded, and a
-	// second rebuild here would answer them a poll early.
+	// A changed filter returns the tailer to its newest matching event.
 	if ip.tailer != nil && ip.tailer.SetAgentFilter(filter) {
 		ip.pane.SetView(ip.tailer.snapshot())
 	}
