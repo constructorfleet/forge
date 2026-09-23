@@ -109,6 +109,31 @@ func TestTranscriptPaneRowsIgnoresHeightClamp(t *testing.T) {
 	}
 }
 
+func TestTranscriptPaneRowsForDoesNotChangeSelectionOrExpansion(t *testing.T) {
+	pane := tui.NewTranscriptPane()
+	pane.SetView(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(0, "old"),
+		{Seq: 1, Type: "MESSAGE", Role: "thinking", Text: "first\nsecond"},
+	}})
+	pane.Select(1)
+	pane.ToggleExpand()
+	selectedBefore, ok := pane.SelectedEntry()
+	if !ok || !pane.Expanded(1) {
+		t.Fatal("setup did not select and expand the thinking entry")
+	}
+
+	rows := pane.RowsFor(tui.TranscriptViewModel{Events: []tui.TranscriptEvent{
+		prose(2, "new"),
+	}})
+	if rows != 1 {
+		t.Fatalf("RowsFor() = %d, want 1", rows)
+	}
+	selectedAfter, ok := pane.SelectedEntry()
+	if !ok || selectedAfter.Event.Seq != selectedBefore.Event.Seq || !pane.Expanded(1) {
+		t.Fatalf("RowsFor changed live selection or expansion: before=%+v after=%+v expanded=%v", selectedBefore, selectedAfter, pane.Expanded(1))
+	}
+}
+
 // TestRenderTranscriptWrapsStyledLines proves a styled header line (the
 // default colour scheme renders a tool call in Faint) that is longer than the
 // pane's set width still wraps into rows of at most the set width in visible

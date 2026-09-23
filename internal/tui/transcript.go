@@ -374,6 +374,15 @@ func (t *TranscriptTailer) snapshot() TranscriptViewModel {
 	return t.snapshotFrom(t.orderedWindow())
 }
 
+// snapshotAtHeight builds a view with a candidate event height without
+// changing the tailer's current height or scrollback offset.
+func (t *TranscriptTailer) snapshotAtHeight(height int) TranscriptViewModel {
+	if height <= 0 {
+		height = defaultTranscriptHeight
+	}
+	return t.snapshotFromHeight(t.orderedWindow(), height)
+}
+
 // windowBounds turns the scrollback offset into the visible range of a retained
 // window of n events. It is the one place that holds the relation between the
 // offset and the window, and offsetForStart is its inverse.
@@ -399,7 +408,18 @@ func (t *TranscriptTailer) offsetForStart(n, start int) int {
 // snapshotFrom builds the view model from an already ordered window, so one Poll
 // orders the events once.
 func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptViewModel {
-	start, end := t.windowBounds(len(retained))
+	return t.snapshotFromHeight(retained, t.height)
+}
+
+func (t *TranscriptTailer) snapshotFromHeight(retained []TranscriptEvent, height int) TranscriptViewModel {
+	end := len(retained) - t.offset
+	if end < 0 {
+		end = 0
+	}
+	start := end - height
+	if start < 0 {
+		start = 0
+	}
 	window := retained[start:end]
 	vm := TranscriptViewModel{
 		Events:   window,

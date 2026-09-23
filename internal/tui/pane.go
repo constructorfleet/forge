@@ -203,7 +203,46 @@ func (p *TranscriptPane) SetHeight(h int) { p.height = h }
 // Rows reports the rows the current entries need without the height clamp.
 // The live feed uses this value to fit an event window to the pane budget.
 func (p *TranscriptPane) Rows() int {
-	groups, _ := transcriptGroups(p)
+	return p.rowsFor(p.view)
+}
+
+// RowsFor reports the rows a candidate view needs without changing pane
+// selection, expansion, pending moves, or scrollback state.
+func (p *TranscriptPane) RowsFor(vm TranscriptViewModel) int {
+	return p.rowsFor(vm)
+}
+
+func (p *TranscriptPane) rowsFor(vm TranscriptViewModel) int {
+	candidate := *p
+	selectedKey := ""
+	if selected, ok := p.SelectedEntry(); ok {
+		selectedKey = selected.key()
+	}
+	expandedKey := ""
+	if p.expanded != noSelection && p.expanded < len(p.entries) {
+		expandedKey = p.entries[p.expanded].key()
+	}
+	candidate.view = vm
+	candidate.entries = buildEntries(vm.Events)
+	gates := p.gates
+	if p.hideGates {
+		gates = nil
+	}
+	candidate.entries = mergeTimeline(candidate.entries, gateEntries(gates))
+	candidate.selection = noSelection
+	if selectedKey != "" {
+		candidate.selection = indexOfKey(candidate.entries, selectedKey)
+	}
+	if candidate.selection == noSelection {
+		candidate.selection = candidate.defaultSelection()
+	}
+	candidate.expanded = noSelection
+	if expandedKey != "" {
+		if index := indexOfKey(candidate.entries, expandedKey); index != noSelection && index == candidate.selection {
+			candidate.expanded = index
+		}
+	}
+	groups, _ := transcriptGroups(&candidate)
 	rows := 0
 	for _, group := range groups {
 		rows += len(group)

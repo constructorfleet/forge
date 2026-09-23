@@ -209,9 +209,7 @@ func (f *TranscriptFeed) fitWindow(ip *issuePane) {
 		return
 	}
 	rowsFor := func(n int) int {
-		ip.tailer.SetHeight(n)
-		ip.pane.SetView(ip.tailer.snapshot())
-		return ip.pane.Rows()
+		return ip.pane.RowsFor(ip.tailer.snapshotAtHeight(n))
 	}
 	best := 1
 	if rowsFor(1) <= f.height {
@@ -226,7 +224,8 @@ func (f *TranscriptFeed) fitWindow(ip *issuePane) {
 			}
 		}
 	}
-	rowsFor(best)
+	ip.tailer.SetHeight(best)
+	ip.pane.SetView(ip.tailer.snapshot())
 	ip.pane.SetHeight(f.height)
 }
 
