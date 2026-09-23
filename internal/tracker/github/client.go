@@ -13,12 +13,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/tracker/clitoken"
 )
 
 // defaultBaseURL is the production GitHub REST API root.
@@ -108,7 +108,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if token := os.Getenv(tokenEnvVar); token != "" {
+	if token, _ := clitoken.Resolve(req.Context(), "github", tokenEnvVar, c.baseURL); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

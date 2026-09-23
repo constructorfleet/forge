@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Teagan42/forge/internal/tracker/clitoken"
 	"net/http"
-	"os"
 )
 
-// ErrMissingToken indicates GITLAB_TOKEN is not set in the environment.
+// ErrMissingToken indicates no GitLab token is available.
 // VerifyAuth reports it without any network request: a missing credential is
 // knowable locally, and the purpose of a preflight is to fail before any
 // side-effecting work — including a wasted round trip — begins.
@@ -27,7 +27,7 @@ var ErrMissingToken = errors.New("gitlab: " + tokenEnvVar + " is not set; export
 // project (403/404), or *tracker.RateLimitError — so a caller can tell
 // "unauthenticated" from "reachable but unauthorized" with errors.As.
 func (c *Client) VerifyAuth(ctx context.Context) error {
-	if os.Getenv(tokenEnvVar) == "" {
+	if token, _ := clitoken.Resolve(ctx, "gitlab", tokenEnvVar, c.baseURL); token == "" {
 		return ErrMissingToken
 	}
 	if err := c.do(ctx, http.MethodGet, c.projectPath(), nil, nil); err != nil {

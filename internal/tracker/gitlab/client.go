@@ -13,13 +13,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/Teagan42/forge/internal/tracker"
+	"github.com/Teagan42/forge/internal/tracker/clitoken"
 )
 
 // defaultBaseURL is the production GitLab REST API root.
@@ -129,7 +129,7 @@ func (c *Client) doWithHeaders(ctx context.Context, method, fullURL string, reqB
 	}
 	// GitLab authenticates a personal, project, or group access token with
 	// the PRIVATE-TOKEN header, not with an Authorization header.
-	if token := os.Getenv(tokenEnvVar); token != "" {
+	if token, _ := clitoken.Resolve(req.Context(), "gitlab", tokenEnvVar, c.baseURL); token != "" {
 		req.Header.Set("PRIVATE-TOKEN", token)
 	}
 

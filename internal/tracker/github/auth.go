@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Teagan42/forge/internal/tracker/clitoken"
 	"net/http"
-	"os"
 )
 
-// ErrMissingToken indicates GITHUB_TOKEN is not set in the environment.
+// ErrMissingToken indicates no GitHub token is available.
 // VerifyAuth reports it without making any network request: a missing
 // credential is knowable locally, and the whole point of a preflight is to
 // fail before any side-effecting work (including a wasted round trip)
@@ -29,7 +29,7 @@ var ErrMissingToken = errors.New("github: " + tokenEnvVar + " is not set; export
 // callers can distinguish "unauthenticated" from "reachable but
 // unauthorized" via errors.As.
 func (c *Client) VerifyAuth(ctx context.Context) error {
-	if os.Getenv(tokenEnvVar) == "" {
+	if token, _ := clitoken.Resolve(ctx, "github", tokenEnvVar, c.baseURL); token == "" {
 		return ErrMissingToken
 	}
 	path := fmt.Sprintf("/repos/%s/%s", c.owner, c.repo)
