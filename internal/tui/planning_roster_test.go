@@ -98,6 +98,39 @@ func TestPlanningRosterFetchIgnoresNonPlanningRuns(t *testing.T) {
 	}
 }
 
+func TestPlanningRosterFetchIgnoresRunsForAnotherIssue(t *testing.T) {
+	store := &fakePlanningRosterStore{
+		runs: []storage.AgentRun{
+			{ID: 1, ExecutionID: "feat-1", IssueID: "other-issue", Backend: "planning", FinishedAt: time.Now()},
+		},
+		events: map[int64][]storage.TranscriptEvent{1: {{Subagent: "specification-generation"}}},
+	}
+	vm, err := tui.NewPlanningRoster(store).Fetch(context.Background(), "feat-1")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(vm.Stages) != 0 {
+		t.Fatalf("Stages = %+v, want no rows for another issue", vm.Stages)
+	}
+}
+
+func TestPlanningRosterFetchFindsStageSubagentAfterInitialEvent(t *testing.T) {
+	store := &fakePlanningRosterStore{
+		runs: []storage.AgentRun{{ID: 1, ExecutionID: "feat-1", IssueID: "feat-1", Backend: "planning", FinishedAt: time.Now()}},
+		events: map[int64][]storage.TranscriptEvent{1: {
+			{Subagent: ""},
+			{Subagent: "ticket-plan-review"},
+		}},
+	}
+	vm, err := tui.NewPlanningRoster(store).Fetch(context.Background(), "feat-1")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(vm.Stages) != 1 || vm.Stages[0].Stage != "ticket-plan-review" {
+		t.Fatalf("Stages = %+v, want the first recorded subagent", vm.Stages)
+	}
+}
+
 // TestPlanningRosterFetchGatesControlsFromLatestPlanningExecutionStatus
 // proves approve/answer legality is derived from the Feature's latest
 // recorded PlanningExecution status alone — never from IssueState, which

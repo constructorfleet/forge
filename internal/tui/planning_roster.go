@@ -64,7 +64,7 @@ func (r *PlanningRoster) Fetch(ctx context.Context, featureID string) (PlanningV
 
 	var vm PlanningViewModel
 	for _, run := range runs {
-		if run.Backend != planningagent.TranscriptBackendName {
+		if run.Backend != planningagent.TranscriptBackendName || run.IssueID != featureID {
 			continue
 		}
 		vm.Stages = append(vm.Stages, PlanningStageRow{
@@ -108,10 +108,15 @@ func (r *PlanningRoster) pendingDecision(ctx context.Context, executionID string
 // "unknown" rather than aborting the pass: the roster is an observer.
 func (r *PlanningRoster) stageLabel(ctx context.Context, featureID string, run storage.AgentRun) string {
 	events, err := r.Store.TranscriptEventsByAgentRun(ctx, featureID, featureID, run.ID)
-	if err != nil || len(events) == 0 || events[0].Subagent == "" {
+	if err != nil {
 		return "unknown"
 	}
-	return events[0].Subagent
+	for _, event := range events {
+		if event.Subagent != "" {
+			return event.Subagent
+		}
+	}
+	return "unknown"
 }
 
 // legality derives the approve/answer control legality, plus the Planning
