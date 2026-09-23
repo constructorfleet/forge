@@ -387,11 +387,15 @@ func (t *TranscriptTailer) snapshotAtHeight(height int) TranscriptViewModel {
 // window of n events. It is the one place that holds the relation between the
 // offset and the window, and offsetForStart is its inverse.
 func (t *TranscriptTailer) windowBounds(n int) (start, end int) {
+	return t.windowBoundsFor(n, t.height)
+}
+
+func (t *TranscriptTailer) windowBoundsFor(n, height int) (start, end int) {
 	end = n - t.offset
 	if end < 0 {
 		end = 0
 	}
-	start = end - t.height
+	start = end - height
 	if start < 0 {
 		start = 0
 	}
@@ -412,14 +416,7 @@ func (t *TranscriptTailer) snapshotFrom(retained []TranscriptEvent) TranscriptVi
 }
 
 func (t *TranscriptTailer) snapshotFromHeight(retained []TranscriptEvent, height int) TranscriptViewModel {
-	end := len(retained) - t.offset
-	if end < 0 {
-		end = 0
-	}
-	start := end - height
-	if start < 0 {
-		start = 0
-	}
+	start, end := t.windowBoundsFor(len(retained), height)
 	window := retained[start:end]
 	vm := TranscriptViewModel{
 		Events:   window,

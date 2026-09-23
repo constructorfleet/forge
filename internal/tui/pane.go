@@ -214,34 +214,12 @@ func (p *TranscriptPane) RowsFor(vm TranscriptViewModel) int {
 
 func (p *TranscriptPane) rowsFor(vm TranscriptViewModel) int {
 	candidate := *p
-	selectedKey := ""
-	if selected, ok := p.SelectedEntry(); ok {
-		selectedKey = selected.key()
-	}
-	expandedKey := ""
-	if p.expanded != noSelection && p.expanded < len(p.entries) {
-		expandedKey = p.entries[p.expanded].key()
-	}
-	candidate.view = vm
-	candidate.entries = buildEntries(vm.Events)
-	gates := p.gates
-	if p.hideGates {
-		gates = nil
-	}
-	candidate.entries = mergeTimeline(candidate.entries, gateEntries(gates))
-	candidate.selection = noSelection
-	if selectedKey != "" {
-		candidate.selection = indexOfKey(candidate.entries, selectedKey)
-	}
-	if candidate.selection == noSelection {
-		candidate.selection = candidate.defaultSelection()
-	}
-	candidate.expanded = noSelection
-	if expandedKey != "" {
-		if index := indexOfKey(candidate.entries, expandedKey); index != noSelection && index == candidate.selection {
-			candidate.expanded = index
-		}
-	}
+	// Reuse the production rebuild path. A measurement must not move the real
+	// pane or ask its scroller to fetch another window.
+	candidate.scroller = nil
+	candidate.pendingMove = 0
+	candidate.pendingPageMove = 0
+	candidate.SetView(vm)
 	groups, _ := transcriptGroups(&candidate)
 	rows := 0
 	for _, group := range groups {
