@@ -80,10 +80,9 @@ func NewTranscriptFeed(store TranscriptFeedStore) *TranscriptFeed {
 	return &TranscriptFeed{store: store}
 }
 
-// SetHeight sets the scrollback viewport height in events for every tailer the
-// feed owns. A height of zero or less restores the tailer's default. The live
-// view calls it from the terminal size, so the pane reads as much history as the
-// rows can hold.
+// SetHeight sets the transcript row budget for every pane the feed owns.
+// A height of zero or less leaves the pane unclipped and uses the default
+// event window until a terminal size arrives.
 //
 // The update goroutine alone calls this, while a Fetch for the same feed can run
 // in a command goroutine. So Fetch must not read height: the two would then race
@@ -92,7 +91,12 @@ func (f *TranscriptFeed) SetHeight(h int) {
 	f.height = h
 	for _, ip := range f.issues {
 		if ip.tailer != nil {
-			ip.tailer.SetHeight(h)
+			ip.pane.SetHeight(h)
+			if h <= 0 {
+				ip.tailer.SetHeight(h)
+			} else {
+				f.fitWindow(ip)
+			}
 		}
 	}
 }
@@ -105,6 +109,7 @@ func (f *TranscriptFeed) SetWidth(w int) {
 	f.width = w
 	for _, ip := range f.issues {
 		ip.pane.SetWidth(w)
+		f.fitWindow(ip)
 	}
 }
 
@@ -188,7 +193,40 @@ func (f *TranscriptFeed) Apply(read FeedRead) *TranscriptPane {
 	if read.gated {
 		ip.pane.SetGates(read.gates)
 	}
+	f.fitWindow(ip)
 	return ip.pane
+}
+
+// fitWindow chooses the largest event window whose entries fit the row budget.
+// Event groups have variable height, so an event count cannot stand in for rows.
+// If one event needs more rows than the budget, it keeps that one event.
+func (f *TranscriptFeed) fitWindow(ip *issuePane) {
+	if ip == nil || ip.tailer == nil || f.height <= 0 {
+		return
+	}
+	limit := ip.tailer.retainedCount()
+	if limit == 0 {
+		return
+	}
+	rowsFor := func(n int) int {
+		return ip.pane.RowsFor(ip.tailer.snapshotAtHeight(n))
+	}
+	best := 1
+	if rowsFor(1) <= f.height {
+		low, high := 1, limit
+		for low <= high {
+			mid := low + (high-low)/2
+			if rowsFor(mid) <= f.height {
+				best = mid
+				low = mid + 1
+			} else {
+				high = mid - 1
+			}
+		}
+	}
+	ip.tailer.SetHeight(best)
+	ip.pane.SetView(ip.tailer.snapshot())
+	ip.pane.SetHeight(f.height)
 }
 
 // SelectAgent narrows issueID's pane to one agent's events and returns the
@@ -202,12 +240,13 @@ func (f *TranscriptFeed) SelectAgent(issueID string, filter AgentFilter) *Transc
 		return nil
 	}
 	ip.pane.SetHideGates(filter.Enabled && filter.Subagent != "")
-	// An unchanged filter re-draws nothing: the poll's own SetView already
-	// holds the pending selection and page moves the pane recorded, and a
-	// second rebuild here would answer them a poll early.
+	// A changed filter returns the tailer to its newest matching event.
 	if ip.tailer != nil && ip.tailer.SetAgentFilter(filter) {
 		ip.pane.SetView(ip.tailer.snapshot())
 	}
+	// Filtering and gate visibility change the rows each event needs.
+	// Refit even when the filter value is unchanged because hideGates can change.
+	f.fitWindow(ip)
 	return ip.pane
 }
 
@@ -233,6 +272,7 @@ func (f *TranscriptFeed) ensureIssue(issueID string) *issuePane {
 			f.evictLeastRecentlyViewed()
 		}
 		ip = &issuePane{pane: NewTranscriptPane()}
+		ip.pane.SetHeight(f.height)
 		ip.pane.SetWidth(f.width)
 		ip.pane.SetStyle(DefaultStyle())
 		f.issues[issueID] = ip

@@ -200,6 +200,34 @@ func (p *TranscriptPane) SetWidth(w int) { p.width = w }
 // yet reported a terminal size.
 func (p *TranscriptPane) SetHeight(h int) { p.height = h }
 
+// Rows reports the rows the current entries need without the height clamp.
+// The live feed uses this value to fit an event window to the pane budget.
+func (p *TranscriptPane) Rows() int {
+	return p.rowsFor(p.view)
+}
+
+// RowsFor reports the rows a candidate view needs without changing pane
+// selection, expansion, pending moves, or scrollback state.
+func (p *TranscriptPane) RowsFor(vm TranscriptViewModel) int {
+	return p.rowsFor(vm)
+}
+
+func (p *TranscriptPane) rowsFor(vm TranscriptViewModel) int {
+	candidate := *p
+	// Reuse the production rebuild path. A measurement must not move the real
+	// pane or ask its scroller to fetch another window.
+	candidate.scroller = nil
+	candidate.pendingMove = 0
+	candidate.pendingPageMove = 0
+	candidate.SetView(vm)
+	groups, _ := transcriptGroups(&candidate)
+	rows := 0
+	for _, group := range groups {
+		rows += len(group)
+	}
+	return rows
+}
+
 // SetGates replaces the quality-gate rows the pane interleaves into the event
 // timeline by finish time. The call rebuilds the entries through rebuild, the
 // pane's one rebuild path, so selection and expansion follow the same

@@ -115,13 +115,8 @@ func (t *transcriptController) applyTranscript(msg transcriptReadMsg, wantExecut
 	return nil, true
 }
 
-// sizeFeed sizes the tailer's event window from the transcript row budget and
-// the pane's wrap width from the terminal width. The event window and the row
-// budget differ in unit: the tailer counts events and the budget counts rows,
-// and one event can draw several rows. So the event window is an upper bound
-// on how much history to read, and Render (or RenderPlanning) owns the exact
-// clip to the terminal; the wrap width is exact, so a long line renders as the
-// rows it actually draws and the clip counts them correctly.
+// sizeFeed sizes the transcript row budget and pane wrap width from the
+// terminal. The feed fits its event window to the pane's measured row count.
 func (t *transcriptController) sizeFeed(rows, width int) {
 	if t.feed == nil {
 		return
