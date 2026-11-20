@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.52.0](https://github.com/constructorfleet/forge/compare/forge-v0.51.1...forge-v0.52.0) (2026-09-23)
+
+
+### Features
+
+* attach live TUI while resuming executions ([#771](https://github.com/constructorfleet/forge/issues/771)) ([705c8d0](https://github.com/constructorfleet/forge/commit/705c8d05e066b4b5bd19e3436f0ecb1521a037cb))
+* Distinguish NEEDS_INFO answers from steering messages in the transcript tag ([#752](https://github.com/constructorfleet/forge/issues/752)) ([ed88c7b](https://github.com/constructorfleet/forge/commit/ed88c7b770bd4178a07e11a9ed6c58cd54db0e71)), closes [#745](https://github.com/constructorfleet/forge/issues/745)
+* Register running execute loops into steering.DefaultRegistry ([#753](https://github.com/constructorfleet/forge/issues/753)) ([5193a78](https://github.com/constructorfleet/forge/commit/5193a78ce7c5a677c25041b07e2994e5d20a0db8)), closes [#746](https://github.com/constructorfleet/forge/issues/746)
+* Review agent row appears only after its first transcript event ([#761](https://github.com/constructorfleet/forge/issues/761)) ([09762cd](https://github.com/constructorfleet/forge/commit/09762cd00228a13bc075216d852031b50c5e11d7))
+* TKT-001: Add a thread-safe FIFO message queue type attached to the execute loop session that accepts steering messages and NEEDS_INFO answers at any time, including while a step is executing. ([#742](https://github.com/constructorfleet/forge/issues/742)) ([9ba00a8](https://github.com/constructorfleet/forge/commit/9ba00a838672062667c89198b3802d2fe6be4c3e)), closes [#731](https://github.com/constructorfleet/forge/issues/731)
+* TKT-002: Add a DrainAll method to the steering queue that atomically empties the queue and returns all queued messages concatenated in FIFO arrival order. ([#743](https://github.com/constructorfleet/forge/issues/743)) ([99faff5](https://github.com/constructorfleet/forge/commit/99faff519a6a26c3542c2f45b9f3740df4c1f5e6)), closes [#732](https://github.com/constructorfleet/forge/issues/732)
+* TKT-003: Wire queue draining into the execute loop's step-boundary logic so the loop checks and drains the queue only between steps (never mid-step) and injects the drained content as free-form context for the next step. ([#744](https://github.com/constructorfleet/forge/issues/744)) ([123f6d1](https://github.com/constructorfleet/forge/commit/123f6d1e491c5956cf0ac95e2031b69a632ea0ff)), closes [#733](https://github.com/constructorfleet/forge/issues/733)
+* TKT-004: Add a distinct loop status field (e.g. status: running | needs_info) to the loop's state model, queryable independent of transcript content. ([#741](https://github.com/constructorfleet/forge/issues/741)) ([c719d6d](https://github.com/constructorfleet/forge/commit/c719d6d719be077fca25941ced234f3ae71429af)), closes [#734](https://github.com/constructorfleet/forge/issues/734)
+* TKT-005: Transition the loop to 'needs_info' status and halt further step execution when the agent raises a NEEDS_INFO signal, supporting at most one outstanding NEEDS_INFO at a time. ([#747](https://github.com/constructorfleet/forge/issues/747)) ([3b0ead8](https://github.com/constructorfleet/forge/commit/3b0ead84d7572b33d77f2a0aaafa848fd8a87bba)), closes [#735](https://github.com/constructorfleet/forge/issues/735)
+* TKT-006: Resume normal loop execution from 'needs_info' status once the user injects context via the queue, incorporating the drained queue contents into the next step. ([#754](https://github.com/constructorfleet/forge/issues/754)) ([25b0f31](https://github.com/constructorfleet/forge/commit/25b0f316a54d158640f8c9953c6033e7f619cd1e)), closes [#736](https://github.com/constructorfleet/forge/issues/736)
+* TKT-007: Persist steering messages and NEEDS_INFO answers to the loop's transcript/history store, tagged with a distinguishable entry type separate from agent-generated content. ([#749](https://github.com/constructorfleet/forge/issues/749)) ([8284005](https://github.com/constructorfleet/forge/commit/8284005c1c214dde2dad1db7c0a9f945011e4eab)), closes [#737](https://github.com/constructorfleet/forge/issues/737)
+* TKT-008: Expose an API/CLI-facing entry point that accepts a user steering message or NEEDS_INFO answer and enqueues it onto the running loop's queue. ([#748](https://github.com/constructorfleet/forge/issues/748)) ([9e11473](https://github.com/constructorfleet/forge/commit/9e1147399c9a603dc23b6deb19eac1afc9ad237e)), closes [#738](https://github.com/constructorfleet/forge/issues/738)
+* TKT-009: Expose the loop's current status (running vs. needs_info) through the same CLI/API surface used to observe or attach to a running loop, so callers can detect the paused state without inferring it from transcript inactivity. ([#755](https://github.com/constructorfleet/forge/issues/755)) ([98d33c6](https://github.com/constructorfleet/forge/commit/98d33c61e41b9581f68e63cbe61f5ee94d1c157f)), closes [#739](https://github.com/constructorfleet/forge/issues/739)
+* **tracker:** reuse provider CLI authentication ([#774](https://github.com/constructorfleet/forge/issues/774)) ([a7958d3](https://github.com/constructorfleet/forge/commit/a7958d3ec4b6656860e6a44de6b9988487588412))
+* **tui:** add control seam for live executions ([#768](https://github.com/constructorfleet/forge/issues/768)) ([06c163f](https://github.com/constructorfleet/forge/commit/06c163f8e327f4c5134a0f899b181881c45c92d4))
+* **tui:** add inline diff hunk view ([#762](https://github.com/constructorfleet/forge/issues/762)) ([4af66dc](https://github.com/constructorfleet/forge/commit/4af66dc626b3e73fec5d8e74a9c7b6ed33324735))
+* **tui:** add store polling observation seam ([#769](https://github.com/constructorfleet/forge/issues/769)) ([b1044f7](https://github.com/constructorfleet/forge/commit/b1044f715dbd309262d00a15f1b9240be1a6a84f))
+* update execute TUI ([#760](https://github.com/constructorfleet/forge/issues/760)) ([7822302](https://github.com/constructorfleet/forge/commit/7822302fda002333433cbfb8c3b358376f059fad))
+* Wire an entry point that enqueues steering.KindAnswer messages ([#763](https://github.com/constructorfleet/forge/issues/763)) ([1c31463](https://github.com/constructorfleet/forge/commit/1c31463d3c62d4b174003f498de7015c09ff27ed))
+
+
+### Bug Fixes
+
+* **engine:** isolate steering state per execution ([#766](https://github.com/constructorfleet/forge/issues/766)) ([88ee365](https://github.com/constructorfleet/forge/commit/88ee365a5b532c9eb301e85e9df8068ee4f1f88a))
+* **plan:** converge the planning loop and surface it in the TUI ([#729](https://github.com/constructorfleet/forge/issues/729)) ([9eb4235](https://github.com/constructorfleet/forge/commit/9eb4235e905cbcc392c317087d1796b8f944c26b))
+* report missing needs-info resume capability ([#767](https://github.com/constructorfleet/forge/issues/767)) ([4ced896](https://github.com/constructorfleet/forge/commit/4ced896d1ece2f8fea4fcae2c054f08a6a4dbcf9))
+* Steering Queue is shared across concurrently-executing Issues on one Engine ([#764](https://github.com/constructorfleet/forge/issues/764)) ([d19850c](https://github.com/constructorfleet/forge/commit/d19850c448c84f1ac3c6cbe7d1ded53f92743b8e))
+* treat closed dependencies as satisfied ([#770](https://github.com/constructorfleet/forge/issues/770)) ([71fadbc](https://github.com/constructorfleet/forge/commit/71fadbc2e4c240a28b5d0ae15ee3a034bf4c1a19))
+* **tui:** fit transcript windows to rendered rows ([#773](https://github.com/constructorfleet/forge/issues/773)) ([9d9af6e](https://github.com/constructorfleet/forge/commit/9d9af6ef3a6d437b30e01095bd1212c41983874f))
+* **tui:** preserve identity across live executions ([#765](https://github.com/constructorfleet/forge/issues/765)) ([a1d5dd6](https://github.com/constructorfleet/forge/commit/a1d5dd6aa509d26c672402fe9b27c880954b47d0))
+* **tui:** scope planning rows and find stage labels ([#772](https://github.com/constructorfleet/forge/issues/772)) ([d432bc3](https://github.com/constructorfleet/forge/commit/d432bc3434b722d4648bb0325f5403e544f603bf))
+
 ## [0.51.1](https://github.com/constructorfleet/forge/compare/forge-v0.51.0...forge-v0.51.1) (2026-09-07)
 
 
